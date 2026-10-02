@@ -14,6 +14,8 @@ Each runtime uses these libraries:
 - On the JVM: Clojure and SCI, with JTS, and with PROJ and GDAL through clj-proj and clj-gdal.
 - In JavaScript: squint, with JTS as wasm through wasmts, and with proj-wasm and gdal-wasm.
 
+I spoke about cg at Clojure/conj 2026. The slides are at https://willcohen.github.io/cg/clojure-conj-2026.html.
+
 ## Status
 
 cg is early work.
