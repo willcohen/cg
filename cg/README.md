@@ -1,5 +1,10 @@
 # cg, the library
 
+[![CI](https://github.com/willcohen/cg/actions/workflows/ci.yml/badge.svg)](https://github.com/willcohen/cg/actions/workflows/ci.yml)
+[![Pages](https://github.com/willcohen/cg/actions/workflows/pages.yml/badge.svg)](https://willcohen.github.io/cg/)
+[![npm](https://img.shields.io/npm/v/@wcohen/cg)](https://www.npmjs.com/package/@wcohen/cg)
+[![Clojars](https://img.shields.io/clojars/v/net.willcohen/cg.svg)](https://clojars.org/net.willcohen/cg)
+
 This folder holds the cg library, its two CLIs, the `.cg` modules and the examples. The same `.cljc` sources run on the JVM and, through squint, in JavaScript.
 
 A demo of the web app is at https://willcohen.github.io/cg/. The source is at https://github.com/willcohen/cg.
@@ -74,7 +79,13 @@ node bin/cg.mjs run examples/simple.cg
 ;; a map with the keys :model and :result
 ```
 
-To use cg in a different project, add a git dependency with `:deps/root`:
+To use cg in a different project, add the dependency from Clojars:
+
+```clojure
+net.willcohen/cg {:mvn/version "0.0.1"}
+```
+
+A git dependency with `:deps/root` also works:
 
 ```clojure
 io.github.willcohen/cg {:git/url "https://github.com/willcohen/cg.git"
@@ -84,11 +95,11 @@ io.github.willcohen/cg {:git/url "https://github.com/willcohen/cg.git"
 
 cg logs through `clojure.tools.logging` and SLF4J, and it brings no log backend. To see the log lines, add a backend such as logback to your project. The bb tasks of this folder use the `:log` alias of `deps.edn` for that.
 
-That path has limits:
+Each path has limits:
 
 - tools.deps does not pass the JVM options of a dependency. Give your JVM `--enable-native-access=ALL-UNNAMED` and `--sun-misc-unsafe-memory-access=allow`.
-- The parser reads its grammar from `node_modules` in the working directory. A git dependency brings no `node_modules`.
-- GDAL has native libraries for macOS on Apple Silicon and for Linux on amd64 and arm64. On a different platform, GDAL runs as wasm on GraalVM.
+- The jar holds the grammar of the parser. With a git dependency, the parser reads its grammar from `node_modules` in the working directory, and a git dependency brings no `node_modules`.
+- GDAL has native libraries for macOS on Apple Silicon and for Linux on amd64 and arm64. Maven and Leiningen get the library of the platform through the pom of `net.willcohen/gdal`. tools.deps does not read that pom profile. In a tools.deps project, add the native jar, for example `net.willcohen/gdal-native$darwin-aarch64 {:mvn/version "0.0.1"}`. Without a native library, GDAL runs as wasm on GraalVM.
 
 ## JavaScript use
 

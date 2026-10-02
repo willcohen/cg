@@ -1,5 +1,10 @@
 # cg
 
+[![CI](https://github.com/willcohen/cg/actions/workflows/ci.yml/badge.svg)](https://github.com/willcohen/cg/actions/workflows/ci.yml)
+[![Pages](https://github.com/willcohen/cg/actions/workflows/pages.yml/badge.svg)](https://willcohen.github.io/cg/)
+[![npm](https://img.shields.io/npm/v/@wcohen/cg)](https://www.npmjs.com/package/@wcohen/cg)
+[![Clojars](https://img.shields.io/clojars/v/net.willcohen/cg.svg)](https://clojars.org/net.willcohen/cg)
+
 cg is a small DSL for GIS analysis in urban planning. I wrote it to run the same analysis file on the JVM and in JavaScript.
 
 A `.cg` file is text in a Clojure dialect. A threading macro such as `table->` describes a pipeline. A cg operation is a `defn` whose name has the metadata `^:op`. An editor canvas draws the file next to the text.
@@ -14,6 +19,7 @@ Each runtime uses these libraries:
 cg is early work.
 
 - The JavaScript side is on npm as `@wcohen/cg`. It needs Node.js 26 or later: `npm install @wcohen/cg`.
+- The JVM side is on Clojars as `net.willcohen/cg`: `net.willcohen/cg {:mvn/version "0.0.1"}`.
 - The web app works. A demo is at https://willcohen.github.io/cg/. The demo runs files in JavaScript only.
 - A VS Code extension is in progress. It can run a file with a JVM backend or with a JavaScript backend.
 - Desktop and mobile apps are planned.
