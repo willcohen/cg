@@ -1,0 +1,18 @@
+;; Test CG file for loading into visual editor
+;; Simple buffer + simplify model
+
+(require '[cg.macros :refer [item->]])
+(require '[cg.geo :as geo])
+
+(def simple-buffer-model
+  (item-> :parcels
+    (geo/buffer 100)
+    (geo/simplify 10)))
+
+;; Visual metadata. Keys are the canvas node ids the converter generates:
+;; `<model>__<unq-fn>-<global-op-index+1>`. The model is the def name
+;; `simple-buffer-model`; ops geo/buffer (idx 0) and geo/simplify (idx 1).
+^:cgproj
+{:nodes {"simple-buffer-model__buffer-1"   {:pos [100 100]}
+         "simple-buffer-model__simplify-2" {:pos [400 100]}}
+ :viewport {:zoom 1.0 :x 0 :y 0}}

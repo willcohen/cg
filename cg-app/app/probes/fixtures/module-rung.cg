@@ -1,0 +1,18 @@
+(require '[cg.macros :refer [item->]])
+(require '[cg.run :as run])
+(require '[cg.feature :as f])
+
+;; Two .cg modules on the JS backend: cg's load_module_test fixtures. mod_a
+;; loads mod_b at its end, and mod_b loads mod_a at its start. The rung of
+;; the model is mod_a's op, over one 10 x 10 square.
+(run/load-module "test/fixtures/modules/mod_a.cg")
+(require '[test.mod-a :as a])
+
+(def squares
+  [(f/polygon [[0 0] [10 0] [10 10] [0 10] [0 0]])])
+
+(def pair (a/pair))
+
+(def areas
+  (item-> :squares
+    (a/area-of)))

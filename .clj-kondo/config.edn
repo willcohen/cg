@@ -1,0 +1,84 @@
+;; clj-kondo configuration for the repository root, which lints the .cg
+;; example programs and the cross-module sources.
+;;
+;; The hooks live in cg's own exported config, copied in below, so that this
+;; directory and cg/.clj-kondo share one copy of each rule instead of two.
+;; Refresh the copy after `bb ts:kondo` or a dependency bump with:
+;;   clj-kondo --lint "$(clojure -Spath)" --copy-configs --skip-lint
+;;
+;; A directory scan skips .cg, because clj-kondo has no option for extra file
+;; extensions. Name the programs to lint them:
+;;   clj-kondo --lint $(ls cg/examples/*.cg)
+{:config-paths ["imports/net.willcohen/cg"]
+
+ ;; UIX's `defui` defines a function. Without this, kondo treats it as
+ ;; an opaque call and flags the name + destructured args as unresolved.
+ :lint-as {uix.core/defui clojure.core/defn}
+
+ ;; cg.parser.* is the static-analysis subsystem. It must stay
+ ;; eval-free: parsers walk tree-sitter ASTs only, never invoke the
+ ;; DSL evaluator, the operation/group registries, or the macro layer.
+ ;; Banning these requires keeps the static guarantee enforceable
+ ;; despite the parser living inside cg core (instead of as a
+ ;; separately-published artefact whose dep graph would enforce it
+ ;; structurally).
+ ;;
+ ;; The same rule body is repeated for each cg.parser.* namespace.
+ ;; clj-kondo's :discouraged-namespace value must be a literal map of
+ ;; symbol -> {:message ...}, so reusing via a keyword indirection is
+ ;; not supported. Add new parser namespaces below as the subsystem
+ ;; grows (walk, extract, validate) and keep the rule body in sync.
+ ;;
+ ;; cg.dsl.macros is intentionally absent from this ban list: it was
+ ;; an aspirational namespace name that never had a concrete file or
+ ;; SCI registration. cg.parser.extract emits a
+ ;; :legacy-macro-namespace diagnostic for any (require '[cg.dsl.macros ...])
+ ;; encountered in source.
+ :config-in-ns
+ {cg.parser.core
+  {:linters
+   {:discouraged-namespace
+    {cg.dsl         {:message "cg.parser.* is eval-free; cg.dsl is eval-time"}
+     cg.macros      {:message "cg.parser.* is eval-free; cg.macros is eval-time"}
+     cg.run         {:message "cg.parser.* is eval-free; cg.run executes flows"}
+     cg.codegen     {:message "cg.parser.* is eval-free; cg.codegen synthesises forms"}}}}
+
+  cg.parser.jvm
+  {:linters
+   {:discouraged-namespace
+    {cg.dsl         {:message "cg.parser.* is eval-free; cg.dsl is eval-time"}
+     cg.macros      {:message "cg.parser.* is eval-free; cg.macros is eval-time"}
+     cg.run         {:message "cg.parser.* is eval-free; cg.run executes flows"}
+     cg.codegen     {:message "cg.parser.* is eval-free; cg.codegen synthesises forms"}}}}
+
+  cg.parser.squint
+  {:linters
+   {:discouraged-namespace
+    {cg.dsl         {:message "cg.parser.* is eval-free; cg.dsl is eval-time"}
+     cg.macros      {:message "cg.parser.* is eval-free; cg.macros is eval-time"}
+     cg.run         {:message "cg.parser.* is eval-free; cg.run executes flows"}
+     cg.codegen     {:message "cg.parser.* is eval-free; cg.codegen synthesises forms"}}}}
+
+  cg.parser.walk
+  {:linters
+   {:discouraged-namespace
+    {cg.dsl         {:message "cg.parser.* is eval-free; cg.dsl is eval-time"}
+     cg.macros      {:message "cg.parser.* is eval-free; cg.macros is eval-time"}
+     cg.run         {:message "cg.parser.* is eval-free; cg.run executes flows"}
+     cg.codegen     {:message "cg.parser.* is eval-free; cg.codegen synthesises forms"}}}}
+
+  cg.parser.extract
+  {:linters
+   {:discouraged-namespace
+    {cg.dsl         {:message "cg.parser.* is eval-free; cg.dsl is eval-time"}
+     cg.macros      {:message "cg.parser.* is eval-free; cg.macros is eval-time"}
+     cg.run         {:message "cg.parser.* is eval-free; cg.run executes flows"}
+     cg.codegen     {:message "cg.parser.* is eval-free; cg.codegen synthesises forms"}}}}
+
+  cg.parser.validate
+  {:linters
+   {:discouraged-namespace
+    {cg.dsl         {:message "cg.parser.* is eval-free; cg.dsl is eval-time"}
+     cg.macros      {:message "cg.parser.* is eval-free; cg.macros is eval-time"}
+     cg.run         {:message "cg.parser.* is eval-free; cg.run executes flows"}
+     cg.codegen     {:message "cg.parser.* is eval-free; cg.codegen synthesises forms"}}}}}}

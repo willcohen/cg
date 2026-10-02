@@ -1,0 +1,4 @@
+(ns test.op-mod
+  "Fixture for cg.run.op-rung-test: a module that defines an op.")
+
+(defn ^:op rung-sub [^:row n a] (- n a))

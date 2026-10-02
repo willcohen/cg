@@ -1,0 +1,84 @@
+(ns cg.export
+  "Dataset export writers for the analysis modules. They work on any row
+   shape. The caller gives the spec of the column order."
+  (:require [cg.dataset :as ds]
+            [cg.run :as run]
+            [clojure.string :as str]))
+
+(run/load-module "src/cg/columns.cg")
+(clojure.core/require '[cg.columns :as columns])
+(run/load-module "src/cg/layer.cg")
+(clojure.core/require '[cg.layer :as layer])
+
+(defn- name-matches?
+  "Whether the export column name `n` meets `rule`. Each key of the rule
+   must hold: :prefix, :suffix and :contains test the name, :any holds when
+   one of its rules holds, and :not holds when its rule does not."
+  [rule n]
+  (and (if-let [p (:prefix rule)] (str/starts-with? n p) true)
+       (if-let [s (:suffix rule)] (str/ends-with? n s) true)
+       (if-let [c (:contains rule)] (str/includes? n c) true)
+       (if-let [rs (:any rule)] (boolean (some (fn [r] (name-matches? r n)) rs)) true)
+       (if-let [r (:not rule)] (not (name-matches? r n)) true)))
+
+(defn- column-sort-key
+  "The sort key of one export column under `spec` (see column-order):
+   [group rank name]."
+  [spec]
+  (let [ordered (:ordered spec)
+        placed  (reduce (fn [m [n place]] (if (contains? m n) m (assoc m n place)))
+                        {}
+                        (apply concat
+                               (map-indexed (fn [g names]
+                                              (map-indexed (fn [i n] [n [g i]]) names))
+                                            ordered)))
+        groups  (vec (:groups spec))]
+    (fn [n]
+      (if-let [[g i] (get placed n)]
+        [g i ""]
+        [(+ (count ordered)
+            (or (first (keep-indexed (fn [i rule] (when (name-matches? rule n) i)) groups))
+                (count groups)))
+         0
+         n]))))
+
+(defn column-order
+  "The export columns `cols` in the order of `spec`, with :geometry last.
+   :ordered is a vector of name lists: each list is a group in its own
+   order, and the first list that names a column places it. :groups is a
+   vector of rules (see name-matches?) for the other columns: a column
+   goes to the first group whose rule it matches, each group sorts by
+   name, and the columns that match no rule go last."
+  [cols spec]
+  (columns/export-column-order cols (column-sort-key spec)))
+
+(defn export-rows!
+  "Write `rows` (maps with :geometry in EPSG:4326) to <out-prefix>.gpkg
+   (layer `layer-name`) and <out-prefix>.csv (no geometry), and give
+   {:gpkg :csv :rows}. Column names go through columns/export-column-name
+   and take the order of `order-spec` (see column-order)."
+  [rows out-prefix layer-name order-spec]
+  (let [;; :indexed-id is bookkeeping of the spatial index, not a row
+        ;; attribute. `name` matches its keyword and its string spelling: a
+        ;; cached row has string column names.
+        clean (mapv (fn [r]
+                      (reduce-kv (fn [m k v]
+                                   (if (contains? #{"indexed-id"} (name k))
+                                     m
+                                     (assoc m (if (= (name k) "geometry")
+                                                :geometry
+                                                (columns/export-column-name k))
+                                            v)))
+                                 {} r))
+                    rows)
+        gpkg  (str out-prefix ".gpkg")
+        csv   (str out-prefix ".csv")
+        dset  (let [d (ds/->dataset clean)]
+                (layer/tag-crs
+                 (ds/select-columns d (column-order (ds/column-names d) order-spec))
+                 "EPSG:4326"))
+        csv-ds (let [d (ds/->dataset (mapv #(dissoc % :geometry) clean))]
+                 (ds/select-columns d (column-order (ds/column-names d) order-spec)))]
+    (ds/write-gdal! dset gpkg {:layer layer-name :epsg 4326})
+    (ds/write-csv csv-ds csv)
+    {:gpkg gpkg :csv csv :rows (count clean)}))

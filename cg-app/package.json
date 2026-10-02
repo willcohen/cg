@@ -1,0 +1,34 @@
+{
+  "name": "cg-app",
+  "version": "0.0.1",
+  "private": true,
+  "scripts": {
+    "css:build": "sass --load-path=node_modules shared/ui/src/styles.scss shared/ui/public/css/styles.css",
+    "css:watch": "sass --load-path=node_modules --watch shared/ui/src/styles.scss:shared/ui/public/css/styles.css"
+  },
+  "devDependencies": {
+    "chokidar-cli": "^3.0.0",
+    "esbuild": "^0.28.1",
+    "playwright": "^1.61.1",
+    "sass": "^1.93.2",
+    "squint-cljs": "0.14.210"
+  },
+  "dependencies": {
+    "@carbon-labs/react-resizer": "^0.22.0",
+    "@carbon/react": "1.107.1",
+    "@carbon/styles": "^1.106.0",
+    "@monaco-editor/react": "^4.7.0",
+    "@wcohen/wasmts": "0.1.0-alpha7",
+    "@xyflow/react": "^12.0.0",
+    "backproj": "^0.0.7",
+    "elkjs": "^0.11.1",
+    "ffi-wasm": "^0.0.3",
+    "maplibre-gl": "^5.23.0",
+    "maplibre-proj": "^0.0.7",
+    "monaco-editor": "^0.54.0",
+    "proj-wasm": "0.1.0",
+    "react": "19.1.4",
+    "react-dom": "19.1.4",
+    "worker-router": "npm:@wcohen/worker-router@0.0.2"
+  }
+}

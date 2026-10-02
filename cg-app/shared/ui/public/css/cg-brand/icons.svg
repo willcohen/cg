@@ -1,0 +1,28 @@
+<?xml version="1.0" encoding="UTF-8"?>
+<!-- SPDX-License-Identifier: Apache-2.0 WITH LLVM-exception -->
+<!-- The icon sprite of cg-app and cg-vscode. Add an icon as a new <symbol>. -->
+<svg xmlns="http://www.w3.org/2000/svg" style="display:none">
+  <symbol id="i-folder" viewBox="0 0 16 16"><path fill="none" stroke="currentColor" d="M1 4h5l1 1.5h8V13H1V4z"/></symbol>
+  <symbol id="i-file" viewBox="0 0 16 16"><path fill="none" stroke="currentColor" d="M3 1.5h7l3 3V14H3V1.5z M10 1.5v3h3"/></symbol>
+  <symbol id="i-play" viewBox="0 0 16 16"><path fill="currentColor" d="M3 2v12l10-6L3 2z"/></symbol>
+  <symbol id="i-stop" viewBox="0 0 16 16"><rect x="3" y="3" width="10" height="10" fill="currentColor"/></symbol>
+  <symbol id="i-save" viewBox="0 0 16 16"><path fill="none" stroke="currentColor" d="M2 2h10l2 2v10H2V2z M4 2v5h7V2 M5 11h6"/></symbol>
+  <symbol id="i-search" viewBox="0 0 16 16"><circle cx="7" cy="7" r="4.5" fill="none" stroke="currentColor"/><path stroke="currentColor" d="M11 11l3 3"/></symbol>
+  <symbol id="i-plus" viewBox="0 0 16 16"><path stroke="currentColor" d="M8 2v12M2 8h12"/></symbol>
+  <symbol id="i-x" viewBox="0 0 16 16"><path stroke="currentColor" d="M3 3l10 10M13 3L3 13"/></symbol>
+  <symbol id="i-chevron-down" viewBox="0 0 16 16"><path fill="none" stroke="currentColor" d="M3 6l5 5 5-5"/></symbol>
+  <symbol id="i-chevron-right" viewBox="0 0 16 16"><path fill="none" stroke="currentColor" d="M6 3l5 5-5 5"/></symbol>
+  <symbol id="i-eye" viewBox="0 0 16 16"><path fill="none" stroke="currentColor" d="M1 8s2.5-4 7-4 7 4 7 4-2.5 4-7 4-7-4-7-4z"/><circle cx="8" cy="8" r="2" fill="none" stroke="currentColor"/></symbol>
+  <symbol id="i-flow" viewBox="0 0 16 16"><circle cx="3" cy="3" r="2" fill="none" stroke="currentColor"/><circle cx="13" cy="8" r="2" fill="none" stroke="currentColor"/><circle cx="3" cy="13" r="2" fill="none" stroke="currentColor"/><path fill="none" stroke="currentColor" d="M5 3h6M5 13h6M11 6l-6 5"/></symbol>
+  <symbol id="i-map" viewBox="0 0 16 16"><path fill="none" stroke="currentColor" d="M1 3l5-1 5 1 4-1v11l-4 1-5-1-5 1V3z M6 2v11 M11 3v11"/></symbol>
+  <symbol id="i-table" viewBox="0 0 16 16"><path fill="none" stroke="currentColor" d="M2 3h12v10H2V3z M2 7h12 M2 10h12 M6 3v10 M10 3v10"/></symbol>
+  <symbol id="i-code" viewBox="0 0 16 16"><path fill="none" stroke="currentColor" d="M5 4L2 8l3 4 M11 4l3 4-3 4 M9 3l-2 10"/></symbol>
+  <symbol id="i-zoom-in" viewBox="0 0 16 16"><circle cx="7" cy="7" r="4.5" fill="none" stroke="currentColor"/><path stroke="currentColor" d="M11 11l3 3 M5 7h4 M7 5v4"/></symbol>
+  <symbol id="i-zoom-out" viewBox="0 0 16 16"><circle cx="7" cy="7" r="4.5" fill="none" stroke="currentColor"/><path stroke="currentColor" d="M11 11l3 3 M5 7h4"/></symbol>
+  <symbol id="i-zoom-fit" viewBox="0 0 16 16"><path fill="none" stroke="currentColor" d="M2 5V2h3 M11 2h3v3 M14 11v3h-3 M5 14H2v-3"/></symbol>
+  <symbol id="i-bug" viewBox="0 0 16 16"><circle cx="8" cy="9" r="4" fill="none" stroke="currentColor"/><path stroke="currentColor" d="M8 5V3 M5 6L3 4 M11 6l2-2 M3 9H1 M13 9h2 M5 12l-2 2 M11 12l2 2"/></symbol>
+  <symbol id="i-warn" viewBox="0 0 16 16"><path fill="none" stroke="currentColor" d="M8 1L1 14h14L8 1z M8 6v4 M8 11.5v1"/></symbol>
+  <symbol id="i-check" viewBox="0 0 16 16"><path fill="none" stroke="currentColor" d="M3 8l3 3 7-7"/></symbol>
+  <symbol id="i-dots" viewBox="0 0 16 16"><circle cx="3" cy="8" r="1.2" fill="currentColor"/><circle cx="8" cy="8" r="1.2" fill="currentColor"/><circle cx="13" cy="8" r="1.2" fill="currentColor"/></symbol>
+  <symbol id="i-settings" viewBox="0 0 16 16"><circle cx="8" cy="8" r="2.5" fill="none" stroke="currentColor"/><path fill="none" stroke="currentColor" d="M8 1v2M8 13v2M1 8h2M13 8h2M3 3l1.5 1.5M11.5 11.5L13 13M3 13l1.5-1.5M11.5 4.5L13 3"/></symbol>
+</svg>

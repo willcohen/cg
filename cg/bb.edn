@@ -1,0 +1,491 @@
+{:tasks
+ {:requires ([babashka.fs :as fs]
+             [babashka.process :as p]
+             [babashka.tasks :as tasks]
+             [clojure.edn :as edn]
+             [clojure.java.io :as io]
+             [clojure.string :as str])
+
+  :init
+  (do
+    ;; JVM tasks need the GraalVM CE 25 JDK (pinned by flake.nix) so the
+    ;; embedded Truffle guests (PROJ wasm, web-tree-sitter parser) JIT via
+    ;; libgraal instead of running interpreted (~6x slower). The fallback is
+    ;; silent, so warn when the active `java` is not a GraalVM build.
+    (defn graalvm-jdk? []
+      (try
+        (let [{:keys [out err]} (p/sh "java" "-version")]
+          (str/includes? (str out err) "GraalVM"))
+        (catch Exception _ false)))
+
+    (defn warn-unless-graalvm! []
+      (when-not (graalvm-jdk?)
+        (binding [*out* *err*]
+          (println)
+          (println "! java is not GraalVM CE -- Truffle guests (PROJ wasm, web-tree-sitter")
+          (println "! parser) will run INTERPRETED, ~6x slower. This repo's flake pins")
+          (println "! GraalVM CE 25; activate it before running JVM tasks:")
+          (println "!   direnv allow          # one-time; shells entering the repo then use it")
+          (println "!   (or hook direnv into your shell, or: nix develop --command bb <task>)")
+          (println)))))
+
+  npm:install
+  {:doc "Install npm dependencies for ClojureScript build."
+   :task
+   (do
+     (println "Installing npm dependencies...")
+     (tasks/shell "npm" "install")
+     ;; Not a postinstall script: scripts/ is not in the npm package, and
+     ;; the check is about this checkout.
+     (tasks/shell "node" "scripts/check-single-ffi-wasm.mjs")
+     (println "✓ npm dependencies installed"))}
+
+  squint
+  {:doc "Compile ClojureScript using squint-cljs and bundle with esbuild"
+   :depends [npm:install]
+   :task
+   (do
+     (println "Compiling ClojureScript with squint...")
+     (let [files ["src/cg/util.cljc"
+                  "src/cg/math.cljc"
+                  "src/cg/feature.cljc"
+                  ;; cg.geo expands define-all-ts-fns, which reads
+                  ;; ts_registry at expansion time.
+                  "src/cg/ts_registry.cljc"
+                  "src/cg/ts_macros.cljc"
+                  "src/cg/geo.cljc"
+                  "src/cg/io.cljc"
+                  "src/cg/model.cljc"
+                  "src/cg/dataset.cljc"
+                  "src/cg/macros.cljc"
+                  "src/cg/dsl/signatures_generated.cljc"
+                  "src/cg/dsl/signatures.cljc"
+                  "src/cg/parser/core.cljc"
+                  "src/cg/parser/walk.cljc"
+                  "src/cg/parser/types.cljc"
+                  "src/cg/parser/validate.cljc"
+                  "src/cg/parser/extract.cljc"
+                  ;; squint.cljs is the cljs tree-sitter backend. Its .mjs goes
+                  ;; stale when it is not in this list.
+                  "src/cg/parser/squint.cljs"
+                  "src/cg/dsl.cljc"
+                  "src/cg/codegen.cljc"
+                  "src/cg/introspect.cljc"
+                  "src/cg/metadata.cljc"
+                  ;; run.mjs imports fusion and trace_js.
+                  "src/cg/run/fusion.cljc"
+                  "src/cg/trace_js.cljs"
+                  "src/cg/run.cljc"
+                  "src/cg/pool.cljc"
+                  "src/cg/wasmts_handler.cljc"
+                  "src/cg/cli.cljc"]]
+       ;; No delete first: a consumer that imports src/cg/*.mjs during a
+       ;; rebuild would get ERR_MODULE_NOT_FOUND.
+       (doseq [file files]
+         (println (str "  Compiling " file "..."))
+         (let [result (tasks/shell {:continue true :out :string :err :string}
+                                   "npx" "squint" "compile" file)]
+           (when (seq (:out result)) (print (:out result)))
+           (when (seq (:err result)) (print (:err result)))
+           (when (not= 0 (:exit result))
+             (throw (ex-info (str "squint compile failed for " file)
+                             {:exit (:exit result) :file file})))))
+
+       (println "✓ Squint compilation complete.")
+       (println "Bundling with esbuild...")
+       (tasks/shell "npm" "run" "build")
+       (println "✓ Bundle complete! NPM package ready in dist/cg.mjs")
+       (println "")
+       (println "Next steps:")
+       (println "  1. For npm publishing: npm publish")
+       (println "  2. For app development: cd ../cg-app && bb build:cg")
+       (println "     (or run 'bb watch:cg' to auto-rebuild on changes)")))}
+
+  squint:clean
+  {:doc "Clean squint compilation artifacts"
+   :task
+   (do
+     (println "Cleaning squint artifacts...")
+     (fs/delete-tree "dist")
+     (doseq [mjs (fs/glob "src" "**.mjs")]
+       (let [s (str mjs)]
+         (when-not (str/includes? s "index.mjs")
+           (fs/delete mjs))))
+     (println "✓ Squint artifacts cleaned"))}
+
+  squint:watch
+  {:doc "Watch cg source files and auto-rebuild with squint on changes"
+   :depends [npm:install]
+   :task
+   (do
+     (println "Watching cg source files for changes...")
+     (println "  Will auto-compile and bundle on save")
+     (println "  Press Ctrl+C to stop")
+     (println)
+     (tasks/shell "npx" "chokidar" "src/**/*.clj*" "-c" "bb squint"))}
+
+  test
+  {:doc "Run the Clojure tests with clojure.test."
+   :task
+   (do
+     (warn-unless-graalvm!)
+     (println "Running CG test suite...")
+     (println)
+     (clojure "-M:log:test"))}
+
+  squint:test
+  {:doc "Compile the cljc test suites (+ their runner/setup helpers) to .mjs so
+they run under squint + node via cljs.test. The .mjs are gitignored generated
+artifacts, rebuilt here. Depends on `squint` so the SUT src/cg/*.mjs the suites
+import are fresh. Compiles with --paths . --output-dir . so output lands in
+place (test/cg/*.mjs) and local requires resolve as relative module specifiers."
+   :depends [squint]
+   :task
+   (let [files ["test/cg/test_runner.cljc"
+                "test/cg/wasmts_setup.cljc"
+                "test/cg/pool_setup.cljc"
+                "test/cg/geo_test.cljc"
+                "test/cg/loaders_test.cljc"
+                "test/cg/codegen_test.cljc"
+                "test/cg/introspect_test.cljc"
+                "test/cg/metadata_test.cljc"
+                "test/cg/pool_adapter_test.cljc"
+                "test/cg/run_exec_test.cljc"
+                "test/cg/dataset_exec_test.cljc"
+                "test/cg/trace_test.cljc"
+                "test/cg/util_fs_test.cljc"
+                "test/cg/run/when_row_runtime_test.cljc"
+                "test/cg/run/per_row_dispatch_test.cljc"
+                "test/cg/run/param_order_test.cljc"
+                "test/cg/eval_destructuring_test.cljc"
+                "test/cg/run/op_rung_test.cljc"
+                "test/cg/op_eval_test.cljc"
+                "test/cg/load_module_test.cljc"
+                "test/cg/test_runner_test.cljc"
+                "test/cg/rung_args_test.cljc"
+                "test/cg/dataset_spatial_test.cljc"
+                "test/cg/parcel_js_test.cljc"
+                "test/cg/parcel_coverage_test.cljc"
+                "test/cg/zoning_load_test.cljc"
+                "test/cg/zoning_rules_test.cljc"]]
+     (println "Compiling cljc test suites with squint...")
+     (doseq [file files]
+       (println (str "  Compiling " file "..."))
+       (let [result (tasks/shell {:continue true :out :string :err :string}
+                                 "npx" "squint" "compile"
+                                 "--paths" "." "--output-dir" "." file)]
+         (when (seq (:out result)) (print (:out result)))
+         (when (seq (:err result)) (print (:err result)))
+         (when (not= 0 (:exit result))
+           (throw (ex-info (str "squint test compile failed for " file)
+                           {:exit (:exit result) :file file})))))
+     (println "✓ cljc test suites compiled."))}
+
+  test:cljs
+  {:doc "Run the cljc test suites under squint + node (cljs.test). Each suite's
+footer inits wasmts (or the joint pool), runs cljs.test/run-tests, and
+process.exit-s 0 on green / 1 on any failure. The same .cljc sources run under
+`bb test` on the JVM via clojure.test — one suite, two runtimes."
+   :depends [squint:test]
+   :task
+   (do
+     (println "Running cljc test suites under squint + node...")
+     (println)
+     ;; --experimental-wasm-exnref: wasmts emits the exnref opcode, which node
+     ;; keeps behind a flag. --liftoff-only: keep wasm on the baseline tier.
+     ;; Without it a TurboFan background thread grinds for minutes on the large
+     ;; PROJ and wasmts modules and does not yield, so a suite that starts the
+     ;; worker pool never exits.
+     (let [node "node --experimental-wasm-exnref --liftoff-only"]
+       (doseq [suite ["test/cg/geo_test.mjs"
+                      "test/cg/loaders_test.mjs"
+                      "test/cg/codegen_test.mjs"
+                      "test/cg/introspect_test.mjs"
+                      "test/cg/metadata_test.mjs"
+                      "test/cg/pool_adapter_test.mjs"
+                      "test/cg/run_exec_test.mjs"
+                      "test/cg/dataset_exec_test.mjs"
+                      "test/cg/trace_test.mjs"
+                      "test/cg/util_fs_test.mjs"
+                      "test/cg/run/when_row_runtime_test.mjs"
+                      "test/cg/run/per_row_dispatch_test.mjs"
+                      "test/cg/run/param_order_test.mjs"
+                      "test/cg/eval_destructuring_test.mjs"
+                      "test/cg/run/op_rung_test.mjs"
+                      "test/cg/op_eval_test.mjs"
+                      "test/cg/load_module_test.mjs"
+                      "test/cg/test_runner_test.mjs"
+                      "test/cg/rung_args_test.mjs"
+                      "test/cg/dataset_spatial_test.mjs"
+                      "test/cg/parcel_js_test.mjs"
+                      "test/cg/parcel_coverage_test.mjs"
+                      "test/cg/zoning_load_test.mjs"
+                      "test/cg/zoning_rules_test.mjs"]]
+         (println (str "  " suite))
+         (shell (str node " " suite)))))}
+
+  bench:pbf
+  {:doc "Measure the f=pbf fetch path against GDAL's ESRIJSON driver on a live
+server. Needs the network. Two modes:
+
+  bb bench:pbf              time a whole load through each loader, order alternated
+  bb bench:pbf split        time fetch and decode apart, to attribute the gap
+
+Flags: --layer URL --where CLAUSE --page-size N --pages N --runs N. --layer
+(a FeatureServer layer URL) and --where (an OBJECTID bound) are required.
+
+The ratio moves with server load, because the PBF loader spends about 93% of its
+time waiting on the server. Quote a figure with its date and re-run before
+quoting it again."
+   :task
+   (do
+     (warn-unless-graalvm!)
+     (apply clojure "-M:bench" "-m" "cg.bench.featureserver-pbf"
+            *command-line-args*))}
+
+  lint
+  {:doc "clj-kondo over src, bench, test and the .cg programs.
+Exits non-zero on any error.
+
+The .cg programs are named one by one. A directory scan skips them: clj-kondo
+has no option for extra file extensions, so `clj-kondo --lint examples` reads
+no files and reports 0/0.
+
+Each clj-kondo run gets a fresh copy of a cache seeded from src and test. A .cg
+program carries no ns form, so its vars land in `user`. A shared cache lets one
+program resolve the names an earlier one defined, which masks the unresolved
+symbols and adds redefined-var noise, and it makes the totals depend on the
+order of the runs and on what the cache already held.
+
+A .cg program goes through stdin, with its path in --filename. The .cg
+config silences only the namespace-name check: run/load-module loads a
+.cg module by its path, so its ns names the module, not the file path.
+cg-vscode can lint a .cg buffer the same way.
+
+The lint skips test/fixtures/typed-mismatch.cg on purpose: it plants
+the errors that the cg.parser.types tests look for."
+   :task
+   (let [summary-line-re (re-pattern "(?m)^linting took.*\\n?")
+         counts-re (re-pattern "errors: (\\d+), warnings: (\\d+)")
+         seed (str (fs/create-temp-dir {:prefix "cg-lint-seed"}))
+         work (str (fs/create-temp-dir {:prefix "cg-lint-work"}))
+         lint-one (fn [target]
+                    (fs/delete-tree work)
+                    (fs/copy-tree seed work)
+                    (let [{:keys [out]} (p/sh "clj-kondo" "--lint" target "--cache" work)
+                          [_ e w] (re-find counts-re out)]
+                      (print (str/replace out summary-line-re ""))
+                      (flush)
+                      [(parse-long e) (parse-long w)]))
+         cg-lane-config (pr-str
+                         {:linters
+                          {:namespace-name-mismatch {:level :off}}})
+         lint-cg (fn [target]
+                   (fs/delete-tree work)
+                   (fs/copy-tree seed work)
+                   (let [{:keys [out]} (p/sh {:in (slurp target)}
+                                             "clj-kondo" "--lint" "-"
+                                             "--filename" target
+                                             "--cache" work
+                                             "--config" cg-lane-config)
+                         [_ e w] (re-find counts-re out)]
+                     (print (str/replace out summary-line-re ""))
+                     (flush)
+                     [(parse-long e) (parse-long w)]))
+         cg-files (->> (concat (fs/glob "examples" "*.cg") (fs/glob "src" "**.cg"))
+                       (map str)
+                       sort)]
+     (p/sh "clj-kondo" "--lint" "src" "test" "bench" "--dependencies" "--cache" seed)
+     (let [[se sw] (lint-one "src")
+           [be bw] (lint-one "bench")
+           [te tw] (lint-one "test")
+           [ce cw] (reduce (fn [[e w] f]
+                             (let [[e' w'] (lint-cg f)]
+                               [(+ e e') (+ w w')]))
+                           [0 0]
+                           cg-files)]
+       (fs/delete-tree seed)
+       (fs/delete-tree work)
+       (println)
+       (println (format "  src       %4d errors  %4d warnings" se sw))
+       (println (format "  bench     %4d errors  %4d warnings" be bw))
+       (println (format "  test      %4d errors  %4d warnings" te tw))
+       (println (format "  .cg (%2d)  %4d errors  %4d warnings" (count cg-files) ce cw))
+       (when (pos? (+ se be te ce))
+         (System/exit 1))))}
+
+  ts:sync
+  {:doc "Write src/cg/ts_registry.cljc from wasmts/registry.edn, as literal data
+that the squint macro can :require.
+
+Run this in the same change as a @wcohen/wasmts version bump. cg.geo is minted
+from this snapshot, so the two must agree. npm semver makes the risk quiet: a
+caret range on a prerelease accepts the next prerelease, so a published wasmts
+with a changed surface reaches cg without a package.json edit. After a bump,
+re-run this task, then re-run the cg.geo tests."
+   :task
+   (let [src (or (System/getenv "WASMTS_REGISTRY")
+                 "../../wasmts/registry.edn")
+         meta-dest "resources/wasmts-registry.meta.edn"
+         clj-dest "src/cg/ts_registry.cljc"]
+     (when-not (fs/exists? src)
+       (println (str "wasmts registry not found at " src))
+       (println "Set WASMTS_REGISTRY=/path/to/registry.edn or check the wasmts checkout.")
+       (System/exit 1))
+     (fs/create-dirs "resources")
+     (let [wasmts-dir (-> src fs/path fs/parent str)
+           jj-result (tasks/shell {:continue true :out :string :err :string :dir wasmts-dir}
+                                  "jj" "log" "-r" "@" "--no-graph"
+                                  "-T" "change_id.short() ++ \" \" ++ description.first_line()")
+           rev (if (zero? (:exit jj-result))
+                 (str/trim (:out jj-result))
+                 "(jj revision unavailable)")]
+       (spit meta-dest
+             (str "{:source " (pr-str src) "\n"
+                  " :synced-at " (pr-str (str (java.time.Instant/now))) "\n"
+                  " :wasmts-revision " (pr-str rev) "}\n"))
+       ;; A cljc mirror, because squint has no slurp at expansion time.
+       ;; Quoted, because the registry holds bare symbols. One sorted entry
+       ;; for each line, because the source prints one key for each line.
+       (let [compact (fn compact [x]
+                       (cond
+                         (map? x) (str "{" (str/join " " (map (fn [[k v]] (str (compact k) " " (compact v))) x)) "}")
+                         (set? x) (str "#{" (str/join " " (map compact x)) "}")
+                         (vector? x) (str "[" (str/join " " (map compact x)) "]")
+                         (seq? x) (str "(" (str/join " " (map compact x)) ")")
+                         :else (pr-str x)))
+             entries (sort-by (fn [[k _]] [(str (:class k)) (str (:method k)) (pr-str (:params k))])
+                              (edn/read-string (slurp src)))]
+         (spit clj-dest
+               (str ";; Auto-generated by `bb ts:sync`. Do not edit by hand.\n"
+                    ";; Source: " src "\n"
+                    ";; Wasmts revision: " rev "\n"
+                    "(ns cg.ts-registry)\n\n"
+                    "(def registry\n  '{"
+                    (str/join "\n    " (map (fn [[k v]] (str (compact k) " " (compact v))) entries))
+                    "})\n"))))
+     (println "Meta:    " meta-dest)
+     (println "Mirror:  " clj-dest)
+     (tasks/run 'ts:kondo))}
+
+  ts:kondo
+  {:doc "Snapshot the names + arities that (define-all-ts-fns) mints into the
+exported clj-kondo hook data.
+
+A clj-kondo hook runs in SCI and cannot read src/cg/ts_registry.cljc, so
+the minted surface is copied into
+resources/clj-kondo.exports/net.willcohen/cg/hooks/cg/ts_names.clj. `bb ts:sync`
+runs this task, because the copy and the registry must agree. After it runs,
+refresh the imported copies:
+  clj-kondo --lint \"$(clojure -Spath)\" --copy-configs --skip-lint"
+   :task
+   (clojure "-M" "-e"
+            "(load-file \"scripts/gen_kondo_hook.clj\") (gen-kondo-hook/-main)")}
+
+  ts:check
+  {:doc "Validate that cg.geo can expand cleanly + report mint/registration stats"
+   :task
+   (clojure "-M" "-e"
+            "(require '[cg.geo] :reload)
+             (let [{:keys [minted registered by-package]} (cg.geo/check-report)]
+               (println (str \"Minted defns:        \" minted))
+               (println (str \"Registered ops:      \" registered))
+               (println \"By package:\")
+               (doseq [[pkg n] (sort by-package)]
+                 (println (format \"  %-40s %4d\" pkg n))))")}
+
+  gen:signatures
+  {:doc "Snapshot the op registry into src/cg/dsl/signatures_generated.cljc (the parser's built-ins). Run after editing any register-operation! parser slice."
+   :task
+   (clojure "-M" "-e"
+            "(load-file \"scripts/gen_signatures.clj\") (gen-signatures/-main)")}
+
+  show-model
+  {:doc "Extract and display Flow Graph from .cg file (usage: bb show-model <file.cg>)"
+   :task
+   (let [file (or (first *command-line-args*)
+                  (do (println "Usage: bb show-model <file.cg>")
+                      (System/exit 1)))]
+     (clojure "-M" "-e" (str "(require '[cg.cli :as cli]) (System/exit (cli/show-model \"" file "\"))")))}
+
+  generate
+  {:doc "Regenerate .cg code from models (usage: bb generate <file.cg>)"
+   :task
+   (let [file (or (first *command-line-args*)
+                  (do (println "Usage: bb generate <file.cg>")
+                      (System/exit 1)))]
+     (clojure "-M" "-e" (str "(require '[cg.cli :as cli]) (System/exit (cli/generate \"" file "\"))")))}
+
+  validate
+  {:doc "Verify round-trip code → model → code (usage: bb validate <file.cg>)"
+   :task
+   (let [file (or (first *command-line-args*)
+                  (do (println "Usage: bb validate <file.cg>")
+                      (System/exit 1)))]
+     (clojure "-M" "-e" (str "(require '[cg.cli :as cli]) (System/exit (if (cli/validate \"" file "\") 0 1))")))}
+
+  run
+  {:override-builtin true
+   :doc "Run a model of a .cg file and print its result (usage: bb run
+<file.cg> [--model NAME] [--timeout-ms N]). The model is the last
+threading-macro binding of the file, or the one --model names."
+   :task
+   (let [[file & flags] *command-line-args*
+         _ (when-not file
+             (println "Usage: bb run <file.cg> [--model NAME] [--timeout-ms N]")
+             (System/exit 1))
+         opts (loop [[k v & more] flags, opts {}]
+                (case k
+                  nil opts
+                  "--model" (recur more (assoc opts :model v))
+                  "--timeout-ms" (recur more (assoc opts :timeout-ms (parse-long v)))
+                  (do (println "Unknown option:" k) (System/exit 1))))]
+     (warn-unless-graalvm!)
+     ;; A citywide parcel model exhausts the default 25% heap. The other
+     ;; 30% is for the OS and off-heap direct buffers.
+     (clojure
+      "-J-XX:MaxRAMPercentage=70"
+      "-J--enable-native-access=ALL-UNNAMED"
+      "-J--sun-misc-unsafe-memory-access=allow"
+      "-M:log" "-e"
+      (str "(require '[cg.cli :as cli]) (System/exit (cli/run-model-file "
+           (pr-str file) " " (pr-str opts) "))")))}
+
+  node-run
+  {:doc "Execute .cg file using Node.js (usage: bb node-run <file.cg>)"
+   :depends [squint]
+   :task
+   (let [file (or (first *command-line-args*)
+                  (do (println "Usage: bb node-run <file.cg>")
+                      (System/exit 1)))]
+     ;; --experimental-wasm-exnref required for PROJ WASM on Node.js 24+
+     (tasks/shell "node" "--experimental-wasm-exnref" "bin/cg.mjs" "run" file))}
+
+  repl
+  {:override-builtin true
+   :doc "Start nREPL server on port 7888"
+   :task
+   (clojure "-M:log:nrepl")}
+
+  jar
+  {:doc "Build target/cg-<version>.jar and its pom with tools.build. The
+version comes from package.json. The jar holds the web-tree-sitter files of
+node_modules for the parser; run bb npm:install first."
+   :task (clojure "-T:build" "jar")}
+
+  deploy
+  {:doc "Deploy the jar to Clojars. Needs CLOJARS_USERNAME and
+CLOJARS_PASSWORD (a deploy token)."
+   :depends [jar]
+   :task (let [version (second (re-find (re-pattern "\"version\": \"([^\"]+)\"") (slurp "package.json")))]
+           (clojure "-X:deploy" ":artifact" (pr-str (str "target/cg-" version ".jar"))))}
+
+  clean
+  {:doc "Clean all build artifacts"
+   :depends [squint:clean]
+   :task
+   (do
+     (println "Cleaning all build artifacts...")
+     (fs/delete-tree ".cpcache")
+     (fs/delete-tree "target")
+     (println "✓ All artifacts cleaned"))}}}

@@ -1,0 +1,24 @@
+;; CG Map smoke fixture: emits the three parcel-debug geometry layers from one
+;; synthetic analyzed-row, because a rendering test needs fixed edges and no
+;; data pipeline. The lot is made up, in EPSG:2249 (ft), inside the area of
+;; that CRS; /api/data reprojects it to 4326.
+
+(require '[cg.run :as run])
+(run/load-module "src/cg/parcel.cg")
+(require '[cg.parcel :as parcel]
+         '[cg.feature :as f])
+
+(def analyzed-rows
+  [{:parcel-id "SMOKE-1"
+    :edges [{:edge (f/linestring [[500000 2800000] [500100 2800000]]) :edge-type :front :setback 15.0}
+            {:edge (f/linestring [[500100 2800000] [500100 2800080]]) :edge-type :side  :setback 8.0}
+            {:edge (f/linestring [[500100 2800080] [500000 2800080]]) :edge-type :rear  :setback 25.0}
+            {:edge (f/linestring [[500000 2800080] [500000 2800000]]) :edge-type :side  :setback 8.0}]
+    :envelope (f/polygon [[500008 2800015] [500092 2800015] [500092 2800055] [500008 2800055] [500008 2800015]])
+    :effective-boundary-geom (f/polygon [[500000 2800000] [500100 2800000] [500100 2800080] [500000 2800080] [500000 2800000]])}])
+
+(def layers (parcel/debug-layers analyzed-rows "EPSG:2249" {:length "ft"}))
+
+(def debug-edges (:debug-edges layers))
+(def debug-envelope (:debug-envelope layers))
+(def debug-boundary (:debug-boundary layers))

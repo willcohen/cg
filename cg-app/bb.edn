@@ -1,0 +1,255 @@
+{:paths ["scripts"]
+
+ :tasks
+ {:requires ([babashka.fs :as fs]
+             [clojure.string :as str]
+             [appbundle]
+             [importmap])
+
+  css:build
+  {:doc "Build CSS from Sass (one-time)"
+   :task (do
+           (println "Building CSS from Sass...")
+           (shell "npm run css:build")
+           (println "✓ CSS built"))}
+
+  importmap:write
+  {:doc "Write shared/ui/public/importmap.json from importmap.mjs: the CDN
+         URL of each npm package that a page loads"
+   :task (shell "node importmap.mjs")}
+
+  vendor-deps
+  {:doc "Copy the runtime packages into shared/ui/public/vendor for
+         build:app-static only. The other pages load them from the CDN.
+         The source is node_modules. Run npm install first."
+   :task (let [nm         "node_modules"
+               proj-dist  (str nm "/proj-wasm/dist")
+               ffi-dir    (str nm "/ffi-wasm/dist")
+               wr-dist    (str nm "/worker-router/dist")
+               comlink    (str nm "/comlink/dist/esm/comlink.mjs")
+               rt         (str nm "/resource-tracker/resource.mjs")
+               ;; cg declares web-tree-sitter; cg-app does not.
+               wts        "../cg/node_modules/web-tree-sitter"
+               gdal       "../cg/node_modules/gdal-wasm"
+               targets    ["shared/ui/public/vendor"]]
+           (doseq [src [proj-dist ffi-dir wr-dist comlink rt wts gdal]]
+             (when-not (fs/exists? src)
+               (binding [*out* *err*]
+                 (println "MISSING vendor source:" src "(run npm install)"))
+               (System/exit 1)))
+           (doseq [target targets]
+             (fs/create-dirs (str target "/proj-wasm"))
+             (fs/copy-tree proj-dist (str target "/proj-wasm") {:replace-existing true})
+             ;; Relative sibling imports resolve because the modules stay together.
+             (fs/create-dirs (str target "/ffi-wasm"))
+             (doseq [f (fs/glob ffi-dir "*.mjs")]
+               (fs/copy f (str target "/ffi-wasm/" (fs/file-name f)) {:replace-existing true}))
+             (fs/create-dirs (str target "/worker-router"))
+             (doseq [n ["index.mjs" "worker-bootstrap.mjs"]]
+               (fs/copy (str wr-dist "/" n) (str target "/worker-router/" n) {:replace-existing true}))
+             (fs/copy comlink (str target "/comlink.mjs") {:replace-existing true})
+             (fs/create-dirs (str target "/resource-tracker"))
+             (fs/copy rt (str target "/resource-tracker/resource.mjs") {:replace-existing true})
+             (fs/create-dirs (str target "/web-tree-sitter"))
+             (doseq [n ["web-tree-sitter.js" "web-tree-sitter.wasm"]]
+               (fs/copy (str wts "/" n) (str target "/web-tree-sitter/" n) {:replace-existing true}))
+             ;; gdal-loader finds proj.db and the handler next to itself.
+             (fs/copy-tree gdal (str target "/gdal-wasm") {:replace-existing true})
+             (println "✓ vendored runtime chain into" target))
+           (shell "node" "app/vendor-cdn.mjs"))}
+
+  squint:cg-core
+  {:doc "Compile cg-core to ../cg/dist/cg.mjs with the squint task of ../cg"
+   :task (shell {:dir "../cg"} "bb" "squint")}
+
+  build:cg
+  {:doc "Build the cg bundles: node for cg-vscode, browser for the webview"
+   :depends [squint:cg-core]
+   :task (do
+           (println "Building CG module bundles...")
+           (println "  Input:    ../cg/dist/cg.mjs (refreshed by squint:cg-core)")
+           (println "  Outputs:  shared/ui/public/cg-bundled-node.mjs")
+           (println "            shared/ui/public/cg-bundled-browser.mjs")
+           (println "")
+           (shell "node esbuild.app-bundle.mjs"))}
+
+  watch:cg
+  {:doc "Watch CG source and rebuild app bundles on changes"
+   :task (do
+           (println "Watching CG source files and rebuilding app bundles...")
+           (println "  Run 'bb squint:watch' in ../cg first!")
+           (println "  Watches ../cg/dist/cg.mjs and rebuilds both cg-bundled-{node,browser}.mjs")
+           (println "")
+           (shell "npx chokidar '../cg/dist/cg.mjs' -c 'node esbuild.app-bundle.mjs'"))}
+
+  squint:canvas
+  {:doc "Compile shared squint canvas sources -> shared/squint/js (.mjs)"
+   :task (shell {:dir "shared/squint"} "npx" "squint" "compile")}
+
+  bundle:canvas
+  {:doc "Bundle the canvas, with react and @xyflow, into shared/squint/dist/cg-canvas.mjs"
+   :depends [squint:canvas]
+   :task (shell {:dir "shared/squint"} "node" "esbuild.canvas.mjs")}
+
+  watch:canvas
+  {:doc "Recompile the squint canvas on each change (then run bb bundle:canvas)"
+   :task (shell {:dir "shared/squint"} "npx" "squint" "watch")}
+
+  probes
+  {:doc "Rebuild the canvas bundle and run the canvas probes."
+   :depends [bundle:canvas]
+   :task (shell {:dir "shared/squint"} "node" "probes/canvas-verify.cjs")}
+
+  importmap:check
+  {:doc "Check shared/ui/public/importmap.json against cg-bundled-browser.mjs.
+         Fail on a bare import with no entry."
+   :depends [importmap:write]
+   :task (importmap/check!)}
+
+  bundle:check
+  {:doc "Fail if app/dist/cg-app.mjs is older than one of its esbuild inputs.
+         Run after a squint compile of cg."
+   :task (appbundle/check!)}
+
+  squint:app
+  {:doc "Compile the shared GUI namespaces in place, then the app shell to app/js.
+         bundle:canvas compiles the JSX canvas namespaces."
+   :task (let [shared (->> (fs/glob "shared/squint/src" "**.cljs")
+                           (map (fn [f] (str (fs/relativize "shared/squint" f))))
+                           (remove (fn [f] (str/starts-with? f "src/cg_gui/canvas/")))
+                           sort)]
+           (apply shell {:dir "shared/squint"} "npx" "squint" "compile"
+                  (concat shared ["--extension" ".mjs" "--output-dir" "src"]))
+           (shell {:dir "app"} "npx" "squint" "compile"))}
+
+  bundle:app
+  {:doc "Bundle the app shell into app/dist/cg-app.mjs (react bundled in)"
+   :depends [squint:app]
+   :task (shell {:dir "app"} "node" "esbuild.app.mjs")}
+
+  bundle:map-core
+  {:doc "Bundle cg-gui.map.core into shared/ui/public/cg-map.mjs for the cg-vscode webview"
+   :depends [squint:app]
+   :task (shell {:dir "app"} "node" "esbuild.map-core.mjs")}
+
+  bundle:run-core
+  {:doc "Bundle cg-gui.run.js into shared/ui/public/cg-run.mjs for the cg-vscode webview"
+   :depends [squint:app]
+   :task (shell {:dir "app"} "node" "esbuild.run-core.mjs")}
+
+  build:web-app
+  {:doc "Rebuild the cg bundle, the canvas and the app shell for the web app.
+         bundle:app alone leaves the other two stale."
+   :depends [build:cg bundle:canvas bundle:app]
+   :task (println "✓ web app artifacts rebuilt: cg bundle + canvas + app shell")}
+
+  build:vscode
+  {:doc "Build what cg-vscode reads from cg-app: cg, the canvas, and the map and run cores"
+   :depends [build:cg bundle:canvas bundle:map-core bundle:run-core importmap:write]
+   :task (println "✓ cg-vscode assets rebuilt")}
+
+  build:app-static
+  {:doc "Build the web PWA into app/dist-static, with relative paths only"
+   :depends [squint:app vendor-deps]
+   :task (shell {:dir "app"} "node" "esbuild.app-static.mjs")}
+
+  build:demo
+  {:doc "Build the GitHub Pages demo into ../docs.
+         Its importmap loads the npm packages from a CDN."
+   :depends [squint:cg-core squint:canvas squint:app]
+   :task (shell {:dir "app"} "node" "esbuild.demo.mjs")}
+
+  test:app
+  {:doc "Run app-shell squint tests under node (app/run-tests.mjs)"
+   :task (shell {:dir "app"} "node" "run-tests.mjs")}
+
+  dev:app
+  {:doc "Serve the squint app shell at http://localhost:3100 (PORT env overrides)"
+   :depends [bundle:app]
+   :task (shell {:dir "app"} "node" "serve.mjs")}
+
+  setup
+  {:doc "Install the npm dependencies"
+   :task (do
+           (shell "npm install")
+           (println "\n✓ Setup complete. Next: bb dev:web"))}
+
+  clean
+  {:doc "Clean all build artifacts"
+   :task (do
+           (doseq [dir ["app/dist"
+                        "app/js"
+                        "shared/squint/dist"
+                        "shared/squint/js"]]
+             (when (fs/exists? dir)
+               (fs/delete-tree dir)
+               (println "Cleaned" dir)))
+           (println "✓ Cleaned all build artifacts"))}
+
+  run
+  {:doc "Run a .cg file with the cg runner (usage: bb run <file.cg>)"
+   ;; The canvas Run button calls `bb run <path>` from the nearest bb.edn.
+   ;; The builtin run reads the path as a task name and fails.
+   :override-builtin true
+   :task (apply shell {:dir "../cg"} "bb" "run" *command-line-args*)}
+
+  backend:dev
+  {:doc "Start JVM backend HTTP server"
+   :task (do
+           (println "Starting JVM backend server...")
+           (println "  HTTP Server: http://127.0.0.1:<ephemeral> (see cg-app/.cg-backend-port)")
+           (println "  API Docs:    See backend/README.md")
+           (println "")
+           ;; cg-vscode reads the port file to reach the backend, which binds
+           ;; an ephemeral port.
+           (shell "clj -M:backend --port-file .cg-backend-port"))}
+
+  build:web-local
+  {:doc "Build and serve the web PWA from app/dist-static on :3100 (PORT overrides)"
+   :depends [build:app-static]
+   :task (do
+           (println "Serving the standalone PWA bundle. Open it in a browser:")
+           (println "  http://localhost:3100 (PORT overrides)")
+           (println "  Load a .cg, hit Run — the JS backend runs it in the page (no JVM backend).")
+           (println "")
+           (shell {:dir "app"} "node" "serve-static.mjs"))}
+
+  dev:web
+  {:doc "Build all, then serve on :3100 (PORT overrides) and rebundle on each change"
+   :depends [css:build build:cg bundle:canvas bundle:app]
+   :task (do
+           (println "Starting web development (squint app shell)...")
+           (println "  Web App:      http://localhost:3100 (PORT overrides)")
+           (println "  CSS Watch:    Auto-rebuilding Carbon css on changes")
+           (println "  App Watch:    Re-bundling app/dist on app/src changes")
+           (println "  Canvas Watch: Re-bundling shared/squint/dist on canvas changes")
+           (println "  cg-core:      NOT watched here (full rebuild is heavy); for live")
+           (println "                cg-core edits run 'bb squint:watch' in ../cg + 'bb watch:cg' here")
+           (println "  Backend:      optional JVM: bb backend:dev (port in cg-app/.cg-backend-port)")
+           (println "")
+           (println "Press Ctrl+C to stop")
+           (println "")
+           (future (shell "npm run css:watch"))
+           (future (shell "npx" "chokidar" "app/src/**/*.cljs" "-c" "bb bundle:app"))
+           (future (shell "npx" "chokidar" "shared/squint/src/**/*.cljs" "-c" "bb bundle:canvas"))
+           (Thread/sleep 1000)
+           (shell {:dir "app"} "node" "serve.mjs"))}
+
+  build:web
+  {:doc "Build web UI for production (squint app shell -> app/dist via esbuild)"
+   :depends [css:build bundle:app]
+   :task (println "✓ Web built: app/dist/cg-app.mjs (+ shared/ui/public css/vendor served by app/serve.mjs)")}
+
+  test:backend
+  {:doc "Run backend tests (JVM integration tests)"
+   :task (do
+           (println "Running backend tests...")
+           (shell "clj -M:test"))}
+
+  test:web
+  {:doc "Run web tests (squint app-shell suite via app/run-tests.mjs)"
+   :depends [test:app]}
+
+  test
+  {:doc "Run all tests (backend + web)"
+   :depends [test:backend test:web]}}}

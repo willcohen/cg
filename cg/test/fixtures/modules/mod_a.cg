@@ -1,0 +1,24 @@
+(ns test.mod-a
+  "Fixture for load_module_test: parcel.cg and zoning.cg in small. This
+   module loads mod_b at its tail, and mod_b loads this one at its top.
+   Both define a helper named helper. This one also has an op and a
+   clojure.string call."
+  (:require [cg.geo :as geo]
+            [cg.run :as run]
+            [clojure.string :as str]))
+
+(defn helper [] "a")
+
+(defn shout [s] (str/upper-case s))
+
+(def greeting "hello")
+
+(defn ^:op area-of
+  {:outputs {:area {:type :number}}}
+  [^:row ^{:type :feature} parcel]
+  (geo/area parcel))
+
+(run/load-module "test/fixtures/modules/mod_b.cg")
+(clojure.core/require '[test.mod-b :as b])
+
+(defn pair [] [(helper) (b/helper) (b/from-a) b/loud-greeting])

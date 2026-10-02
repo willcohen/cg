@@ -1,0 +1,753 @@
+/* The app injects the --cg-* color tokens at runtime from __CG_TOKENS__.
+   It injects no spacing, radius or duration tokens. These values are
+   literal for that reason. */
+
+.cg-shell-header {
+  flex: none;
+  display: flex;
+  align-items: center;
+  gap: 6px 16px;
+  min-height: 48px;
+  padding: 0 12px;
+  background: var(--cg-surface-raised, #fff);
+  border-bottom: 1px solid var(--cg-line-soft, #cbd2d9);
+  font-family: "IBM Plex Sans", system-ui, -apple-system, "Segoe UI", sans-serif;
+  font-size: 13px;
+  color: var(--cg-ink, #1f2933);
+  user-select: none;
+}
+
+.cg-hdr-group {
+  flex: none;
+  display: flex;
+  align-items: center;
+  gap: 6px;
+}
+
+.cg-shell-title {
+  font-weight: 600;
+  font-size: 15px;
+  letter-spacing: 0.02em;
+  color: var(--cg-mark, var(--cg-ink, #1f2933));
+}
+
+.cg-shell-header button,
+.cg-shell-header select {
+  display: inline-flex;
+  align-items: center;
+  height: 32px;
+  padding: 0 12px;
+  background: transparent;
+  border: 1px solid var(--cg-line, #9aa5b1);
+  border-radius: 0;
+  font-family: inherit;
+  font-size: 13px;
+  color: var(--cg-ink, #1f2933);
+  cursor: pointer;
+  white-space: nowrap;
+  transition: background 110ms ease, border-color 110ms ease;
+}
+.cg-shell-header select {
+  padding: 0 6px;
+  max-width: 11rem;
+}
+[data-theme="dark"] .cg-shell-header select { color-scheme: dark; }
+.cg-shell-header button:hover:not(:disabled),
+.cg-shell-header select:hover {
+  background: var(--cg-surface-sunk, #e4e7eb);
+}
+.cg-shell-header button:focus-visible,
+.cg-shell-header select:focus-visible,
+.cg-tabbar button:focus-visible {
+  outline: 2px solid var(--cg-accent, #0066cc);
+  outline-offset: 1px;
+}
+.cg-shell-header button:disabled {
+  opacity: 0.45;
+  cursor: default;
+}
+
+.cg-shell-header .cg-shell-sidebar-toggle {
+  border-color: transparent;
+  padding: 0 6px;
+  font-size: 16px;
+  color: var(--cg-ink-muted, #52606d);
+}
+
+/* The base hover rule puts light gray under white text. Run has its own. */
+.cg-shell-header .cg-shell-run:not(:disabled),
+.cg-shell-header .cg-shell-run:hover:not(:disabled) {
+  background: var(--cg-accent, #0066cc);
+  border-color: var(--cg-accent, #0066cc);
+  color: #fff;
+  font-weight: 600;
+  padding: 0 20px;
+}
+[data-theme="dark"] .cg-shell-header .cg-shell-run:not(:disabled) {
+  color: #0a0f17;
+}
+.cg-shell-header .cg-shell-run:hover:not(:disabled) {
+  filter: brightness(0.9);
+}
+
+.cg-shell-header .cg-shell-chip {
+  font-family: "IBM Plex Mono", ui-monospace, monospace;
+  font-size: 11px;
+  color: var(--cg-ink-muted, #52606d);
+}
+
+.cg-shell-status {
+  flex: 1 1 0;
+  min-width: 0;
+  overflow: hidden;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+  color: var(--cg-ink-muted, #52606d);
+  font-size: 13px;
+}
+.cg-shell-status[data-status="ok"],
+.cg-shell-status[data-status="warning"] {
+  color: var(--cg-ink, #1f2933);
+}
+.cg-shell-status[data-status="error"] {
+  color: var(--cg-error, #b42318);
+}
+
+/* The panel toggles are one joined group. */
+.cg-hdr-panels { gap: 0; }
+.cg-shell-header .cg-hdr-panels button { margin-left: -1px; }
+.cg-shell-header .cg-shell-panel-toggle[aria-pressed="true"] {
+  position: relative;
+  z-index: 1;
+  background: var(--cg-run-bg, #e5effa);
+  border-color: var(--cg-accent, #0066cc);
+  color: var(--cg-accent, #0066cc);
+  font-weight: 600;
+}
+
+.cg-tabbar {
+  flex: none;
+  display: flex;
+  background: var(--cg-surface-raised, #fff);
+  border-top: 1px solid var(--cg-line-soft, #cbd2d9);
+  padding-bottom: env(safe-area-inset-bottom, 0);
+}
+.cg-tabbar button {
+  flex: 1 1 0;
+  min-width: 0;
+  height: 48px;
+  padding: 0 2px;
+  background: transparent;
+  border: 0;
+  border-top: 3px solid transparent;
+  font-family: "IBM Plex Sans", system-ui, sans-serif;
+  font-size: 13px;
+  color: var(--cg-ink-muted, #52606d);
+  cursor: pointer;
+}
+.cg-tabbar button[aria-pressed="true"] {
+  border-top-color: var(--cg-accent, #0066cc);
+  background: var(--cg-run-bg, #e5effa);
+  color: var(--cg-accent, #0066cc);
+  font-weight: 600;
+}
+
+/* The toolbar of a mobile browser covers the end of a 100% high page. */
+@supports (height: 100dvh) {
+  html, body { height: 100dvh; }
+}
+
+/* On an iPhone, the floating toolbar of Safari 26 covers the end of a 100dvh
+   page (24 px on an iPhone 16e), but Safari puts bottom: 0 of a fixed box
+   above the toolbar (WebKit bug 297779). Thus the phone shell, with its tab
+   bar, is a fixed box. */
+@media (max-width: 767px) {
+  #app { position: fixed; inset: 0; }
+}
+
+/* html and body clip overflow. A phone header wraps to two rows: the brand,
+   the file status and Run, then the file and theme controls. */
+@media (max-width: 767px) {
+  .cg-shell-header {
+    flex-wrap: wrap;
+    gap: 6px 8px;
+    padding: 6px 10px;
+  }
+  .cg-hdr-brand { order: 1; }
+  .cg-shell-status { order: 2; }
+  .cg-hdr-run { order: 3; }
+  .cg-shell-header::after {
+    content: "";
+    order: 4;
+    flex-basis: 100%;
+    height: 0;
+    margin-top: -6px;
+  }
+  .cg-hdr-file { order: 5; }
+  .cg-hdr-tools { order: 6; margin-left: auto; }
+  .cg-shell-header select { max-width: 8.5rem; }
+  /* The file controls and the theme toggle fit one row of a 390px phone. */
+  .cg-shell-header button { padding: 0 8px; }
+}
+
+.cg-url-bar {
+  flex: none;
+  display: flex;
+  flex-wrap: wrap;
+  align-items: center;
+  gap: 6px 8px;
+  margin: 0;
+  padding: 8px 12px;
+  background: var(--cg-surface-raised, #fff);
+  border-bottom: 1px solid var(--cg-line-soft, #cbd2d9);
+  font-family: "IBM Plex Sans", system-ui, -apple-system, "Segoe UI", sans-serif;
+  font-size: 13px;
+  color: var(--cg-ink, #1f2933);
+}
+.cg-url-label {
+  flex: none;
+  color: var(--cg-ink-muted, #52606d);
+}
+.cg-url-input {
+  flex: 1 1 18rem;
+  min-width: 0;
+  max-width: 48rem;
+  height: 32px;
+  box-sizing: border-box;
+  padding: 0 8px;
+  background: var(--cg-surface, #f5f7fa);
+  border: 1px solid var(--cg-line, #9aa5b1);
+  border-radius: 0;
+  font-family: "IBM Plex Mono", ui-monospace, monospace;
+  font-size: 12px;
+  color: var(--cg-ink, #1f2933);
+}
+.cg-url-input::placeholder { color: var(--cg-ink-muted, #52606d); }
+.cg-url-bar button {
+  flex: none;
+  display: inline-flex;
+  align-items: center;
+  height: 32px;
+  padding: 0 12px;
+  background: transparent;
+  border: 1px solid var(--cg-line, #9aa5b1);
+  border-radius: 0;
+  font-family: inherit;
+  font-size: 13px;
+  color: var(--cg-ink, #1f2933);
+  cursor: pointer;
+  white-space: nowrap;
+}
+.cg-url-bar button:hover:not(:disabled) { background: var(--cg-surface-sunk, #e4e7eb); }
+.cg-url-bar button:disabled { opacity: 0.45; cursor: default; }
+.cg-url-bar .cg-url-close {
+  border-color: transparent;
+  padding: 0 8px;
+  font-size: 16px;
+  color: var(--cg-ink-muted, #52606d);
+}
+.cg-url-input:focus-visible,
+.cg-url-bar button:focus-visible {
+  outline: 2px solid var(--cg-accent, #0066cc);
+  outline-offset: 1px;
+}
+.cg-url-note,
+.cg-url-error {
+  flex-basis: 100%;
+  margin: 0;
+  font-size: 12px;
+  line-height: 1.4;
+  overflow-wrap: anywhere;
+}
+.cg-url-note { color: var(--cg-ink-muted, #52606d); }
+.cg-url-error { color: var(--cg-error, #b42318); }
+/* A phone puts the label and the close button on the first row, and the
+   text box and Open on the second. */
+@media (max-width: 767px) {
+  .cg-url-bar { padding: 6px 10px; }
+  .cg-url-label { flex: 1 1 60%; }
+  .cg-url-bar .cg-url-close { order: 1; }
+  .cg-url-input { order: 2; flex: 1 1 60%; }
+  .cg-url-open { order: 3; }
+  .cg-url-note,
+  .cg-url-error { order: 4; }
+}
+
+.cg-empty {
+  position: absolute;
+  top: 50%;
+  left: 50%;
+  transform: translate(-50%, -50%);
+  z-index: 6;
+  width: min(22rem, calc(100% - 32px));
+  box-sizing: border-box;
+  padding: 1.5rem;
+  background: var(--cds-layer-01, var(--cg-surface-raised, #fff));
+  border: 1px solid var(--cds-border-subtle-01, var(--cg-line-soft, #cbd2d9));
+  font-family: "IBM Plex Sans", system-ui, sans-serif;
+}
+.cg-empty-title {
+  margin: 0 0 0.5rem;
+  font-size: 1rem;
+  font-weight: 600;
+  color: var(--cds-text-primary, var(--cg-ink, #1f2933));
+}
+.cg-empty-text {
+  margin: 0 0 1rem;
+  font-size: 0.875rem;
+  line-height: 1.4;
+  color: var(--cds-text-secondary, var(--cg-ink-muted, #52606d));
+}
+
+.cg-run-status {
+  flex: none;
+  display: flex;
+  align-items: center;
+  gap: 12px;
+  min-height: 36px;
+  padding: 2px 8px 2px 12px;
+  border-bottom: 1px solid var(--cg-line-soft, #cbd2d9);
+  background: var(--cg-run-bg, #e5effa);
+  color: var(--cg-ink, #1f2933);
+  font-family: "IBM Plex Sans", system-ui, sans-serif;
+  font-size: 13px;
+  line-height: 1.3;
+}
+.cg-run-status[data-run-kind="ok"] {
+  background: var(--cg-complete-bg, #e3f4ea);
+}
+.cg-run-status[data-run-kind="error"],
+.cg-run-status[data-run-kind="refused"] {
+  background: var(--cg-error-bg, #fbeaea);
+}
+.cg-run-mark {
+  flex: none;
+  width: auto;
+  min-height: 0;
+}
+.cg-run-status[data-run-kind="running"] .cg-run-mark { color: var(--cg-run, #0066cc); }
+.cg-run-status[data-run-kind="ok"] .cg-run-mark { fill: var(--cg-complete, #137a3d); }
+.cg-run-status[data-run-kind="error"] .cg-run-mark,
+.cg-run-status[data-run-kind="refused"] .cg-run-mark { fill: var(--cg-error, #b42318); }
+.cg-run-mark .cds--inline-loading__animation { margin-right: 0; }
+.cg-run-title {
+  flex: none;
+  max-width: 100%;
+  font-weight: 600;
+  overflow: hidden;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+}
+.cg-run-position {
+  flex: none;
+  color: var(--cg-ink-muted, #52606d);
+  font-variant-numeric: tabular-nums;
+  white-space: nowrap;
+}
+.cg-run-bar {
+  flex: 0 1 180px;
+  min-width: 80px;
+}
+.cg-run-detail {
+  flex: 0 1 auto;
+  min-width: 0;
+  color: var(--cg-ink-muted, #52606d);
+  overflow: hidden;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+}
+.cg-run-status[data-run-kind="error"] .cg-run-detail,
+.cg-run-status[data-run-kind="refused"] .cg-run-detail {
+  color: var(--cg-ink, #1f2933);
+  white-space: normal;
+  overflow-wrap: anywhere;
+  max-height: 3.9em;
+  overflow-y: auto;
+}
+.cg-run-spacer { flex: 1 1 0; }
+.cg-run-elapsed {
+  flex: none;
+  color: var(--cg-ink-muted, #52606d);
+}
+.cg-run-clock {
+  color: var(--cg-ink, #1f2933);
+  font-variant-numeric: tabular-nums;
+  font-weight: 600;
+}
+.cg-run-dismiss {
+  flex: none;
+  display: inline-flex;
+  align-items: center;
+  justify-content: center;
+  width: 28px;
+  height: 28px;
+  background: transparent;
+  border: 0;
+  color: inherit;
+  fill: currentColor;
+  cursor: pointer;
+}
+.cg-run-dismiss:hover { background: rgba(127, 127, 127, 0.2); }
+@media (max-width: 767px) {
+  .cg-run-status { flex-wrap: wrap; gap: 2px 8px; padding-top: 4px; padding-bottom: 4px; }
+  .cg-run-title { flex: 1 1 0; min-width: 0; white-space: normal; }
+  .cg-run-spacer { display: none; }
+  .cg-run-bar { order: 4; flex: 1 1 100%; }
+  .cg-run-detail { order: 5; flex-basis: 100%; white-space: normal; }
+  .cg-run-action { order: 6; }
+  /* The bar above the panels has the same text. */
+  .cg-runpane-now { display: none; }
+}
+
+@media (min-width: 768px) {
+  .cg-panel.cg-panel-status { flex: 0 0 360px; }
+}
+.cg-panel-status {
+  background: var(--cg-surface-raised, #fff);
+}
+
+/* The Carbon Labs Resizer between two panels. It must draw above the map
+   and the flow canvas next to it. */
+.cg-main .cg-splitter {
+  z-index: 10;
+  user-select: none;
+  touch-action: none;
+}
+/* A drag over the editor must not select text or change the cursor. */
+html.cg-resizing,
+html.cg-resizing * {
+  cursor: ew-resize !important;
+  user-select: none !important;
+}
+.cg-runpane {
+  flex: 1;
+  min-height: 0;
+  overflow-y: auto;
+  padding: 12px 16px 24px;
+  font-family: "IBM Plex Sans", system-ui, sans-serif;
+  font-size: 13px;
+  line-height: 1.4;
+  color: var(--cg-ink, #1f2933);
+}
+.cg-runpane-empty,
+.cg-runpane-note {
+  margin: 4px 0;
+  color: var(--cg-ink-muted, #52606d);
+}
+.cg-runpane-now {
+  padding: 10px 12px;
+  border-left: 3px solid var(--cg-run, #0066cc);
+  background: var(--cg-run-bg, #e5effa);
+}
+.cg-runpane-now[data-run-kind="ok"] {
+  border-left-color: var(--cg-complete, #137a3d);
+  background: var(--cg-complete-bg, #e3f4ea);
+}
+.cg-runpane-now[data-run-kind="error"],
+.cg-runpane-now[data-run-kind="refused"] {
+  border-left-color: var(--cg-error, #b42318);
+  background: var(--cg-error-bg, #fbeaea);
+}
+.cg-runpane-now-head {
+  display: flex;
+  align-items: center;
+  gap: 8px;
+}
+.cg-runpane-now .cg-run-title {
+  flex: 0 1 auto;
+  white-space: normal;
+  font-size: 14px;
+}
+.cg-runpane-now .cg-run-bar {
+  flex: none;
+  margin-top: 8px;
+}
+.cg-runpane-now[data-run-kind="running"] .cg-run-mark { color: var(--cg-run, #0066cc); }
+.cg-runpane-now[data-run-kind="ok"] .cg-run-mark { fill: var(--cg-complete, #137a3d); }
+.cg-runpane-now[data-run-kind="error"] .cg-run-mark,
+.cg-runpane-now[data-run-kind="refused"] .cg-run-mark { fill: var(--cg-error, #b42318); }
+.cg-runpane-detail {
+  margin: 6px 0 0;
+  font-size: 13px;
+  line-height: 1.4;
+  overflow-wrap: anywhere;
+}
+.cg-runpane-h {
+  margin: 20px 0 6px;
+  font-size: 12px;
+  font-weight: 600;
+  letter-spacing: 0.32px;
+  text-transform: uppercase;
+  color: var(--cg-ink-muted, #52606d);
+}
+.cg-runpane-h-of {
+  font-weight: 400;
+  text-transform: none;
+  letter-spacing: 0;
+}
+.cg-steps,
+.cg-workers {
+  list-style: none;
+  margin: 0;
+  padding: 0;
+}
+.cg-step {
+  display: grid;
+  grid-template-columns: 10px minmax(0, 1fr) auto 52px;
+  column-gap: 8px;
+  align-items: center;
+  padding: 6px 0;
+  border-bottom: 1px solid var(--cg-line-soft, #cbd2d9);
+}
+.cg-step-dot {
+  width: 8px;
+  height: 8px;
+  border-radius: 50%;
+  background: var(--cg-line, #9aa5b1);
+}
+[data-state="running"] > .cg-step-dot,
+[data-state="busy"] .cg-step-dot {
+  background: var(--cg-run, #0066cc);
+  animation: cg-pulse 1.1s ease-in-out infinite;
+}
+[data-state="done"] > .cg-step-dot { background: var(--cg-complete, #137a3d); }
+[data-state="error"] > .cg-step-dot { background: var(--cg-error, #b42318); }
+.cg-step-label {
+  font-family: "IBM Plex Mono", ui-monospace, monospace;
+  font-size: 12.5px;
+  overflow-wrap: anywhere;
+}
+.cg-step[data-state="waiting"] .cg-step-label { color: var(--cg-ink-muted, #52606d); }
+.cg-step[data-state="running"] .cg-step-label { font-weight: 600; }
+.cg-step-state {
+  font-size: 12px;
+  color: var(--cg-ink-muted, #52606d);
+}
+[data-state="running"] > .cg-step-state,
+[data-state="busy"] .cg-step-state { color: var(--cg-run, #0066cc); font-weight: 600; }
+[data-state="error"] > .cg-step-state { color: var(--cg-error, #b42318); font-weight: 600; }
+.cg-step-time {
+  text-align: right;
+  font-size: 12px;
+  font-variant-numeric: tabular-nums;
+}
+.cg-step-more,
+.cg-step-bar {
+  grid-column: 2 / -1;
+  font-size: 12px;
+  color: var(--cg-ink-muted, #52606d);
+}
+.cg-step-bar { margin-top: 3px; }
+.cg-workers {
+  display: grid;
+  grid-template-columns: repeat(auto-fill, minmax(220px, 1fr));
+  gap: 6px;
+}
+.cg-worker {
+  padding: 6px 10px;
+  border: 1px solid var(--cg-line-soft, #cbd2d9);
+  background: var(--cg-surface, #f5f7fa);
+}
+.cg-worker[data-state="busy"] {
+  border-color: var(--cg-run, #0066cc);
+  background: var(--cg-run-bg, #e5effa);
+}
+.cg-worker-head {
+  display: flex;
+  align-items: center;
+  gap: 6px;
+}
+.cg-worker-name { font-weight: 600; white-space: nowrap; }
+.cg-worker-head .cg-step-state { margin-left: auto; }
+.cg-worker-tag.cds--tag { margin: 0; }
+.cg-worker-work {
+  margin-top: 2px;
+  font-size: 12px;
+  overflow-wrap: anywhere;
+}
+.cg-worker[data-state="idle"] .cg-worker-work { color: var(--cg-ink-muted, #52606d); }
+.cg-worker-step {
+  font-size: 12px;
+  color: var(--cg-ink-muted, #52606d);
+}
+
+
+/* Results titles are binding names: the monospace of the runtime chip. */
+.cg-results,
+.cg-results-empty {
+  padding: 20px 24px;
+  overflow: auto;
+}
+
+.cg-results-empty {
+  color: var(--cg-ink-muted, #52606d);
+  font-size: 13px;
+  line-height: 1.5;
+  max-width: 46ch;
+}
+
+.cg-results-title {
+  font-family: "JetBrains Mono", ui-monospace, monospace;
+  font-size: 12px;
+  letter-spacing: 0.02em;
+  color: var(--cg-ink-muted, #52606d);
+}
+
+.cg-results-badge {
+  margin-top: 2px;
+  font-size: 34px;
+  font-weight: 600;
+  line-height: 1.2;
+  color: var(--cg-ink, #1f2933);
+}
+
+.cg-results-tbl {
+  margin-top: 10px;
+  border-collapse: collapse;
+  font-size: 13px;
+}
+.cg-results-tbl th,
+.cg-results-tbl td {
+  text-align: left;
+  padding: 6px 16px 6px 0;
+  border-bottom: 1px solid var(--cg-line-soft, #cbd2d9);
+}
+.cg-results-tbl th {
+  font-size: 12px;
+  font-weight: 600;
+  color: var(--cg-ink-muted, #52606d);
+}
+.cg-results-tbl td {
+  color: var(--cg-ink, #1f2933);
+  font-variant-numeric: tabular-nums;
+}
+
+/* Keep the map panel rules last. */
+.cg-map-topbar {
+  position: absolute;
+  top: 8px;
+  left: 8px;
+  z-index: 2;
+  display: flex;
+  align-items: flex-start;
+  gap: 8px;
+  max-width: calc(100% - 16px);
+}
+.cg-map-topbar .cg-map-crs-button,
+.cg-map-topbar .cg-map-proj-status {
+  position: relative;
+  top: auto;
+  left: auto;
+  right: auto;
+}
+.cg-map-topbar .cg-map-crs-button {
+  flex: none;
+  height: 28px;
+  padding: 0 10px;
+  background: var(--cg-surface-raised, #fff);
+  color: var(--cg-ink, #1f2933);
+  border: 1px solid var(--cg-line-soft, #cbd2d9);
+  border-radius: 6px;
+  box-shadow: 0 1px 3px rgba(0, 0, 0, 0.2);
+  font-family: "JetBrains Mono", ui-monospace, monospace;
+  font-size: 11px;
+}
+.cg-map-topbar .cg-map-crs-button:hover {
+  background: var(--cg-surface-sunk, #e4e7eb);
+}
+.cg-map-topbar .cg-map-proj-status:not([data-status="error"]) {
+  background: var(--cg-surface-raised, #fff);
+  color: var(--cg-ink-muted, #52606d);
+  border: 1px solid var(--cg-line-soft, #cbd2d9);
+  border-radius: 6px;
+  box-shadow: 0 1px 3px rgba(0, 0, 0, 0.2);
+  line-height: 18px;
+}
+
+.cg-map-legend {
+  position: absolute;
+  left: 8px;
+  bottom: 8px;
+  z-index: 2;
+  box-sizing: border-box;
+  max-width: min(260px, calc(100% - 16px));
+  max-height: calc(100% - 52px);
+  overflow-y: auto;
+  padding: 10px 12px;
+  background: var(--cg-surface-raised, #fff);
+  color: var(--cg-ink, #1f2933);
+  border: 1px solid var(--cg-line-soft, #cbd2d9);
+  border-radius: 6px;
+  box-shadow: 0 1px 3px rgba(0, 0, 0, 0.2);
+  font-family: "IBM Plex Sans", system-ui, sans-serif;
+  font-size: 12px;
+  line-height: 1.35;
+}
+.cg-map-legend-layer + .cg-map-legend-layer {
+  margin-top: 8px;
+  padding-top: 8px;
+  border-top: 1px solid var(--cg-line-soft, #cbd2d9);
+}
+.cg-map-legend-name {
+  display: flex;
+  align-items: center;
+  gap: 6px;
+  margin: 0;
+  font-size: 12px;
+  font-weight: 600;
+  cursor: pointer;
+}
+.cg-map-legend-name input {
+  margin: 0;
+  accent-color: var(--cg-accent, #0066cc);
+}
+.cg-map-legend-title {
+  margin-bottom: 4px;
+  color: var(--cg-ink-muted, #52606d);
+  font-size: 11px;
+}
+.cg-map-legend-rows {
+  margin: 0;
+  padding: 0;
+  list-style: none;
+}
+.cg-map-legend-row {
+  display: flex;
+  align-items: center;
+  gap: 8px;
+  padding: 2px 0;
+}
+.cg-map-legend-label {
+  flex: 1;
+  min-width: 0;
+  overflow: hidden;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+}
+.cg-map-legend-count {
+  color: var(--cg-ink-muted, #52606d);
+  font-variant-numeric: tabular-nums;
+}
+.cg-map-swatch {
+  flex: none;
+  box-sizing: border-box;
+  width: 12px;
+  height: 12px;
+  background: var(--cg-swatch);
+  border: 1px solid var(--cg-line, #9aa5b1);
+  border-radius: 2px;
+}
+.cg-map-swatch[data-kind="line"] {
+  height: 0;
+  width: 14px;
+  background: none;
+  border: 0;
+  border-top: 3px solid var(--cg-swatch);
+  border-radius: 0;
+}
+.cg-map-swatch[data-kind="circle"] {
+  background: var(--cg-swatch);
+  border: 1.5px solid #fff;
+  border-radius: 50%;
+  box-shadow: 0 0 0 1px rgba(0, 0, 0, 0.25);
+}

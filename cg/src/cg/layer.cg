@@ -1,0 +1,83 @@
+(ns cg.layer
+  "What a dataset needs to be a layer of an analysis or of the map: the
+   CRS of the dataset and its tag, a spatial index, a reprojection on the
+   worker pool, and the read of a cached layer. The caller gives the paths
+   and the CRS."
+  (:require [cg.dataset :as ds]
+            [cg.feature :as f]
+            [cg.geo :as geo]
+            [cg.run :as run]
+            [cg.macros :refer [table->]]))
+
+(run/load-module "src/cg/columns.cg")
+(clojure.core/require '[cg.columns :as columns])
+
+(defn- normalize-crs
+  "Change a CRS value to an \"EPSG:N\" string. A string comes back with no
+   change. A GeoJSON named-CRS map, for example
+   {:type \"name\" :properties {:name \"urn:ogc:def:crs:EPSG::3857\"}},
+   gives \"EPSG:3857\". Each other shape gives nil."
+  [crs]
+  (cond
+    (string? crs) crs
+    (and (map? crs) (= (:type crs) "name"))
+    (let [n (get-in crs [:properties :name])
+          m (when (string? n) (re-find #"EPSG::?(\d+)" n))]
+      (when m (str "EPSG:" (second m))))
+    :else nil))
+
+(defn get-dataset-crs
+  "The CRS of the first geometry of `dataset` as an \"EPSG:N\" string, or
+   nil."
+  [dataset]
+  (when dataset
+    (let [first-row (first (ds/rows dataset :as-maps))
+          geom (:geometry first-row)]
+      (when geom
+        (normalize-crs (f/get-crs geom))))))
+
+;; /api/data reads the tag and reprojects its response to 4326. The session
+;; dataset stays in the analysis CRS.
+(defn tag-crs [ds crs]
+  (vary-meta ds assoc :crs crs))
+
+;; ensure-dataset and ->dataset give no spatial index, and a probe with no
+;; index is a linear scan.
+(defn ensure-indexed [d]
+  (if (ds/has-spatial-index? d) d (ds/add-spatial-index d)))
+
+(defn extent
+  "[min-x min-y max-x max-y] of the geometries `geoms`."
+  [geoms]
+  (let [envs (mapv geo/geometry-get-envelope-internal geoms)]
+    [(reduce min (map geo/envelope-get-min-x envs))
+     (reduce min (map geo/envelope-get-min-y envs))
+     (reduce max (map geo/envelope-get-max-x envs))
+     (reduce max (map geo/envelope-get-max-y envs))]))
+
+(defn reproject-to
+  "Reproject `ds-raw` to `target-crs` on the worker pool of the caller (a
+   Promise on the JS runtime). A
+   dataset that is already in `target-crs` comes back with no change and
+   no index. `opts` merges into the run-model opts: give a :batch-size
+   below the default of 64000 rows for a layer with many coordinates,
+   because one batch must finish in the 60 s limit of
+   transform-coords-step."
+  [target-crs ds-raw opts]
+  (let [source-crs (or (get-dataset-crs ds-raw) "EPSG:4326")]
+    (if (= source-crs target-crs)
+      ds-raw
+      ;; Fully qualified: the macro resolves an alias through the requires of
+      ;; the consumer file, and a consumer may not require cg.dataset.
+      (run/run-model (table-> :input (cg.dataset/transform-crs source-crs target-crs))
+                     {:input ds-raw}
+                     (merge {:timeout-ms 1800000} opts)))))
+
+;; The index lets the viewport bbox queries of /api/data use the HPRtree.
+;; Index before tag-crs: the index and the tag are on the same meta map.
+(defn read-geo-cache
+  [path crs]
+  (-> (ds/->dataset (mapv columns/geom-keyed-row
+                          (ds/rows (ds/load-gdal! path) :as-maps)))
+      ensure-indexed
+      (tag-crs crs)))

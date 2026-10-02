@@ -1,0 +1,2074 @@
+(ns cg.parcel
+  "Measure a lot.
+
+   This module cleans the shape of a parcel and cuts its boundary into
+   edges. It finds what each edge abuts, and it classifies the lot and its
+   edges. It measures the setbacks, the envelope and the metrics, and it
+   joins the impervious area. All geometry goes through cg.geo. The caller
+   gives the column names and the thresholds."
+  (:require [cg.geo :as geo]
+            [cg.feature :as f]
+            [cg.dataset :as ds]
+            [cg.math :as math]
+            [cg.run :as run]
+            [cg.util :as util]))
+
+(run/load-module "src/cg/layer.cg")
+(clojure.core/require '[cg.layer :as layer])
+
+(defn edge-midpoint
+  "Give the mid-point of an edge as [x y]."
+  [edge]
+  (let [coords (geo/coordinates edge)
+        [[x1 y1] [x2 y2]] coords]
+    [(/ (+ x1 x2) 2.0)
+     (/ (+ y1 y2) 2.0)]))
+
+(defn edge->angle
+  "Calculate the angle of a line segment from the horizontal, in degrees.
+   The result is in the range [0, 180)."
+  [edge]
+  (let [coords (geo/coordinates edge)
+        [[x1 y1] [x2 y2]] coords
+        dx (- x2 x1)
+        dy (- y2 y1)
+        radians (math/atan2 dy dx)
+        degrees (math/to-degrees radians)]
+    (mod (+ degrees 180) 180)))
+
+(defn angles-parallel?
+  "Tell if two angles are parallel, within a tolerance in degrees. Two
+   angles that differ by 180 degrees are parallel."
+  [angle1 angle2 tolerance]
+  (let [diff (math/abs (- angle1 angle2))]
+    (or (<= diff tolerance)
+        (>= diff (- 180 tolerance)))))
+
+(defn circumcenter
+  "Give the center of the circle through three planar points. Give nil when
+   the three points are collinear. The test of collinearity applies a small
+   tolerance to the determinant."
+  [[ax ay] [bx by] [cx cy]]
+  (let [d (* 2.0 (+ (* ax (- by cy)) (* bx (- cy ay)) (* cx (- ay by))))]
+    (when (> (math/abs d) 1.0e-9)
+      (let [a2 (+ (* ax ax) (* ay ay))
+            b2 (+ (* bx bx) (* by by))
+            c2 (+ (* cx cx) (* cy cy))]
+        [(/ (+ (* a2 (- by cy)) (* b2 (- cy ay)) (* c2 (- ay by))) d)
+         (/ (+ (* a2 (- cx bx)) (* b2 (- ax cx)) (* c2 (- bx ax))) d)]))))
+
+(defn edge-tangent-at
+  "Give the direction vector of an edge at its first coordinate. The vector
+   is the tangent of the circumcircle of the first three vertices, and it
+   points into the edge. For two vertices or three collinear points, the
+   vector is the first segment."
+  [coords]
+  (let [a (first coords) b (second coords)
+        seg [(- (first b) (first a)) (- (second b) (second a))]]
+    (if (< (count coords) 3)
+      seg
+      (let [ctr (circumcenter a b (nth coords 2))]
+        (if (nil? ctr)
+          seg
+          (let [rx (- (first a) (first ctr)) ry (- (second a) (second ctr))
+                t [(- ry) rx]]
+            (if (neg? (+ (* (first t) (first seg)) (* (second t) (second seg))))
+              [ry (- rx)]
+              t)))))))
+
+(defn edge-junction-angle
+  "Tell if two planar edges share an endpoint within tol, and give the
+   angle between the edges at that vertex. The result is {:shared? bool
+   :interior deg}, with :interior in the range [0, 180], or nil when a
+   direction is shorter than tol. When tangent? is true, the direction of a
+   curved edge is its circumcircle tangent."
+  ([e1 e2 tol] (edge-junction-angle e1 e2 tol false))
+  ([e1 e2 tol tangent?]
+   (let [c1 (geo/coordinates e1)
+         c2 (geo/coordinates e2)
+         a1 (first c1) b1 (nth c1 (dec (count c1)))
+         a2 (first c2) b2 (nth c2 (dec (count c2)))
+         close? (fn [p q]
+                  (and (< (math/abs (- (first p) (first q))) tol)
+                       (< (math/abs (- (second p) (second q))) tol)))
+         oriented (cond
+                    (close? a1 a2) [c1 c2]
+                    (close? a1 b2) [c1 (vec (reverse c2))]
+                    (close? b1 a2) [(vec (reverse c1)) c2]
+                    (close? b1 b2) [(vec (reverse c1)) (vec (reverse c2))]
+                    :else nil)]
+     (if (nil? oriented)
+       {:shared? false :interior nil}
+       (let [dir (fn [coords]
+                   (if tangent?
+                     (edge-tangent-at coords)
+                     (let [a (first coords) b (second coords)]
+                       [(- (first b) (first a)) (- (second b) (second a))])))
+             u1 (dir (first oriented))
+             u2 (dir (second oriented))
+             d1 (math/sqrt (+ (* (first u1) (first u1)) (* (second u1) (second u1))))
+             d2 (math/sqrt (+ (* (first u2) (first u2)) (* (second u2) (second u2))))]
+         (if (or (< d1 tol) (< d2 tol))
+           {:shared? true :interior nil}
+           (let [cross (- (* (first u1) (second u2)) (* (second u1) (first u2)))
+                 dot   (+ (* (first u1) (first u2)) (* (second u1) (second u2)))]
+             {:shared? true
+              :interior (math/abs (math/to-degrees (math/atan2 cross dot)))})))))))
+
+(defn edges-share-vertex?
+  "Give true when two edges share an endpoint, within the tolerance tol.
+   The coordinates must be planar. On a simple polygon boundary, this
+   result is the same as an intersection of the two edges."
+  [e1 e2 tol]
+  (let [c1 (geo/coordinates e1)
+        c2 (geo/coordinates e2)
+        a1 (first c1) b1 (nth c1 (dec (count c1)))
+        a2 (first c2) b2 (nth c2 (dec (count c2)))
+        close? (fn [p q]
+                 (and (< (math/abs (- (first p) (first q))) tol)
+                      (< (math/abs (- (second p) (second q))) tol)))]
+    (boolean (or (close? a1 a2) (close? a1 b2) (close? b1 a2) (close? b1 b2)))))
+
+(defn edge-opposite-interior?
+  "Tell if a part of the candidate edge is opposite the primary front,
+   across the interior of the lot. The candidate must be on the side of the
+   front that holds the centroid [cx cy], and its span along the front must
+   overlap the front. The coordinates must be planar."
+  [candidate-edge primary-edge [cx cy] tol]
+  (let [pc (geo/coordinates primary-edge)
+        f0 (first pc) f1 (nth pc (dec (count pc)))
+        fx0 (first f0) fy0 (second f0) fx1 (first f1) fy1 (second f1)
+        tx (- fx1 fx0) ty (- fy1 fy0)
+        tlen (math/sqrt (+ (* tx tx) (* ty ty)))]
+    (if (< tlen tol)
+      false
+      (let [ux (/ tx tlen) uy (/ ty tlen)
+            nx (- uy) ny ux
+            mfx (/ (+ fx0 fx1) 2.0) mfy (/ (+ fy0 fy1) 2.0)
+            dot-c (+ (* nx (- cx mfx)) (* ny (- cy mfy)))
+            inx (if (neg? dot-c) (- nx) nx)
+            iny (if (neg? dot-c) (- ny) ny)
+            cc (geo/coordinates candidate-edge)
+            c0 (first cc) c1 (nth cc (dec (count cc)))
+            mcx (/ (+ (first c0) (first c1)) 2.0)
+            mcy (/ (+ (second c0) (second c1)) 2.0)
+            interior? (pos? (+ (* inx (- mcx mfx)) (* iny (- mcy mfy))))
+            proj (fn [p] (+ (* ux (- (first p) fx0)) (* uy (- (second p) fy0))))
+            cp0 (proj c0) cp1 (proj c1)
+            clo (min cp0 cp1) chi (max cp0 cp1)]
+        (and interior? (<= clo tlen) (>= chi 0.0))))))
+
+(defn edge-front-perp-distance
+  "Give the perpendicular distance from the line of the primary front to
+   the mid-point of the candidate edge. The distance is positive on the
+   side of the centroid [cx cy]. The coordinates must be planar."
+  [candidate-edge primary-edge [cx cy]]
+  (let [pc (geo/coordinates primary-edge)
+        f0 (first pc) f1 (nth pc (dec (count pc)))
+        fx0 (first f0) fy0 (second f0) fx1 (first f1) fy1 (second f1)
+        tx (- fx1 fx0) ty (- fy1 fy0)
+        tlen (math/sqrt (+ (* tx tx) (* ty ty)))]
+    (if (< tlen 1.0e-9)
+      0.0
+      (let [nx (- (/ ty tlen)) ny (/ tx tlen)
+            mfx (/ (+ fx0 fx1) 2.0) mfy (/ (+ fy0 fy1) 2.0)
+            dot-c (+ (* nx (- cx mfx)) (* ny (- cy mfy)))
+            inx (if (neg? dot-c) (- nx) nx)
+            iny (if (neg? dot-c) (- ny) ny)
+            cc (geo/coordinates candidate-edge)
+            c0 (first cc) c1 (nth cc (dec (count cc)))
+            mcx (/ (+ (first c0) (first c1)) 2.0)
+            mcy (/ (+ (second c0) (second c1)) 2.0)]
+        (+ (* inx (- mcx mfx)) (* iny (- mcy mfy)))))))
+
+(defn ensure-rear-fallback
+  "Give the candidates with one rear in them. When no candidate has the
+   type :rear, the edge whose mid-point is most distant from the primary
+   front becomes the rear, with :rear-source :fallback."
+  [classified-candidates primary centroid]
+  (if (or (some #(= :rear (:edge-type %)) classified-candidates)
+          (empty? classified-candidates))
+    classified-candidates
+    (let [best (apply max-key
+                      #(edge-front-perp-distance (:edge %) (:edge primary) centroid)
+                      classified-candidates)]
+      (mapv (fn [e] (if (identical? e best)
+                      (assoc e :edge-type :rear :rear-source :fallback)
+                      e))
+            classified-candidates))))
+
+(defn perpendicular-direction
+  "Give the unit vector perpendicular to the edge. The vector points away
+   from the parcel. The function compares the direction with the centroid
+   to find which side is outward."
+  [edge parcel-centroid]
+  (let [coords (geo/coordinates edge)
+        [[x1 y1] [x2 y2]] coords
+        dx (- x2 x1)
+        dy (- y2 y1)
+        len (math/sqrt (+ (* dx dx) (* dy dy)))
+        px (/ (- dy) len)
+        py (/ dx len)
+        [mx my] (edge-midpoint edge)
+        [cx cy] parcel-centroid
+        to-centroid-x (- cx mx)
+        to-centroid-y (- cy my)
+        dot (+ (* px to-centroid-x) (* py to-centroid-y))]
+    (if (pos? dot)
+      [(- px) (- py)]
+      [px py])))
+
+(defn rectangular?
+  "Tell if a parcel is almost rectangular. The result is true when the area
+   of the minimum bounding rectangle is at most (1 + tolerance) times the
+   area of the parcel. The default tolerance is 0.001."
+  ([parcel]
+   (rectangular? parcel 0.001))
+  ([parcel tolerance]
+   (let [parcel-area (geo/area parcel)
+         rect (geo/get-minimum-area-rectangle parcel)
+         rect-area (geo/area rect)
+         ratio (/ rect-area parcel-area)]
+     (<= ratio (+ 1.0 tolerance)))))
+
+(defn rectangle->edges
+  "Give the four edges of a rectangle polygon, as a vector of LineStrings."
+  [rect]
+  (let [ring (geo/exterior-ring rect)
+        coords (geo/coordinates ring)]
+    (mapv (fn [[c1 c2]] (f/linestring [c1 c2]))
+          (partition 2 1 coords))))
+
+(defn coord->angle
+  "Calculate the direction angle from one coordinate to another. The result
+   is in degrees, in the range [0, 360)."
+  [[x1 y1] [x2 y2]]
+  (let [dx (- x2 x1)
+        dy (- y2 y1)
+        radians (math/atan2 dy dx)
+        degrees (math/to-degrees radians)]
+    (mod (+ degrees 360) 360)))
+
+(defn angle-difference
+  "Give the absolute difference between two angles in degrees, in the range
+   [0, 180]. For example, the difference between 350 and 10 is 20."
+  [a1 a2]
+  (let [diff (math/abs (- a1 a2))]
+    (if (> diff 180)
+      (- 360 diff)
+      diff)))
+
+(defn find-corners-by-angle
+  "Deprecated: use find-corners, which also finds curve corners. Give the
+   indexes in the closed ring coords where the direction changes more than
+   threshold degrees. The default threshold is 10.0."
+  ([coords]
+   (find-corners-by-angle coords 10.0))
+  ([coords threshold]
+   (let [n (dec (count coords))
+         angles (mapv (fn [i]
+                        (coord->angle (nth coords i)
+                                      (nth coords (mod (inc i) n))))
+                      (range n))]
+     (filterv (fn [i]
+                (let [prev-angle (nth angles (mod (dec i) n))
+                      curr-angle (nth angles i)
+                      diff (angle-difference prev-angle curr-angle)]
+                  (> diff threshold)))
+              (range n)))))
+
+(defn segment-length
+  "Calculate the length of the segment from coordinate i to coordinate
+   i+1."
+  [coords i n]
+  (let [[x1 y1] (nth coords i)
+        [x2 y2] (nth coords (mod (inc i) n))
+        dx (- x2 x1)
+        dy (- y2 y1)]
+    (math/sqrt (+ (* dx dx) (* dy dy)))))
+
+(defn interpolate-coord
+  "Interpolate between two coordinates. A t of 0 gives c1. A t of 1 gives
+   c2."
+  [[x1 y1] [x2 y2] t]
+  [(+ x1 (* t (- x2 x1)))
+   (+ y1 (* t (- y2 y1)))])
+
+(defn curve-midpoint-by-length
+  "Give the [x y] coordinate at the mid-point of the arc length of the
+   curve from start-idx to end-idx. n is the number of segments of the
+   ring, which is (dec (count coords))."
+  [coords start-idx end-idx n]
+  (if (= start-idx end-idx)
+    (nth coords start-idx)
+    (let [indices (if (<= start-idx end-idx)
+                    (range start-idx end-idx)
+                    (concat (range start-idx n) (range 0 end-idx)))
+          seg-lengths (mapv #(segment-length coords % n) indices)
+          total-length (reduce + seg-lengths)
+          half-length (/ total-length 2.0)]
+      (loop [idx 0
+             accum 0.0]
+        (if (>= idx (count seg-lengths))
+          (nth coords end-idx)
+          (let [seg-len (nth seg-lengths idx)
+                new-accum (+ accum seg-len)]
+            (if (>= new-accum half-length)
+              (let [overshoot (- new-accum half-length)
+                    t (if (pos? seg-len)
+                        (/ (- seg-len overshoot) seg-len)
+                        0.5)
+                    coord-idx (nth (vec indices) idx)
+                    c1 (nth coords coord-idx)
+                    c2 (nth coords (mod (inc coord-idx) n))]
+                (interpolate-coord c1 c2 t))
+              (recur (inc idx) new-accum))))))))
+
+(defn rectangle-dimensions
+  "Give the two different edge lengths of a rectangle polygon, as
+   [len1 len2]."
+  [rect]
+  (let [ring (geo/exterior-ring rect)
+        coords (geo/coordinates ring)
+        [[x0 y0] [x1 y1] [x2 y2]] (take 3 coords)
+        len1 (math/sqrt (+ (* (- x1 x0) (- x1 x0)) (* (- y1 y0) (- y1 y0))))
+        len2 (math/sqrt (+ (* (- x2 x1) (- x2 x1)) (* (- y2 y1) (- y2 y1))))]
+    [len1 len2]))
+
+(defn compute-short-segment-threshold
+  "Give the length below which a segment is short, in the units of the
+   geometry. The length is `fraction` of the mean of the two edge lengths
+   of the minimum bounding rectangle `rect`, because a fraction operates in
+   each CRS. The default fraction is 0.02."
+  ([rect]
+   (compute-short-segment-threshold rect 0.02))
+  ([rect fraction]
+   (let [[len1 len2] (rectangle-dimensions rect)
+         mean-dim (/ (+ len1 len2) 2.0)]
+     (* mean-dim fraction))))
+
+(defn find-corners
+  "Find the corners of the closed ring coords, as a vector of {:type
+   :vertex :idx n} and {:type :curve :coord [x y] :start-idx n :end-idx m}.
+   A vertex corner is a turn of more than :angle-threshold degrees at one
+   vertex. A curve corner is a turn of :curve-threshold degrees or more
+   across short segments, and its :coord is the mid-point of the arc length
+   of the curve."
+  ([coords]
+   (find-corners coords {}))
+  ([coords opts]
+   (let [angle-thresh (get opts :angle-threshold 10.0)
+         curve-thresh (get opts :curve-threshold 45.0)
+         short-seg (or (get opts :short-segment)
+                       (when-let [rect (get opts :rect)]
+                         (compute-short-segment-threshold
+                           rect
+                           (get opts :short-segment-fraction 0.02)))
+                       ;; With no rectangle, no segment is short, and the
+                       ;; walk finds no curve corner.
+                       0.0)
+         n (dec (count coords))
+
+         seg-lengths (mapv #(segment-length coords % n) (range n))
+         seg-angles (mapv (fn [i]
+                            (coord->angle (nth coords i)
+                                          (nth coords (mod (inc i) n))))
+                          (range n))]
+
+     (loop [i 0
+            curve-state nil
+            corners []]
+       (if (>= i n)
+         (if curve-state
+           (let [;; Segment 0 comes after the open curve, because the ring
+                 ;; is closed.
+                 final-angle (nth seg-angles 0)
+                 net-change (angle-difference (:start-angle curve-state) final-angle)]
+             (if (>= net-change curve-thresh)
+               (let [mid (curve-midpoint-by-length coords (:start-idx curve-state) 0 n)]
+                 (conj corners {:type :curve
+                                :coord mid
+                                :start-idx (:start-idx curve-state)
+                                :end-idx 0}))
+               corners))
+           corners)
+
+         (let [seg-len (nth seg-lengths i)
+               seg-angle (nth seg-angles i)
+               prev-angle (nth seg-angles (mod (dec i) n))]
+
+           (if (< seg-len short-seg)
+             (let [new-state (or curve-state
+                                 {:start-idx i
+                                  :start-angle prev-angle})
+                   net-change (angle-difference (:start-angle new-state) seg-angle)]
+               (if (>= net-change curve-thresh)
+                 (let [mid (curve-midpoint-by-length coords (:start-idx new-state) (inc i) n)]
+                   (recur (inc i)
+                          nil
+                          (conj corners {:type :curve
+                                         :coord mid
+                                         :start-idx (:start-idx new-state)
+                                         :end-idx (inc i)})))
+                 (recur (inc i) new-state corners)))
+
+             (let [[corners' reset-curve?]
+                   (if curve-state
+                     (let [net-change (angle-difference (:start-angle curve-state) seg-angle)]
+                       (if (>= net-change curve-thresh)
+                         (let [mid (curve-midpoint-by-length coords
+                                                              (:start-idx curve-state)
+                                                              i n)]
+                           [(conj corners {:type :curve
+                                           :coord mid
+                                           :start-idx (:start-idx curve-state)
+                                           :end-idx i})
+                            true])
+                         [corners true]))
+                     [corners false])
+
+                   angle-change (angle-difference prev-angle seg-angle)
+                   corners'' (if (and (> angle-change angle-thresh)
+                                      ;; A curve corner that ends here
+                                      ;; already marks this position.
+                                      (not (and reset-curve?
+                                                (seq corners')
+                                                (= :curve (:type (peek corners'))))))
+                               (conj corners' {:type :vertex :idx i})
+                               corners')]
+               (recur (inc i) nil corners'')))))))))
+
+(defn corners->edge-coords
+  "Give one coordinate vector for each edge between adjacent corners.
+   coords is a closed ring, and corners is the result of find-corners."
+  [coords corners]
+  (if (empty? corners)
+    [coords]
+    (let [n (dec (count coords))
+          num-corners (count corners)]
+
+      ;; A corner on the closing coordinate is index 0, and its span of one
+      ;; point is not a valid f/linestring.
+      (filterv
+       (fn [ec] (>= (count ec) 2))
+       (mapv (fn [i]
+              (let [c1 (nth corners i)
+                    c2 (nth corners (mod (inc i) num-corners))
+                    start-coord (case (:type c1)
+                                  :vertex (nth coords (:idx c1))
+                                  :curve (:coord c1))
+                    end-coord (case (:type c2)
+                                :vertex (nth coords (:idx c2))
+                                :curve (:coord c2))
+                    start-idx (case (:type c1)
+                                :vertex (:idx c1)
+                                :curve (:end-idx c1))
+                    end-idx (case (:type c2)
+                              :vertex (:idx c2)
+                              :curve (:start-idx c2))
+                    ;; The wrap stops at n, because coords[n] repeats
+                    ;; coords[0], and a repeated point makes a segment of zero
+                    ;; length. Only the last corner pair can cross index 0.
+                    seam-pair? (= i (dec num-corners))
+                    intermediate (cond
+                                   (< start-idx end-idx)
+                                   (subvec coords start-idx (inc end-idx))
+
+                                   (and seam-pair? (> start-idx end-idx))
+                                   (into (subvec coords start-idx n)
+                                         (subvec coords 0 (inc end-idx)))
+
+                                   :else
+                                   [(nth coords start-idx)])
+                    edge-coords (cond
+                                  (and (= :vertex (:type c1)) (= :vertex (:type c2)))
+                                  intermediate
+
+                                  ;; Two adjacent curve corners can share
+                                  ;; one boundary index. The span between
+                                  ;; their mid-points is then the edge.
+                                  (= :curve (:type c1))
+                                  (if (and (= :curve (:type c2))
+                                           (< (count intermediate) 2))
+                                    [start-coord end-coord]
+                                    (into [start-coord] (rest intermediate)))
+
+                                  (= :curve (:type c2))
+                                  (conj (vec (butlast intermediate)) end-coord)
+
+                                  :else
+                                  (-> [start-coord]
+                                      (into (rest (butlast intermediate)))
+                                      (conj end-coord)))]
+                edge-coords))
+            (range num-corners))))))
+
+(defn corners->edges
+  "Give one LineString for each edge between adjacent corners. coords is a
+   closed ring, and corners is the result of find-corners."
+  [coords corners]
+  (let [edge-coord-seqs (corners->edge-coords coords corners)]
+    (mapv f/linestring edge-coord-seqs)))
+
+(defn coords->edges-at-corners
+  "Give one LineString for each span between adjacent corner indexes of the
+   closed ring coords. With no corners, the result is the full boundary as
+   one edge."
+  [coords corners]
+  (if (empty? corners)
+    [(f/linestring coords)]
+    (let [n (dec (count coords))
+          num-corners (count corners)
+          sorted-corners (sort corners)]
+      (mapv (fn [i]
+              (let [start-idx (nth sorted-corners i)
+                    end-idx (nth sorted-corners (mod (inc i) num-corners))
+                    edge-coords (if (<= start-idx end-idx)
+                                  (subvec coords start-idx (inc end-idx))
+                                  (into (subvec coords start-idx (inc n))
+                                        (subvec coords 0 (inc end-idx))))]
+                (f/linestring edge-coords)))
+            (range num-corners)))))
+
+;; The thresholds: the :thresholds of the opts of analyze-parcel-edges and
+;; analyze-parcel, and the thresholds argument of the classification fns.
+;; This module has no default for a key. The caller gives a map with every
+;; key, and a reader throws on a missing key. Lengths are in the units of
+;; the CRS.
+;;   :units                            the units of the CRS, {:length :area
+;;                                     :large-area :area-per-large-area};
+;;                                     analyze-parcel-edges requires the key
+;;                                     and converts nothing
+;;   :min-front-street-width           a street edge counts as a frontage only
+;;                                     when its right-of-way is this wide
+;;   :corner-max-angle-deg             two frontages meet at a corner at or
+;;                                     below this interior angle
+;;   :rear-angle-tolerance-deg         no code reads it yet
+;;   :pointed-lot-max-angle-deg        a lot is pointed when two side edges
+;;                                     meet at or below this angle
+;;   :pointed-lot-min-rear-length      the minimum length of the imaginary
+;;                                     rear
+;;   :construct-imaginary-rear?        build an imaginary rear for a
+;;                                     pointed lot
+;;   :primary-front-selector           :most-building-frontage, :widest-right-of-way,
+;;                                     or a fn of the fronts, the parcel and
+;;                                     the main building that gives an edge
+;;   :treat-curved-street-as-tangent?  a junction angle uses the tangent of
+;;                                     a curved edge
+;;   :split-edge-at-abutting-changes?  split an edge where its neighbor
+;;                                     changes
+;;   :abutting-split-min-segment-length  the shortest piece of that split
+;;   :min-frontage-length              a frontage is at least this long
+;;   :same-street-angle-deg, :same-street-offset, :same-street-gap
+;;                                     join street edges of one street across
+;;                                     a small jog
+;;   :corner-gap                       two frontages this near meet at a
+;;                                     corner whose apex is missing
+;;   :through-parallel-tol-deg         two through frontages diverge at most
+;;                                     this much
+;;   :vertex-tolerance                 two edge endpoints this near are one
+;;                                     vertex
+;;   :right-of-way-width-step, :right-of-way-width-max,
+;;   :right-of-way-width-resolution    the right-of-way probe of
+;;                                     measure-right-of-way-width
+;;   :slice-vertex-snap                arc-slice-coords moves a cut this near
+;;                                     a vertex onto the vertex
+;;   :slice-dedup                      arc-slice-coords drops a point this near
+;;                                     the point before it; keep it smaller
+;;                                     than the spacing of true vertices
+;;   :split-min-coarse                 the smallest coarse spacing of the
+;;                                     abutting split
+;;   :pointed-rear-step, :pointed-rear-max
+;;                                     the step and the depth of the imaginary
+;;                                     rear probe of a pointed lot
+;; One key is optional:
+;;   :coverage-exempt-structure        without the key, each building counts
+;;                                     toward the building coverage. With a
+;;                                     map, a small, detached, one-story
+;;                                     structure that is not the main
+;;                                     building does not count. A reader
+;;                                     throws on a missing key of the map:
+;;     :max-area                  the largest footprint of such a structure
+;;     :small-dwelling-max-area   the largest footprint on a small-dwelling
+;;                                lot
+;;     :small-dwelling-max-units  a lot with 1 to this many dwelling units,
+;;                                and no commercial unit, is a
+;;                                small-dwelling lot
+;;     :max-height                the largest height of a one-story
+;;                                structure
+
+;; This module names no column of a parcel layer. The caller gives the
+;; names in the parcel schema: the :schema of the opts of
+;; analyze-parcel-edges and analyze-parcel, and the parcel-schema input of
+;; preliminary-checks.
+;;   :parcel-id-keys        the id of a parcel row: the first key with a value
+;;   :required-id-keys      preliminary-checks flags a row that has no value
+;;                          for one of these keys
+;;   :gross-area-col        the building gross area
+;;   :units-col             the existing dwelling units
+;;   :commercial-units-col  the existing commercial units
+;; cg.zoning reads :gross-area-col and :units-col. analyze-parcel reads
+;; :units-col and :commercial-units-col, and only when the thresholds have
+;; :coverage-exempt-structure.
+
+(defn schema-value
+  "The value of `k` in `schema`. It throws when `schema` has no `k`: this
+   module has no default for a column name. `what` names the schema in the
+   message."
+  [schema what k]
+  (if (and (map? schema) (contains? schema k))
+    (get schema k)
+    (throw (ex-info (str what " has no " k)
+                    {:missing k :schema-keys (when (map? schema) (vec (keys schema)))}))))
+
+(defn- threshold
+  "The value of `k` in `thresholds`. It throws when the map has no `k`."
+  [thresholds k]
+  (schema-value thresholds "the thresholds" k))
+
+(defn ^:op polygon->edges
+  ;; The input is a geometry, not a row map, and other ops call this op as a
+  ;; helper. A table-> chain cannot fuse it as a per-row step.
+  {:row-reads #{}
+   :row-writes #{}
+   :outputs {:result {:type :map}}}
+  [^:row ^{:type :geometry} parcel ^{:type :map} opts]
+  (let [force-slow? (get opts :force-slow? false)
+        rect-tol (get opts :rect-tolerance 0.001)
+        rect (geo/get-minimum-area-rectangle parcel)]
+    (if (and (not force-slow?)
+             (rectangular? parcel rect-tol))
+      {:edges (rectangle->edges rect)
+       :method :rectangular
+       :rectangle rect}
+      (let [ring (geo/exterior-ring parcel)
+            coords (geo/coordinates ring)
+            opts-with-rect (assoc opts :rect rect)
+            corners (find-corners coords opts-with-rect)
+            edges (corners->edges coords corners)
+            short-thresh (or (get opts :short-segment)
+                             (compute-short-segment-threshold
+                               rect
+                               (get opts :short-segment-fraction 0.02)))
+            has-curve-corner? (boolean (some #(= :curve (:type %)) corners))
+            vertex-corner-count (count (filter #(= :vertex (:type %)) corners))
+            curve-corner-count (count (filter #(= :curve (:type %)) corners))]
+        {:edges edges
+         :method :angle-based
+         :corners corners
+         :corner-count (count corners)
+         :vertex-corner-count vertex-corner-count
+         :curve-corner-count curve-corner-count
+         :has-curve-corner? has-curve-corner?
+         :rectangle rect
+         :short-segment-threshold short-thresh}))))
+
+(defn probe-abutting-condition
+  "Probe at probe-distance from the boundary point `point`, along the unit
+   vector `direction`. Give :lot when the probe point hits a parcel of
+   parcels-ds, and :street when it hits none. A gap in the parcel data
+   therefore also gives :street."
+  [point direction probe-distance parcels-ds]
+  (let [[x y] point
+        [dx dy] direction
+        probe-x (+ x (* dx probe-distance))
+        probe-y (+ y (* dy probe-distance))
+        probe-pt (f/point probe-x probe-y)]
+
+    ;; intersects-any? stops at the first hit and makes no result dataset.
+    ;; The sampler calls this fn many times for each edge.
+    (if (ds/intersects-any? parcels-ds probe-pt)
+      :lot
+      :street)))
+
+(defn ^:op classify-edge-abutting
+  {:row-reads #{}
+   :row-writes #{}
+   :outputs {:result {:type :map}}}
+  [^:row ^{:type :geometry} edge
+   ^{:type :geometry} parcel-geom
+   ^{:type :dataset} parcels-ds
+   ^{:type :number} probe-distance]
+  (let [centroid-coords (geo/coordinates (geo/centroid parcel-geom))
+        centroid (first centroid-coords)
+        midpt (edge-midpoint edge)
+        direction (perpendicular-direction edge centroid)
+        abutting (probe-abutting-condition midpt direction probe-distance parcels-ds)]
+    {:edge edge
+     :abutting abutting
+     :midpoint midpt
+     :angle (edge->angle edge)
+     :length (geo/length edge)}))
+
+(defn edge-abuts-right-of-way?
+  "Tell if an edge of the polygon `parcel` abuts a right-of-way and not a
+   different parcel of parcels-ds. The default probe-distance is 1.0."
+  ([edge parcel parcels-ds]
+   (edge-abuts-right-of-way? edge parcel parcels-ds 1.0))
+  ([edge parcel parcels-ds probe-distance]
+   (let [result (classify-edge-abutting edge parcel parcels-ds probe-distance)]
+     (= :street (:abutting result)))))
+
+(defn prepared-intersects-fn
+  "Prepare `geom` one time and give a predicate of one geometry. The
+   predicate tells if that geometry intersects `geom`."
+  [geom]
+  (let [pg (geo/prepared-geometry-factory-prepare geom)]
+    (fn [other] (geo/prepared-geometry-intersects pg other))))
+
+(defn measure-right-of-way-width
+  "Measure the width of the right-of-way that an edge abuts, within
+   `resolution`. The function moves the edge away from the row `parcel` in
+   steps of `increment` until it touches a different parcel of parcels-ds,
+   and gives max-width if it touches none. candidates-of is a
+   ds/index-candidates-fn closure over parcels-ds, or nil for a scan of all
+   the rows."
+  ([edge parcel parcels-ds increment max-width candidates-of resolution]
+   ;; equals-topo also removes a row with the same geometry, which an id test
+   ;; misses. The prepared intersection test runs first because it is faster.
+   (let [source-geom (:geometry parcel)
+         contact?
+         (fn [dist]
+           (let [offset-geom (geo/offset-line edge dist)]
+             (boolean
+              (and offset-geom
+                   (not (geo/empty? offset-geom))
+                   (let [offset-intersects? (prepared-intersects-fn offset-geom)]
+                     (if candidates-of
+                       ;; The intersection test runs in the two directions,
+                       ;; because JTS can give different results for a
+                       ;; tangent. A tangent must not count as contact.
+                       (some (fn [r]
+                               (let [pg (:prepared-geometry r)]
+                                 (and (geo/intersects? pg offset-geom)
+                                      (let [other-geom (geo/prepared-geometry-get-geometry pg)]
+                                        (and (offset-intersects? other-geom)
+                                             (not (geo/equals-topo? other-geom source-geom)))))))
+                             (candidates-of offset-geom))
+                       (some (fn [row]
+                               (let [og (:geometry row)]
+                                 (and (some? og)
+                                      (offset-intersects? og)
+                                      (not (geo/equals-topo? og source-geom)))))
+                             (ds/rows parcels-ds :as-maps))))))))]
+     (loop [dist increment]
+       (if (> dist max-width)
+         max-width
+         (if (contact? dist)
+           ;; The coarse loop rounds the gap up to a multiple of
+           ;; `increment`, which can move a narrow way across
+           ;; :min-front-street-width. Halve the last step to `resolution`.
+           (loop [lo (- dist increment) hi (double dist)]
+             (if (<= (- hi lo) resolution)
+               hi
+               (let [mid (/ (+ lo hi) 2.0)]
+                 (if (contact? mid)
+                   (recur lo mid)
+                   (recur mid hi)))))
+           (recur (+ dist increment))))))))
+
+(defn edge-arc-table
+  "Give the arc length at each vertex of the coordinate vector of an edge.
+   Each length is the distance from the start of the edge. The result is
+   {:arcs [0 .. total] :total len}."
+  [coords]
+  (let [n (count coords)]
+    (loop [i 1 acc [0.0]]
+      (if (>= i n)
+        {:arcs acc :total (peek acc)}
+        (let [[x1 y1] (nth coords (dec i))
+              [x2 y2] (nth coords i)
+              d (math/sqrt (+ (* (- x2 x1) (- x2 x1)) (* (- y2 y1) (- y2 y1))))]
+          (recur (inc i) (conj acc (+ (peek acc) d))))))))
+
+(defn sample-edge-conditions
+  "Sample the abutting condition, :street or :lot, at points along an edge.
+   The result is a vector of {:arc :cond}, in the sequence of the arc
+   length. The function ignores a segment of zero length, because
+   perpendicular-direction would divide by zero on it."
+  [coords arcs centroid parcels-ds probe-distance spacing cap]
+  (let [n (count coords)]
+    (vec
+     (mapcat
+      (fn [j]
+        (let [a (nth coords j)
+              b (nth coords (inc j))
+              seg-arc0 (nth arcs j)
+              seg-len (- (nth arcs (inc j)) seg-arc0)]
+          (if (< seg-len 1.0e-6)
+            []
+            (let [[x1 y1] a
+                  [x2 y2] b
+                  nsamp (max 1 (min cap (int (+ 1.0 (/ seg-len spacing)))))
+                  seg-ls (f/linestring [a b])
+                  normal (perpendicular-direction seg-ls centroid)]
+              (mapv (fn [k]
+                      (let [t (/ (+ k 0.5) nsamp)
+                            px (+ x1 (* t (- x2 x1)))
+                            py (+ y1 (* t (- y2 y1)))]
+                        {:arc (+ seg-arc0 (* t seg-len))
+                         :cond (probe-abutting-condition [px py] normal probe-distance parcels-ds)}))
+                    (range nsamp))))))
+      (range (dec n))))))
+
+(defn condition-runs
+  "Collect the samples into runs of one condition. The result is a vector
+   of {:cond :lo :hi}, in arc length. The boundary between two runs is at
+   the mid-point between the last sample of the first run and the first
+   sample of the second run."
+  [samples total]
+  (if (empty? samples)
+    []
+    (let [grouped (reduce (fn [acc s]
+                            (let [lst (peek acc)]
+                              (if (and lst (= (:cond lst) (:cond s)))
+                                (conj (pop acc) (update lst :arcs conj (:arc s)))
+                                (conj acc {:cond (:cond s) :arcs [(:arc s)]}))))
+                          [] samples)
+          k (count grouped)]
+      (mapv (fn [i]
+              (let [g (nth grouped i)
+                    lo (if (zero? i)
+                         0.0
+                         (/ (+ (peek (:arcs (nth grouped (dec i))))
+                               (first (:arcs g)))
+                            2.0))
+                    hi (if (= i (dec k))
+                         total
+                         (/ (+ (peek (:arcs g))
+                               (first (:arcs (nth grouped (inc i)))))
+                            2.0))]
+                {:cond (:cond g) :lo lo :hi hi}))
+            (range k)))))
+
+(defn coalesce-runs
+  "Make one span from each group of adjacent runs that have the same
+   condition."
+  [runs]
+  (reduce (fn [acc r]
+            (let [lst (peek acc)]
+              (if (and lst (= (:cond lst) (:cond r)))
+                (conj (pop acc) (assoc lst :hi (:hi r)))
+                (conj acc r))))
+          []
+          runs))
+
+(defn merge-short-runs
+  "Put each run that is shorter than min-seg into its longer adjacent run,
+   until no short run remains. The runs continue to cover the full edge."
+  [runs min-seg]
+  (loop [runs (coalesce-runs (vec runs))]
+    (if (<= (count runs) 1)
+      runs
+      (let [n (count runs)
+            short-idx (first (keep-indexed
+                              (fn [i r] (when (< (- (:hi r) (:lo r)) min-seg) i))
+                              runs))]
+        (if (nil? short-idx)
+          runs
+          (let [r (nth runs short-idx)
+                prev (when (> short-idx 0) (nth runs (dec short-idx)))
+                nxt (when (< short-idx (dec n)) (nth runs (inc short-idx)))
+                prev-span (when prev (- (:hi prev) (:lo prev)))
+                nxt-span (when nxt (- (:hi nxt) (:lo nxt)))
+                into-prev? (cond
+                             (nil? prev) false
+                             (nil? nxt) true
+                             :else (>= prev-span nxt-span))
+                runs' (if into-prev?
+                        (into (conj (subvec runs 0 (dec short-idx))
+                                    (assoc prev :hi (:hi r)))
+                              (subvec runs (inc short-idx)))
+                        (into (conj (subvec runs 0 short-idx)
+                                    (assoc nxt :lo (:lo r)))
+                              (subvec runs (+ short-idx 2))))]
+            (recur (coalesce-runs runs'))))))))
+
+(defn point-at-arc
+  "Give the coordinate at the arc length `target` along the polyline
+   coords. The function interpolates between two vertices."
+  [coords arcs target]
+  (let [n (count coords)]
+    (cond
+      (<= target (first arcs)) (first coords)
+      (>= target (peek arcs)) (peek coords)
+      :else (loop [i 1]
+              (if (>= i n)
+                (peek coords)
+                (if (>= (nth arcs i) target)
+                  (let [a0 (nth arcs (dec i))
+                        a1 (nth arcs i)
+                        seg (- a1 a0)
+                        t (if (pos? seg) (/ (- target a0) seg) 0.0)]
+                    (interpolate-coord (nth coords (dec i)) (nth coords i) t))
+                  (recur (inc i))))))))
+
+(defn dedup-coords
+  "Remove each point that is nearer than tol to the point before it. A
+   slice that ends on a vertex would otherwise start with a segment of zero
+   length, and perpendicular-direction would divide by zero on it."
+  [pts tol]
+  (reduce (fn [acc p]
+            (let [lst (peek acc)]
+              (if (and lst
+                       (< (+ (math/abs (- (first p) (first lst)))
+                             (math/abs (- (second p) (second lst))))
+                          tol))
+                acc
+                (conj acc p))))
+          []
+          pts))
+
+;; The abutting condition usually changes at a vertex of the edge. Without
+;; the snap, a sub-edge starts with a segment of almost no length, and
+;; edge-junction-angle gives no angle for it.
+(defn snap-arc-to-vertex
+  "Give the arc position of the nearest vertex, if that vertex is nearer
+   than `tol` to `target`. If no vertex is that near, give `target`."
+  [arcs target tol]
+  (let [best (reduce (fn [b a]
+                       (if (< (math/abs (- a target)) (math/abs (- b target))) a b))
+                     (first arcs)
+                     arcs)]
+    (if (< (math/abs (- best target)) tol) best target)))
+
+(defn arc-slice-coords
+  "Give the coordinates of the part of the edge between the arc lengths lo
+   and hi: the two interpolated endpoints and the vertices between them. An
+   endpoint nearer than `snap-tol` to a vertex moves onto that vertex. The
+   function removes each point nearer than `dedup-tol` to the point before
+   it."
+  [coords arcs lo hi snap-tol dedup-tol]
+   (let [n (count coords)
+         lo (snap-arc-to-vertex arcs lo snap-tol)
+         hi (snap-arc-to-vertex arcs hi snap-tol)
+         start-pt (point-at-arc coords arcs lo)
+         end-pt (point-at-arc coords arcs hi)
+         ;; The comparisons are strict, because a snapped endpoint is
+         ;; already the start point or the end point.
+         mids (filterv some?
+                       (mapv (fn [i]
+                               (when (and (> (nth arcs i) lo) (< (nth arcs i) hi))
+                                 (nth coords i)))
+                             (range n)))]
+     (dedup-coords (into [start-pt] (conj mids end-pt)) dedup-tol)))
+
+(defn split-edge-at-abutting
+  "Divide one edge into sub-edges that each have one abutting condition.
+   The result is [edge] when the edge has one condition, or when it is
+   shorter than two times min-seg. A run shorter than min-seg becomes part
+   of an adjacent run."
+  [edge centroid parcels-ds probe-distance coarse-spacing fine-spacing min-seg cap
+   thresholds]
+   (let [coords (geo/coordinates edge)
+         {:keys [arcs total]} (edge-arc-table coords)]
+     (if (< total (* 2.0 min-seg))
+       [edge]
+       (let [coarse (sample-edge-conditions coords arcs centroid parcels-ds
+                                            probe-distance coarse-spacing cap)
+             coarse-conds (set (map :cond coarse))]
+         (if (< (count coarse-conds) 2)
+           [edge]
+           (let [fine (sample-edge-conditions coords arcs centroid parcels-ds
+                                              probe-distance fine-spacing cap)
+                 runs (merge-short-runs (condition-runs fine total) min-seg)]
+             (if (<= (count runs) 1)
+               [edge]
+               (mapv (fn [r]
+                       (f/linestring
+                        (arc-slice-coords coords arcs (:lo r) (:hi r)
+                                          (threshold thresholds :slice-vertex-snap)
+                                          (threshold thresholds :slice-dedup))))
+                     runs))))))))
+
+(defn split-edges-at-abutting-changes
+  "Divide each edge where the abutting condition changes, and give the
+   vector of sub-edges. When :split-edge-at-abutting-changes? of the
+   thresholds is false, the result is `edges`."
+  [edges geom parcels-ds probe-distance thresholds]
+  (if-not (threshold thresholds :split-edge-at-abutting-changes?)
+    edges
+    (let [centroid (first (geo/coordinates (geo/centroid geom)))
+          min-seg (threshold thresholds :abutting-split-min-segment-length)
+          coarse-sp (max (threshold thresholds :split-min-coarse) (* 4.0 min-seg))
+          fine-sp (* 0.5 min-seg)]
+      (vec (mapcat #(split-edge-at-abutting % centroid parcels-ds probe-distance
+                                            coarse-sp fine-sp min-seg 256 thresholds)
+                   edges)))))
+
+(defn edge-endpoint-gap
+  "Give the smallest distance between an endpoint of edge `ea` and an
+   endpoint of edge `eb`."
+  [ea eb]
+  (let [ca (geo/coordinates ea)
+        cb (geo/coordinates eb)]
+    (reduce min
+            (for [p [(first ca) (last ca)]
+                  q [(first cb) (last cb)]]
+              (let [dx (- (first q) (first p))
+                    dy (- (second q) (second p))]
+                (math/sqrt (+ (* dx dx) (* dy dy))))))))
+
+(defn qualifying-frontages
+  "Select the street edges that count as frontage: the right-of-way is
+   :min-front-street-width or wider, and the edge is :min-frontage-length
+   or longer. An edge with no :right-of-way-width qualifies at any width. When no
+   street edge qualifies, the result is the widest street edge alone."
+  [street-edges thresholds]
+  (let [min-w (threshold thresholds :min-front-street-width)
+        min-l (threshold thresholds :min-frontage-length)
+        q (filterv (fn [e]
+                     (and (or (nil? (:right-of-way-width e))
+                              (>= (:right-of-way-width e) min-w))
+                          (>= (geo/length (:edge e)) min-l)))
+                   street-edges)]
+    (cond
+      (seq q) q
+      (seq street-edges)
+      ;; The same selection as widest-front, which is defined later.
+      [(first (sort-by (fn [e]
+                         (let [[x y] (first (geo/coordinates (:edge e)))]
+                           [(- (or (:right-of-way-width e) 0)) x y]))
+                       street-edges))]
+      :else [])))
+
+(defn same-street-frontage?
+  "Tell if two street edges lie on one street and count as one frontage.
+   The edges must be near-parallel, the second edge must sit near the line
+   of the first, and the nearest endpoints must be near. The spans along
+   the street must overlap by 20 percent of the shorter edge or less,
+   because the two frontages of a through lot are also parallel."
+  [e1 e2 thresholds]
+  (let [ang-tol (threshold thresholds :same-street-angle-deg)
+        off-tol (threshold thresholds :same-street-offset)
+        gap-tol (threshold thresholds :same-street-gap)]
+    (and (angles-parallel? (edge->angle (:edge e1)) (edge->angle (:edge e2)) ang-tol)
+         (<= (edge-endpoint-gap (:edge e1) (:edge e2)) gap-tol)
+         (let [c1 (geo/coordinates (:edge e1))
+               c2 (geo/coordinates (:edge e2))
+               [x1 y1] (first c1)
+               [x2 y2] (last c1)
+               dx (- x2 x1) dy (- y2 y1)
+               len1 (math/sqrt (+ (* dx dx) (* dy dy)))]
+           (when (pos? len1)
+             (let [ux (/ dx len1) uy (/ dy len1)
+                   proj (fn [[px py]] (+ (* (- px x1) ux) (* (- py y1) uy)))
+                   perp (fn [[px py]] (math/abs (- (* (- px x1) uy)
+                                                   (* (- py y1) ux))))
+                   [a2 b2] [(first c2) (last c2)]
+                   off (/ (+ (perp a2) (perp b2)) 2.0)
+                   t-lo (min (proj a2) (proj b2))
+                   t-hi (max (proj a2) (proj b2))
+                   overlap (- (min t-hi len1) (max t-lo 0.0))
+                   len2 (- t-hi t-lo)
+                   shorter (max 1.0e-6 (min len1 len2))]
+               (and (<= off off-tol)
+                    (<= overlap (* 0.2 shorter)))))))))
+
+(defn bend-continuation?
+  "Tell if two street edges are one frontage that the edge detector divided
+   at a shallow bend. The edges must share a vertex, and the interior angle
+   there must be more than :corner-max-angle-deg."
+  [e1 e2 thresholds]
+  (let [corner-max (threshold thresholds :corner-max-angle-deg)
+        tangent? (threshold thresholds :treat-curved-street-as-tangent?)
+        {:keys [interior]} (edge-junction-angle (:edge e1) (:edge e2)
+                                                (threshold thresholds :vertex-tolerance)
+                                                tangent?)]
+    (boolean (and interior (> interior corner-max)))))
+
+(defn frontage-groups
+  "Join the qualifying street edges into frontage groups, as a vector of
+   vectors. An edge joins a group when same-street-frontage? or
+   bend-continuation? is true for the edge and a member of the group."
+  [edges thresholds]
+  (reduce (fn [groups e]
+            (let [match? (fn [g]
+                           (boolean
+                            (some #(or (same-street-frontage? % e thresholds)
+                                       (bend-continuation? % e thresholds))
+                                  g)))
+                  matched (filterv match? groups)
+                  other (filterv (complement match?) groups)]
+              (conj other (conj (vec (apply concat matched)) e))))
+          []
+          edges))
+
+(defn- vec-angle-deg
+  "Give the absolute angle between two direction vectors, in degrees in
+   the range [0, 180]."
+  [[x1 y1] [x2 y2]]
+  (let [cross (- (* x1 y2) (* y1 x2))
+        dot   (+ (* x1 x2) (* y1 y2))]
+    (math/abs (math/to-degrees (math/atan2 cross dot)))))
+
+(defn near-gap-junction
+  "Measure the junction of two edges that share no vertex, as {:gap length
+   :interior deg-or-nil :aligned? bool}. :interior is the angle between the
+   tangents at the far endpoints of the edges. :aligned? is true when the
+   gap vector lies within 45 degrees of the chord of one edge."
+  [e1 e2]
+  (let [c1 (geo/coordinates e1)
+        c2 (geo/coordinates e2)
+        ends (fn [cs] [(first cs) (last cs)])
+        [a1 b1] (ends c1)
+        [a2 b2] (ends c2)
+        d2* (fn [[px py] [qx qy]]
+              (let [dx (- qx px) dy (- qy py)]
+                (+ (* dx dx) (* dy dy))))
+        [p1 p2] (apply min-key (fn [[p q]] (d2* p q))
+                       (for [p [a1 b1] q [a2 b2]] [p q]))
+        gap (math/sqrt (d2* p1 p2))
+        orient (fn [cs p] (if (< (d2* (first cs) p) 1.0e-12)
+                            cs
+                            (vec (reverse cs))))
+        chord (fn [cs] (let [[x1 y1] (first cs)
+                             [x2 y2] (last cs)]
+                         [(- x2 x1) (- y2 y1)]))
+        ;; When the walk missed a curve corner in an edge, the tangents at
+        ;; the gap continue each other and read 180 degrees. The tangents
+        ;; at the far endpoints carry the full turn.
+        far-dir (fn [oriented] (edge-tangent-at (vec (reverse oriented))))
+        o1 (orient c1 p1)
+        o2 (orient c2 p2)
+        d1 (far-dir o1)
+        d2 (far-dir o2)
+        ch1 (chord o1)
+        ch2 (chord o2)
+        g  [(- (first p2) (first p1)) (- (second p2) (second p1))]
+        neg (fn [[x y]] [(- x) (- y)])
+        ;; At an interrupted corner, the gap continues one frontage. Between
+        ;; the two frontages of a through lot, the gap is near-perpendicular
+        ;; to the two chords.
+        aligned? (and (> gap 1.0e-9)
+                      (or (<= (vec-angle-deg g (neg ch1)) 45.0)
+                          (<= (vec-angle-deg g ch2) 45.0)))]
+    {:gap gap
+     :interior (when (and (pos? gap)
+                          (> (+ (math/abs (first d1)) (math/abs (second d1))) 1.0e-9)
+                          (> (+ (math/abs (first d2)) (math/abs (second d2))) 1.0e-9))
+                 (vec-angle-deg d1 d2))
+     :aligned? aligned?}))
+
+(defn frontage-pair-relation
+  "Give the relation of two frontage groups: :corner, :bend, :through or
+   :ambiguous. The function measures the junction on the member pair with
+   the nearest endpoints. :ambiguous is a shared vertex that gives no
+   interior angle."
+  [g1 g2 thresholds]
+  (let [corner-max (threshold thresholds :corner-max-angle-deg)
+        gap-max (threshold thresholds :corner-gap)
+        parallel-tol (threshold thresholds :through-parallel-tol-deg)
+        tangent? (threshold thresholds :treat-curved-street-as-tangent?)
+        [e1 e2] (apply min-key
+                       (fn [[a b]] (edge-endpoint-gap (:edge a) (:edge b)))
+                       (for [a g1 b g2] [a b]))
+        {:keys [shared? interior]} (edge-junction-angle
+                                    (:edge e1) (:edge e2)
+                                    (threshold thresholds :vertex-tolerance)
+                                    tangent?)]
+    (cond
+      interior (if (<= interior corner-max) :corner :bend)
+      shared?  :ambiguous
+      :else
+      (let [nj (near-gap-junction (:edge e1) (:edge e2))]
+        (cond
+          (and (<= (:gap nj) gap-max) (:aligned? nj) (:interior nj))
+          (if (<= (:interior nj) corner-max) :corner :bend)
+
+          (angles-parallel? (edge->angle (:edge e1)) (edge->angle (:edge e2))
+                            parallel-tol) :through
+          :else :corner)))))
+
+(defn classify-frontages
+  "Classify the lot from its edges, as {:lot-type :corner? :through?
+   :frontage-count}. :frontage-count is the count of frontage groups. An
+   :end-cap lot has three frontages and sets the two flags, and a
+   :corner-or-through lot sets no flag."
+  [edges-with-info thresholds]
+  (let [street-edges (filterv #(= :street (:abutting %)) edges-with-info)
+        frontages (qualifying-frontages street-edges thresholds)
+        groups (frontage-groups frontages thresholds)
+        n (count groups)
+        rels (vec (for [i (range n)
+                        j (range (inc i) n)]
+                    (frontage-pair-relation (nth groups i) (nth groups j)
+                                            thresholds)))
+        corner? (boolean (some #(= :corner %) rels))
+        through? (boolean (some #(= :through %) rels))
+        lot-type (case n
+                   0 :interior
+                   1 :mid-block
+                   2 (case (first rels)
+                       :corner    :corner
+                       :through   :through
+                       :bend      :mid-block
+                       :ambiguous :corner-or-through)
+                   3 (if (and corner? through?) :end-cap :multi-frontage)
+                   :multi-frontage)]
+    {:lot-type lot-type
+     :corner? corner?
+     :through? through?
+     :frontage-count n}))
+
+(defn ^:op classify-lot-type
+  ;; The op does not read `parcel`. The row contract needs it.
+  {:row-reads #{}
+   :row-writes #{}
+   :outputs {:result {:type :keyword}}}
+  [^:row ^{:type :geometry} parcel
+   ^{:type :vector} edges-with-info
+   ^{:type :map} thresholds]
+  (:lot-type (classify-frontages edges-with-info thresholds)))
+
+(defn widest-front
+  "Give the front edge with the largest :right-of-way-width, or nil for an empty
+   collection. The first coordinate of the edge breaks a tie. The function
+   does not use max-key, because max-key gives the last maximum, and the
+   result would change with the sequence of the input."
+  [fronts]
+  (first (sort-by (fn [e]
+                    (let [[x y] (first (geo/coordinates (:edge e)))]
+                      [(- (or (:right-of-way-width e) 0)) x y]))
+                  fronts)))
+
+(defn geom-sort-key
+  "Give a sort key for a geometry: the [x y] coordinate of its centroid.
+   The first vertex of a ring changes with the sequence of the coordinates,
+   but the centroid does not."
+  [g]
+  (first (geo/coordinates (geo/centroid g))))
+
+(defn max-by-stable
+  "Give the item of `coll` with the largest numeric value of `key-fn`, or
+   nil for an empty `coll`. `key-fn` can be a keyword. On a tie, the
+   function gives the item with the smaller vector from `tiebreak-fn`,
+   because the result must not change with the sequence of the input."
+  [key-fn tiebreak-fn coll]
+  (when (seq coll)
+    ;; squint cannot call a keyword. get reads a keyword on both runtimes.
+    (let [k (if (fn? key-fn) key-fn (fn [x] (get x key-fn)))]
+      (first (sort-by (fn [x] (into [(- (k x))] (tiebreak-fn x))) coll)))))
+
+(defn primary-by-building-width
+  "Give the front that `main-building`, a row with :geometry, faces most
+   widely. The measure is the width of the building footprint, projected
+   onto the direction of each front. A tie goes to the larger :right-of-way-width,
+   then to the first coordinate of the edge."
+  [fronts main-building]
+  (let [bcoords (geo/coordinates (:geometry main-building))
+        proj-width (fn [e]
+                     (let [cs (geo/coordinates (:edge e))
+                           [x0 y0] (first cs) [x1 y1] (last cs)
+                           dx (- x1 x0) dy (- y1 y0)
+                           len (math/sqrt (+ (* dx dx) (* dy dy)))]
+                       (if (< len 1.0e-9)
+                         0.0
+                         (let [ux (/ dx len) uy (/ dy len)
+                               ps (mapv (fn [c] (+ (* ux (first c)) (* uy (second c)))) bcoords)]
+                           (- (apply max ps) (apply min ps))))))]
+    (first (sort-by (fn [e]
+                      (let [[x y] (first (geo/coordinates (:edge e)))]
+                        [(- (proj-width e)) (- (or (:right-of-way-width e) 0)) x y]))
+                    fronts))))
+
+(defn ^:op assign-edge-types
+  {:row-reads #{}
+   :row-writes #{}
+   :outputs {:result {:type :vector}}}
+  [^:row ^{:type :geometry} parcel
+   ^{:type :vector} edges-with-info
+   ^{:type :keyword} lot-type
+   ^{:type :map} thresholds
+   ^{:type :map} main-building]
+  (let [min-front-width (threshold thresholds :min-front-street-width)
+        selector        (threshold thresholds :primary-front-selector)
+        street-edges       (filterv #(= :street (:abutting %)) edges-with-info)
+        other-edges   (filterv #(not= :street (:abutting %)) edges-with-info)
+        select-primary  (fn [fronts]
+                          (cond
+                            (fn? selector)
+                            (selector fronts parcel main-building)
+                            (and (= selector :most-building-frontage) main-building)
+                            (primary-by-building-width fronts main-building)
+                            :else
+                            (widest-front fronts)))
+        centroid (first (geo/coordinates (geo/centroid parcel)))
+        vertex-tol (threshold thresholds :vertex-tolerance)
+        ;; A parcel can have more than one rear, because the test runs on
+        ;; each candidate. A rectangular corner lot has none, because each
+        ;; edge that is not a front shares a vertex with a front.
+        rear? (fn [candidate primary fronts]
+                (and (angles-parallel? (edge->angle (:edge primary))
+                                       (edge->angle (:edge candidate)) 45)
+                     (edge-opposite-interior? (:edge candidate) (:edge primary)
+                                              centroid vertex-tol)
+                     (not-any? #(edges-share-vertex? (:edge candidate) (:edge %) vertex-tol)
+                               fronts)))
+        classify-rear-side (fn [primary fronts candidates]
+                             (mapv (fn [e]
+                                     (assoc e :edge-type
+                                            (if (rear? e primary fronts) :rear :side)))
+                                   candidates))]
+    (case lot-type
+      :no-street-frontage (mapv #(assoc % :edge-type :side) edges-with-info)
+      :interior           (mapv #(assoc % :edge-type :side) edges-with-info)
+
+      ;; A bent frontage classifies :mid-block and arrives here with two
+      ;; street edges. Each street edge is a front, at any width.
+      :mid-block
+      (let [primary (select-primary street-edges)]
+        (into (mapv #(assoc % :edge-type :front) street-edges)
+              ;; A mid-block lot always has a rear. When the rear test
+              ;; rejects each candidate, the most opposite one is the rear.
+              (ensure-rear-fallback
+               (classify-rear-side primary street-edges other-edges)
+               primary centroid)))
+
+      ;; If each street edge is narrow, the selected one stays as the only
+      ;; front, because a parcel with frontage always keeps a front.
+      (:corner :through :corner-or-through :end-cap :multi-frontage)
+      (let [narrow?     (fn [e] (< (or (:right-of-way-width e) 0) min-front-width))
+            qualifying0 (filterv (complement narrow?) street-edges)
+            [qualifying demoted]
+            (if (seq qualifying0)
+              [qualifying0 (filterv narrow? street-edges)]
+              (let [w (select-primary street-edges)]
+                [[w] (filterv #(not= (:edge %) (:edge w)) street-edges)]))
+            primary      (select-primary qualifying)
+            other-fronts (filterv #(not= (:edge %) (:edge primary)) qualifying)
+            ;; A narrow street edge is not a front, but it can be a rear, for
+            ;; example on a rear alley.
+            candidates   (into other-edges demoted)]
+        (into [(assoc primary :edge-type :primary-front)]
+              (concat
+               (mapv #(assoc % :edge-type :front) other-fronts)
+               (classify-rear-side primary qualifying candidates))))
+
+      (mapv #(assoc % :edge-type :unknown) edges-with-info))))
+
+(defn construct-imaginary-rear-line
+  "Give the line in `parcel` that is parallel to the edge `front`, most
+   distant from it, and `min-rear` long or longer. The result is nil if the
+   lot is never that wide. `increment` is the step of the search, and
+   `max-depth` is the largest distance from the front."
+  [parcel front min-rear increment max-depth]
+  (let [cs (geo/coordinates front)
+        [x1 y1] (first cs)
+        [x2 y2] (last cs)
+        dx (- x2 x1) dy (- y2 y1)
+        flen (math/sqrt (+ (* dx dx) (* dy dy)))]
+    (when (pos? flen)
+      (let [ux (/ dx flen) uy (/ dy flen)
+            mx (/ (+ x1 x2) 2.0) my (/ (+ y1 y2) 2.0)
+            [cx cy] (first (geo/coordinates (geo/centroid parcel)))
+            nx0 (- uy) ny0 ux
+            inward? (pos? (+ (* nx0 (- cx mx)) (* ny0 (- cy my))))
+            nx (if inward? nx0 (- nx0))
+            ny (if inward? ny0 (- ny0))
+            half-len (* 4.0 max-depth)]
+        (loop [d increment best nil]
+          (if (> d max-depth)
+            best
+            (let [px (+ mx (* nx d)) py (+ my (* ny d))
+                  a [(- px (* ux half-len)) (- py (* uy half-len))]
+                  b [(+ px (* ux half-len)) (+ py (* uy half-len))]
+                  raw (geo/intersection (f/linestring [a b]) parcel)
+                  ;; A lot that is not convex can cut the line into parts.
+                  ;; Use the longest part, because the parts do not touch
+                  ;; each other and their total length is not one line.
+                  chord (when (and raw (not (geo/empty? raw)))
+                          (let [n (geo/num-geometries raw)]
+                            (if (<= n 1)
+                              raw
+                              (apply max-key geo/length
+                                     (mapv #(geo/geometry-n raw %) (range n))))))]
+              (if (and chord (>= (geo/length chord) min-rear))
+                (recur (+ d increment) chord)
+                best))))))))
+
+(defn pointed-lot-imaginary-rear
+  "Give an imaginary rear edge map for a pointed lot that has no rear and
+   is not a corner lot, or nil. A lot is pointed when two side edges share
+   a vertex at an interior angle of :pointed-lot-max-angle-deg or less. The
+   edge map holds :edge-type :rear and :imaginary? true."
+  [parcel typed-edges lot-type thresholds]
+  (let [max-angle (threshold thresholds :pointed-lot-max-angle-deg)
+        min-rear  (threshold thresholds :pointed-lot-min-rear-length)]
+    (when-not (or (#{:corner :corner-or-through :end-cap} lot-type)
+                  (some #(= :rear (:edge-type %)) typed-edges))
+      (let [front (or (first (filter #(= :primary-front (:edge-type %)) typed-edges))
+                      ;; A mid-block lot has no :primary-front edge.
+                      (widest-front (filterv #(= :front (:edge-type %)) typed-edges)))
+            sides (filterv #(= :side (:edge-type %)) typed-edges)
+            pointed? (some (fn [[a b]]
+                             (let [{:keys [shared? interior]}
+                                   (edge-junction-angle (:edge a) (:edge b)
+                                                        (threshold thresholds :vertex-tolerance))]
+                               (and shared? interior (<= interior max-angle))))
+                           (for [i (range (count sides))
+                                 j (range (inc i) (count sides))]
+                             [(nth sides i) (nth sides j)]))]
+        (when (and front pointed?)
+          (when-let [rear (construct-imaginary-rear-line
+                            parcel (:edge front) min-rear
+                            (threshold thresholds :pointed-rear-step)
+                            (threshold thresholds :pointed-rear-max))]
+            {:edge       rear
+             :abutting   :lot
+             :edge-type  :rear
+             :imaginary? true
+             :length     (geo/length rear)}))))))
+
+(defn indicator-line
+  "Give a LineString between the two nearest points of a parcel edge and a
+   building polygon."
+  [edge building]
+  (let [[p1 p2] (geo/nearest-points edge building)]
+    (f/linestring [p1 p2])))
+
+(defn compute-setback
+  "Give the distance from a parcel edge to a building polygon, in the units
+   of the geometry."
+  [edge building]
+  (geo/distance edge building))
+
+;; The buffers keep their round ends. On a convex lot, the result is equal
+;; to the inward offset with sharp corners. On a lot that is not convex,
+;; sharp corners remove too much area and the envelope can disappear.
+(defn ^:op compute-envelope
+  {:row-reads #{}
+   :row-writes #{}
+   :outputs {:result {:type :geometry}}}
+  [^:row ^{:type :geometry} parcel-geom ^{:type :vector} edges-with-setbacks]
+  (reduce (fn [envelope edge-info]
+            (let [{:keys [edge setback]} edge-info]
+              (if (and setback (> setback 0) edge)
+                (let [setback-zone (geo/buffer edge setback)]
+                  (if (and setback-zone (not (geo/empty? setback-zone)))
+                    (let [diff (geo/difference envelope setback-zone)]
+                      (if (and diff (not (geo/empty? diff)))
+                        diff
+                        envelope))
+                    envelope))
+                envelope)))
+          parcel-geom
+          edges-with-setbacks))
+
+(defn ^:op compute-metrics
+  {:row-reads #{}
+   :row-writes #{}
+   :outputs {:result {:type :map}}}
+  [^:row ^{:type :geometry} parcel-geom
+   ^{:type :geometry} envelope-geom
+   ^{:type :vector} edges-with-types]
+  (let [lot-area (geo/area parcel-geom)
+        envelope-area (if envelope-geom (geo/area envelope-geom) 0)
+        front-edges (filterv #(#{:front :primary-front} (:edge-type %)) edges-with-types)
+        front-length (reduce + 0 (map #(geo/length (:edge %)) front-edges))]
+    {:lot-area lot-area
+     :envelope-area envelope-area
+     :envelope-ratio (if (> lot-area 0) (/ envelope-area lot-area) 0)
+     :street-frontage front-length}))
+
+(defn ^:op analyze-parcel-edges
+  {:row-reads #{:geometry :parcel-edges :edge-method}
+   :row-writes #{:parcel-id :geometry :edges :edge-method :street-edge-count :lot-edge-count :lot-type
+                 :corner? :through? :frontage-count}
+   :outputs {:result {:type :map}}}
+  [^:row ^{:type :map} parcel-row
+   ^{:type :dataset} parcels-ds
+   ^{:type :map} opts]
+  (let [geom (:geometry parcel-row)
+        parcel-id (some #(get parcel-row %)
+                        (schema-value (:schema opts) "the :schema of opts" :parcel-id-keys))
+        probe-distance (get opts :probe-distance 1.0)
+        thresholds (:thresholds opts)
+        _ (threshold thresholds :units)
+        ;; Only analyze-parcel gives the main building. With nil, the
+        ;; primary front comes from the width of the right-of-way.
+        main-building (:main-building opts)
+
+        prebound-edges (:parcel-edges parcel-row)
+        prebound-method (:edge-method parcel-row)
+        edge-result (when-not (and prebound-edges prebound-method)
+                      (polygon->edges geom opts))
+        edges (or prebound-edges (:edges edge-result))
+        edge-method (or prebound-method (:method edge-result))
+
+        ;; This step is here and not in polygon->edges, because only this
+        ;; op has parcels-ds to probe against.
+        split-edges (split-edges-at-abutting-changes edges geom parcels-ds
+                                                     probe-distance thresholds)
+        classified-edges (mapv #(classify-edge-abutting % geom parcels-ds probe-distance) split-edges)
+
+        ;; classify-frontages and assign-edge-types read :right-of-way-width. One
+        ;; index closure serves all the street edges of the parcel.
+        width-candidates (ds/index-candidates-fn parcels-ds)
+        classified-edges (mapv (fn [e]
+                                 (if (= :street (:abutting e))
+                                   (assoc e :right-of-way-width
+                                          (measure-right-of-way-width
+                                           (:edge e) parcel-row parcels-ds
+                                           (threshold thresholds :right-of-way-width-step)
+                                           (threshold thresholds :right-of-way-width-max)
+                                           width-candidates
+                                           (threshold thresholds
+                                                      :right-of-way-width-resolution)))
+                                   e))
+                               classified-edges)
+
+        street-edges (filter #(= :street (:abutting %)) classified-edges)
+        lot-edges (filter #(= :lot (:abutting %)) classified-edges)
+
+        frontage-info (classify-frontages classified-edges thresholds)
+        lot-type (:lot-type frontage-info)
+
+        typed-edges (assign-edge-types geom classified-edges lot-type thresholds main-building)
+
+        ;; The imaginary rear joins the edges after the counts, because it
+        ;; must not change :street-edge-count, :lot-edge-count or :lot-type.
+        imaginary-rear (when (threshold thresholds :construct-imaginary-rear?)
+                         (pointed-lot-imaginary-rear geom typed-edges lot-type thresholds))
+        all-edges (if imaginary-rear (conj typed-edges imaginary-rear) typed-edges)]
+
+    {:parcel-id parcel-id
+     :geometry geom
+     :edges all-edges
+     :edge-method edge-method
+     :street-edge-count (count street-edges)
+     :lot-edge-count (count lot-edges)
+     :lot-type lot-type
+     ;; The flags are independent of :lot-type: an :end-cap lot sets the
+     ;; two flags.
+     :corner? (:corner? frontage-info)
+     :through? (:through? frontage-info)
+     :frontage-count (:frontage-count frontage-info)}))
+
+(defn- default-building-height
+  "Give the :building-height of the main-building map. This fn is the
+   default :building-height-fn of the opts. The caller gives a different fn
+   when its building layer has a different name for the height."
+  [main-building]
+  (:building-height main-building))
+
+(defn- exempt-structure-value
+  "The value of `k` in `carve-out`, the :coverage-exempt-structure of the
+   thresholds. It throws when the map has no `k`."
+  [carve-out k]
+  (schema-value carve-out "the :coverage-exempt-structure of the thresholds" k))
+
+(defn small-dwelling-lot?
+  "True when the lot has from 1 to `max-units` dwelling units and no
+   commercial unit. `schema` names the two columns of `parcel-row`."
+  [parcel-row schema max-units]
+  (let [col        (fn [k] (get parcel-row (schema-value schema "the :schema of opts" k)))
+        units      (col :units-col)
+        commercial (col :commercial-units-col)]
+    (and (number? units)
+         (>= units 1)
+         (<= units max-units)
+         (not (and (number? commercial) (pos? commercial))))))
+
+(defn detached?
+  "True when `building` is farther than `tolerance` from each other
+   building of `buildings`."
+  [building buildings tolerance]
+  (every? (fn [other]
+            (or (identical? other building)
+                (> (geo/distance (:geometry building) (:geometry other)) tolerance)))
+          buildings))
+
+(defn exempt-structure?
+  "True when `building` does not count toward the building coverage of its
+   lot. `limits` is the map that split-coverage-buildings makes."
+  [building limits]
+  (and (not (identical? building (:main-building limits)))
+       ;; The whole footprint, because the part on the lot of a building
+       ;; that crosses the lot line says nothing about its size.
+       (<= (geo/area (:geometry building)) (:area-limit limits))
+       (let [height ((:height-fn limits) building)]
+         (or (not (number? height)) (<= height (:max-height limits))))
+       (detached? building (:buildings limits) (:tolerance limits))))
+
+(defn split-coverage-buildings
+  "Give {:counted :excluded} of the scored buildings of a lot. Each building
+   counts when the thresholds have no :coverage-exempt-structure."
+  [scored-buildings main-building parcel-row opts]
+  (let [thresholds (:thresholds opts)
+        carve-out  (get thresholds :coverage-exempt-structure)]
+    (if-not carve-out
+      {:counted scored-buildings :excluded []}
+      (let [small?  (small-dwelling-lot?
+                     parcel-row (:schema opts)
+                     (exempt-structure-value carve-out :small-dwelling-max-units))
+            limits  {:main-building main-building
+                     :buildings     (mapv (fn [s] (:building s)) scored-buildings)
+                     :area-limit    (exempt-structure-value
+                                     carve-out
+                                     (if small? :small-dwelling-max-area :max-area))
+                     :max-height    (exempt-structure-value carve-out :max-height)
+                     :height-fn     (get opts :building-height-fn default-building-height)
+                     :tolerance     (threshold thresholds :vertex-tolerance)}
+            tagged  (mapv (fn [s] (assoc s :exempt? (exempt-structure? (:building s) limits)))
+                          scored-buildings)]
+        {:counted  (filterv (fn [s] (not (:exempt? s))) tagged)
+         :excluded (filterv (fn [s] (:exempt? s)) tagged)}))))
+
+(defn ^:op analyze-parcel
+  {:row-reads #{:geometry}
+   :row-writes #{:parcel-id :edges :edge-method :street-edge-count :lot-edge-count
+                 :lot-type :corner? :through? :frontage-count
+                 :envelope :metrics :buildings-analyzed?
+                 :main-building :main-building-footprint-area :main-building-height}
+   :outputs {:result {:type :map}}}
+  [^:row ^{:type :map} parcel-row
+   ^{:type :dataset} parcels-ds
+   ^{:type :dataset} buildings-ds
+   ^{:type :map} opts]
+  (let [geom (:geometry parcel-row)
+
+        ;; The setbacks measure to the largest building on the lot only,
+        ;; because a shed or a garage would make them too small.
+        ;; analyze-parcel-edges uses that building to select the primary front.
+        parcel-buildings (when buildings-ds
+                           (ds/rows (ds/select-intersects buildings-ds geom)
+                                    :as-maps))
+        scored-buildings (when (seq parcel-buildings)
+                           (keep (fn [b]
+                                   (when-let [bg (:geometry b)]
+                                     (let [clipped (geo/intersection geom bg)]
+                                       (when (and clipped
+                                                  (not (geo/empty? clipped)))
+                                         {:building b
+                                          :area     (geo/area clipped)}))))
+                                 parcel-buildings))
+        main-building (when (seq scored-buildings)
+                        (:building
+                         (first (sort-by (fn [s]
+                                           (let [[x y] (first (geo/coordinates
+                                                               (:geometry (:building s))))]
+                                             [(- (:area s)) x y]))
+                                         scored-buildings))))
+
+        edge-analysis (analyze-parcel-edges parcel-row parcels-ds
+                                            (assoc opts :main-building main-building))
+        typed-edges (:edges edge-analysis)
+
+        thresholds (:thresholds opts)
+        width-for (fn [edge-info]
+                    (when (= :street (:abutting edge-info))
+                      (measure-right-of-way-width
+                       (:edge edge-info) parcel-row parcels-ds
+                       (threshold thresholds :right-of-way-width-step)
+                       (threshold thresholds :right-of-way-width-max)
+                       (ds/index-candidates-fn parcels-ds)
+                       (threshold thresholds :right-of-way-width-resolution))))
+
+        edges-with-setbacks
+        (if buildings-ds
+          (mapv (fn [edge-info]
+                  (let [setback (when main-building
+                                  (geo/distance (:edge edge-info)
+                                                (:geometry main-building)))]
+                    (assoc edge-info
+                           :setback            setback
+                           :right-of-way-width (or (:right-of-way-width edge-info)
+                                                   (width-for edge-info)))))
+                typed-edges)
+          (mapv (fn [edge-info]
+                  (assoc edge-info :right-of-way-width (or (:right-of-way-width edge-info)
+                                                           (width-for edge-info))))
+                typed-edges))
+
+        envelope (when buildings-ds
+                   (compute-envelope geom edges-with-setbacks))
+
+        base-metrics (compute-metrics geom envelope edges-with-setbacks)
+        ;; :building-coverage-ratio is nil only when there is no building
+        ;; layer. A lot with no building gives 0.
+        coverage (split-coverage-buildings scored-buildings main-building parcel-row opts)
+        building-plate-area (reduce + 0.0 (map :area (:counted coverage)))
+        lot-area (:lot-area base-metrics)
+        building-coverage-ratio (when (and buildings-ds
+                                           (number? lot-area)
+                                           (> lot-area 0))
+                                  (/ building-plate-area lot-area))
+        ;; The excluded area is the part on the lot, therefore it and
+        ;; :building-coverage-area sum to the area of all the buildings.
+        metrics (assoc base-metrics
+                       :building-coverage-area building-plate-area
+                       :building-coverage-ratio building-coverage-ratio
+                       :building-coverage-excluded-count (count (:excluded coverage))
+                       :building-coverage-excluded-area
+                       (reduce + 0.0 (map :area (:excluded coverage))))
+        ;; apply-row-chain gives parcel-row as a transient, and assoc! writes
+        ;; into it. The columns of the dataset stay on the row for the steps
+        ;; that run later.
+        r (reduce-kv assoc! parcel-row edge-analysis)
+        mb-area (when main-building
+                  (geo/area (:geometry main-building)))
+        height-fn (get opts :building-height-fn default-building-height)
+        mb-height (when main-building (height-fn main-building))]
+    (assoc! r
+            :edges edges-with-setbacks
+            :envelope envelope
+            :metrics metrics
+            :main-building main-building
+            :main-building-footprint-area mb-area
+            :main-building-height mb-height
+            :buildings-analyzed? (some? buildings-ds))))
+
+(defn flatten-row
+  "Give the flat row of one analyzed parcel, for a cache or an export.
+   Eight values of :metrics become top-level columns, and a keyword becomes
+   its name. The function removes each nested value and keeps :geometry."
+  [row]
+  (let [met  (:metrics row)
+        base (merge row
+                    {:lot-area                (:lot-area met)
+                     :envelope-ratio          (:envelope-ratio met)
+                     :building-coverage-ratio (:building-coverage-ratio met)
+                     :building-coverage-area  (:building-coverage-area met)
+                     :building-coverage-excluded-count
+                     (:building-coverage-excluded-count met)
+                     :building-coverage-excluded-area
+                     (:building-coverage-excluded-area met)
+                     :street-frontage         (:street-frontage met)
+                     :envelope-area           (:envelope-area met)})]
+    (-> (into {}
+              (keep (fn [[k v]]
+                      (let [v' (if (keyword? v) (name v) v)]
+                        (when (and (not= k :geometry)
+                                   (or (nil? v') (string? v') (number? v') (boolean? v')))
+                          [k v'])))
+                    base))
+        (assoc :geometry (:geometry row)))))
+
+(defn largest-polygon
+  "Give the polygon with the largest area in a geometry. A Polygon comes
+   back with no change, and a MultiPolygon gives its largest component. Each
+   other geometry type gives nil."
+  [geom]
+  (let [geom-type (geo/geometry-type geom)]
+    (cond
+      (= geom-type "Polygon") geom
+      (= geom-type "MultiPolygon")
+      (let [n (geo/num-geometries geom)
+            polys (mapv #(geo/geometry-n geom %) (range n))]
+        (max-by-stable geo/area geom-sort-key polys))
+      :else nil)))
+
+;; An alias for the callers that use parcel/get-dataset-crs. The fn lives in
+;; cg.layer.
+(def get-dataset-crs layer/get-dataset-crs)
+
+;; analyze-parcel-edges fails on a MultiPolygon row. The buffer of zero
+;; width cleans the self-intersections that stop JTS predicate work.
+(defn ^:op prepare-parcel
+  {:row-reads #{:geometry}
+   :row-writes #{:geometry :original-geometry}
+   :outputs {:result     {:type :map}}}
+  [^:row ^{:type :map} parcel-row]
+  (let [original (:geometry parcel-row)
+        polygon  (when original (largest-polygon original))
+        cleaned  (when polygon (geo/buffer polygon 0))]
+    (if cleaned
+      (assoc! parcel-row
+              :geometry           cleaned
+              :original-geometry  original)
+      parcel-row)))
+
+(defn ^:op preliminary-checks
+  {:row-reads #{:geometry}
+   :row-writes #{:prep-status}
+   :outputs {:result     {:type :map}}}
+  [^:row ^{:type :map} parcel-row ^{:type :map} parcel-schema]
+  (cond
+    (nil? (:geometry parcel-row))
+    (assoc! parcel-row :prep-status :skipped-no-geometry)
+
+    (some #(nil? (get parcel-row %))
+          (schema-value parcel-schema "the parcel schema" :required-id-keys))
+    (assoc! parcel-row :prep-status :skipped-no-parcel-id)
+
+    :else parcel-row))
+
+(defn ^:op determine-effective-boundary
+  {:row-reads #{:geometry}
+   :row-writes #{:effective-boundary-geom :rectangular? :parcel-edges :edge-method}
+   :outputs {:result     {:type :map}}}
+  [^:row ^{:type :map} parcel-row ^{:type :map} opts]
+  (let [geom          (:geometry parcel-row)
+        edge-result   (polygon->edges geom opts)
+        rectangular?  (= (:method edge-result) :rectangular)
+        boundary-geom (if rectangular?
+                        (:rectangle edge-result)
+                        geom)]
+    (assoc! parcel-row
+            :effective-boundary-geom boundary-geom
+            :rectangular?            rectangular?
+            :parcel-edges            (:edges edge-result)
+            :edge-method             (:method edge-result))))
+
+;; JTS overlay reads each vertex of its two inputs, and a road-network
+;; polygon can have 100,000 vertices. Such a polygon gets a grid over its
+;; envelope, and the first parcel that meets a cell makes the cell part.
+
+(def overlay-large-vertices 10000)
+(def overlay-cell-vertices 2500)
+(def overlay-max-cells-per-side 32)
+
+;; {<indexed id of a large polygon> {:grid <grid> :cells {"i,j" <part>}}}
+(def overlay-grids (atom {}))
+
+(defn- overlay-grid
+  "Give the grid of a polygon with `n` vertices: its origin, its cell size
+   and its cell count for each side."
+  [large n]
+  (let [env (geo/geometry-get-envelope-internal large)
+        x0  (geo/envelope-get-min-x env)
+        y0  (geo/envelope-get-min-y env)
+        k   (loop [k 1]
+              (if (or (>= k overlay-max-cells-per-side)
+                      (>= (* k k overlay-cell-vertices) n))
+                k
+                (recur (inc k))))]
+    {:x0 x0
+     :y0 y0
+     :dx (/ (- (geo/envelope-get-max-x env) x0) k)
+     :dy (/ (- (geo/envelope-get-max-y env) y0) k)
+     :k  k}))
+
+(defn- cell-part
+  "Give the part of `large` in the cell [i j] of `grid`, or :none. Give
+   `large` itself when the overlay fails or its result is not a polygon."
+  [large grid i j]
+  (let [{:keys [x0 y0 dx dy]} grid
+        ax (+ x0 (* i dx))
+        ay (+ y0 (* j dy))
+        bx (+ ax dx)
+        by (+ ay dy)
+        cell (f/polygon [[ax ay] [bx ay] [bx by] [ax by] [ax ay]])]
+    (or (util/try-catch
+         (fn []
+           (let [part (geo/intersection large cell)
+                 kind (geo/geometry-type part)]
+             (cond
+               (geo/empty? part) :none
+               (or (= kind "Polygon") (= kind "MultiPolygon")) part
+               :else nil)))
+         (fn [_] nil))
+        large)))
+
+(defn- cell-range
+  "Give the first and the last cell index that the interval [lo hi] meets,
+   on a grid axis with `k` cells of size `step` from `origin`."
+  [lo hi origin step k]
+  (let [index (fn [v]
+                (if (pos? step)
+                  (max 0 (min (dec k) (int (/ (- v origin) step))))
+                  0))]
+    [(index lo) (index hi)]))
+
+(defn- large-parts
+  "Give the parts of `large` in the cells that the envelope of `geom`
+   meets. `id` is the key of `large` in overlay-grids."
+  [geom large id n]
+  (let [grid (or (:grid (get @overlay-grids id))
+                 (let [g (overlay-grid large n)]
+                   ;; The ids of an older index stay in the map, therefore it
+                   ;; starts again at a size that one layer does not reach.
+                   (when (> (count @overlay-grids) 256)
+                     (reset! overlay-grids {}))
+                   (swap! overlay-grids assoc id {:grid g :cells {}})
+                   g))
+        env  (geo/geometry-get-envelope-internal geom)
+        [i0 i1] (cell-range (geo/envelope-get-min-x env) (geo/envelope-get-max-x env)
+                            (:x0 grid) (:dx grid) (:k grid))
+        [j0 j1] (cell-range (geo/envelope-get-min-y env) (geo/envelope-get-max-y env)
+                            (:y0 grid) (:dy grid) (:k grid))]
+    (for [i (range i0 (inc i1))
+          j (range j0 (inc j1))
+          :let [k    (str i "," j)
+                part (or (get-in @overlay-grids [id :cells k])
+                         (let [p (cell-part large grid i j)]
+                           (swap! overlay-grids assoc-in [id :cells k] p)
+                           p))]
+          :when (not= :none part)]
+      part)))
+
+(defn- overlay-pieces
+  "Give the pieces of the candidate polygon `other` that are in `geom`. A
+   polygon over overlay-large-vertices goes through its grid."
+  [geom other id]
+  (let [n (geo/geometry-get-num-points other)]
+    (if (and id (> n overlay-large-vertices))
+      (mapv (fn [part] (geo/intersection part geom))
+            (large-parts geom other id n))
+      [(geo/intersection other geom)])))
+
+(defn overlay-area
+  "Give the area of `geom` that the polygons from `candidates-of` cover, in
+   the squared units of the CRS. The result is 0.0 when no polygon
+   overlaps, and nil on a topology error. `candidates-of` is an
+   index-candidates-fn closure over the overlay layer, in the CRS of
+   `geom`."
+  [geom candidates-of]
+  (util/try-catch
+   (fn []
+     ;; Clip each candidate to `geom` before the union. An intersection
+     ;; against one small parcel can use the envelope to remove work, and a
+     ;; union of two large polygons cannot.
+     (let [pieces (mapcat (fn [c]
+                            (let [pg (:prepared-geometry c)]
+                              (when (geo/intersects? pg geom)
+                                (overlay-pieces
+                                 geom
+                                 (geo/prepared-geometry-get-geometry pg)
+                                 (:indexed-id c)))))
+                          (candidates-of geom))]
+       (if (seq pieces)
+         (geo/area (:geometry (geo/union (mapv (fn [p] {:geometry p}) pieces))))
+         0.0)))
+   (fn [_] nil)))
+
+;; This op runs in the per-row chain, because the flow partitions that chain
+;; across the worker pool. A pass over the finished rows runs on one thread.
+(defn ^:op analyze-parcel-impervious
+  {:row-reads #{:geometry :metrics}
+   :row-writes #{:impervious-area :pct-impervious}
+   :outputs {:result {:type :map}}}
+  [^:row ^{:type :map} parcel-row ^{:type :dataset} impervious-dataset]
+  (let [geom (:geometry parcel-row)
+        candidates-of (ds/index-candidates-fn impervious-dataset :geometry)
+        sf   (when (and geom candidates-of) (overlay-area geom candidates-of))
+        lot  (or (:actual-lot-area parcel-row)
+                 (:lot-area (:metrics parcel-row))
+                 (when geom (geo/area geom)))
+        pct  (when (and (number? sf) (number? lot) (pos? lot))
+               (* 100.0 (/ sf lot)))]
+    ;; The row is a transient in the per-row chain. A plain assoc throws
+    ;; ClassCastException on it.
+    (-> parcel-row
+        (assoc! :impervious-area sf)
+        (assoc! :pct-impervious pct))))
+
+;; The debug layers carry each scalar that the analysis put on an edge map
+;; or a parcel row, because a popup must show which step made a category.
+;; A popup cannot render a value that is not a scalar.
+
+(defn- diag-scalar?
+  "Tell if a popup can render the value as a property: nil, a number, a
+   string, a boolean or a keyword."
+  [v]
+  (or (nil? v) (number? v) (string? v) (boolean? v) (keyword? v)))
+
+(defn- diag-val [v]
+  (if (keyword? v) (name v) v))
+
+(defn- edge-diag-props
+  "Give each scalar of the edge map, with string keys for GeoJSON. The
+   result has no :edge-type, which the caller sends as \"category\"."
+  [em]
+  (into {} (for [[k v] (dissoc em :edge :edge-type)
+                 :when (diag-scalar? v)]
+             [(name k) (diag-val v)])))
+
+(defn- parcel-diag-props
+  "Give each scalar of the parcel row, with string keys. Each key has the
+   prefix \"parcel.\" to keep it apart from an edge key. \"parcel-id\" has
+   no prefix, because the styler and the tests use it as a key."
+  [row]
+  (into {"parcel-id" (:parcel-id row)}
+        (for [[k v] (dissoc row :edges :parcel-id)
+              :when (diag-scalar? v)]
+          [(str "parcel." (name k)) (diag-val v)])))
+
+(defn- prop-map-keys
+  "Give the distinct string keys in a seq of property maps, in the order in
+   which they first occur."
+  [prop-maps]
+  (distinct (mapcat (fn [m] (filter string? (keys m))) prop-maps)))
+
+(defn- props->columns
+  "Make a column-major map {:geometry [...] \"k\" [...]} from a vector of
+   geometries and the related property maps. A map with no value for a key
+   gets nil, because the dataset must stay rectangular."
+  [geoms prop-maps]
+  (into {:geometry geoms}
+        (for [k (prop-map-keys prop-maps)]
+          [k (mapv #(get % k) prop-maps)])))
+
+(defn debug-edge-rows [analyzed-rows]
+  (for [row analyzed-rows
+        em  (:edges row)
+        :when (:edge em)]
+    (merge (parcel-diag-props row)
+           (edge-diag-props em)
+           {:edge      (:edge em)
+            "category" (name (:edge-type em))})))
+
+;; The geometry column keeps the name :geometry, because the reproject step in
+;; api.clj reads (:geometry row). The scalar columns have string names,
+;; because (str :parcel-id) would keep the colon in a GeoJSON property key.
+(defn parcel-geom-layer [analyzed-rows geom-key crs]
+  (let [rows      (filter geom-key analyzed-rows)
+        prop-maps (mapv parcel-diag-props rows)]
+    (layer/tag-crs (ds/->dataset (props->columns (mapv geom-key rows) prop-maps))
+             crs)))
+
+(defn- setback-label
+  "Make a label with one decimal from a setback distance and the unit label
+   `length`. For example, 10.229 and \"ft\" give \"10.2 ft\". The function
+   uses core arithmetic only, because the .cg SCI context has no
+   Math/round."
+  [setback length]
+  (str (/ (int (+ 0.5 (* 10.0 (double setback)))) 10.0) " " length))
+
+(defn debug-setback-rows
+  "Give one indicator row for each edge that has a numeric setback, on each
+   parcel that has a main building. The geometry of the row connects the
+   nearest points of the building and the edge. Each row carries the
+   setback and a label that ends with the unit label `length`."
+  [analyzed-rows length]
+  (for [row analyzed-rows
+        :let [mbg (:geometry (:main-building row))]
+        :when mbg
+        em (:edges row)
+        :when (and (:edge em) (number? (:setback em)))]
+    {:geometry   (indicator-line (:edge em) mbg)
+     "category"  (name (:edge-type em))
+     "parcel-id" (:parcel-id row)
+     "setback"   (:setback em)
+     "label"     (setback-label (:setback em) length)}))
+
+;; The layers stay in the CRS of the analyzed rows. The CRS tag makes
+;; /api/data reproject them to 4326.
+(defn debug-layer-builders
+  "Give one thunk for each debug layer: {:debug-edges (fn [] ...) ...}. A
+   thunk makes only its own layer, because a caller that writes the layers
+   one at a time must hold only one layer in memory."
+  [analyzed-rows crs units]
+  {:debug-edges
+   (fn build-debug-edges []
+     (let [erows (vec (debug-edge-rows analyzed-rows))]
+       (layer/tag-crs (ds/->dataset (props->columns (mapv :edge erows) erows)) crs)))
+   :debug-envelope
+   (fn build-debug-envelope []
+     (parcel-geom-layer analyzed-rows :envelope crs))
+   :debug-boundary
+   (fn build-debug-boundary []
+     (parcel-geom-layer analyzed-rows :effective-boundary-geom crs))
+   :debug-setbacks
+   (fn build-debug-setbacks []
+     (let [srows (vec (debug-setback-rows analyzed-rows (:length units)))]
+       (layer/tag-crs (ds/->dataset (props->columns (mapv :geometry srows) srows))
+                crs)))})
+
+(defn debug-layers
+  "Make the four debug layers and give them in one map."
+  [analyzed-rows crs units]
+  (reduce-kv (fn [m k build] (assoc m k (build)))
+             {}
+             (debug-layer-builders analyzed-rows crs units)))

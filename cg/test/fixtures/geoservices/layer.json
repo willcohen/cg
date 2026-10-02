@@ -1,0 +1,14 @@
+{
+  "currentVersion": 11.1,
+  "id": 0,
+  "name": "MockParcels",
+  "type": "Feature Layer",
+  "geometryType": "esriGeometryPolygon",
+  "objectIdField": "OBJECTID",
+  "maxRecordCount": 2,
+  "spatialReference": { "wkid": 4326, "latestWkid": 4326 },
+  "fields": [
+    { "name": "OBJECTID", "type": "esriFieldTypeOID", "alias": "OBJECTID" },
+    { "name": "NAME", "type": "esriFieldTypeString", "alias": "NAME", "length": 32 }
+  ]
+}

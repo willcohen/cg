@@ -1,0 +1,189 @@
+(ns cg.cache
+  "Version-keyed cache primitives: directory resolution, the 8-hex version
+   hash, cache path builders, stale-file pruning, and the checkpoint op.
+   The caller gives the directory, the key forms and the file-name
+   prefixes."
+  (:require [cg.dataset :as ds]
+            [cg.feature :as f]
+            [cg.run :as run]
+            [cg.util :as util]
+            [clojure.string :as str]))
+
+(run/load-module "src/cg/columns.cg")
+(clojure.core/require '[cg.columns :as columns])
+
+(defn resolve-dir
+  "The path `rel` when it exists from the JVM cwd, else \"../cg/\" plus
+   `rel` when that exists, else `rel`. The cwd is cg/ for a standalone
+   `bb run` and cg-app/ when the backend loads a session. The backend
+   rebases load-module and slurp paths, but not file-system access."
+  [rel]
+  (if (util/file-exists? rel)
+    rel
+    (let [alt (str "../cg/" rel)]
+      (if (util/file-exists? alt) alt rel))))
+
+(defn version-hash
+  "The hash of the pr-str of `key-form` as 8 hex digits, equal to
+   (format \"%08x\" (hash ...)) on the JVM. `hash` is the hash of the
+   platform, therefore a version is not portable between platforms. The
+   digits come from arithmetic because squint has no `format`."
+  [key-form]
+  (let [h (hash (pr-str key-form))]
+    (loop [u (if (neg? h) (+ h 4294967296) h)
+           i 0
+           digits ""]
+      (if (= i 8)
+        digits
+        (recur (quot u 16) (inc i) (str (nth "0123456789abcdef" (mod u 16)) digits))))))
+
+(defn layer-path
+  "The file of one cached layer: <dir>/<prefix>-<layer>-<hash>.gpkg."
+  [dir prefix hash layer]
+  (str dir "/" prefix "-" layer "-" hash ".gpkg"))
+
+(defn prune-stale!
+  "Delete the .gpkg and .edn files in `dir` whose name starts with
+   `prefix` and does not contain `hash`. An error is ignored, because a
+   failed prune must not fail a run."
+  [dir prefix hash]
+  (util/try-catch
+   (fn []
+     (doseq [n (util/list-file-names dir)]
+       (when (and (str/starts-with? n prefix)
+                  (or (str/ends-with? n ".gpkg") (str/ends-with? n ".edn"))
+                  (not (str/includes? n hash)))
+         (util/delete-file! (str dir "/" n)))))
+   (fn [_] nil)))
+
+(defn sidecar-path
+  "The sidecar of a cached layer: its path with .edn for .gpkg."
+  [layer-path]
+  (str/replace layer-path #"\.gpkg$" ".edn"))
+
+(defn- epsg-code
+  "The number of an \"EPSG:N\" string. It throws for each other CRS,
+   because the GeoPackage write takes an EPSG code."
+  [crs]
+  (let [n (when (and (string? crs) (str/starts-with? crs "EPSG:"))
+            (util/parse-double (subs crs 5)))]
+    (when-not n
+      (throw (ex-info (str "a cached layer needs an EPSG:N CRS, and got " (pr-str crs))
+                      {:crs crs})))
+    (long n)))
+
+(defn- column-kinds
+  "For each column of `rows`, the set of the kinds of its values:
+   :boolean, :integer, :real and :string."
+  [rows]
+  (reduce (fn [acc r]
+            (reduce-kv (fn [acc k v]
+                         (let [kind (cond (boolean? v) :boolean
+                                          (integer? v) :integer
+                                          (number? v)  :real
+                                          (string? v)  :string
+                                          :else        nil)]
+                           (if kind (update acc k (fnil conj #{}) kind) acc)))
+                       acc r))
+          {} rows))
+
+;; A GeoPackage column has one type, and the GDAL write takes the type from
+;; the first value. A column of booleans and strings goes in as strings,
+;; and a column of integers and reals goes in as reals.
+(defn- one-type-rows [rows]
+  (let [kinds   (column-kinds rows)
+        strs    (into #{} (keep (fn [[k s]] (when (and (contains? s :boolean) (contains? s :string)) k)))
+                      kinds)
+        reals   (into #{} (keep (fn [[k s]] (when (and (contains? s :integer) (contains? s :real)) k)))
+                      kinds)]
+    (if (and (empty? strs) (empty? reals))
+      rows
+      (mapv (fn [r]
+              (reduce-kv (fn [m k v]
+                           (assoc m k (cond
+                                        (and (contains? strs k) (boolean? v)) (str v)
+                                        (and (contains? reals k) (integer? v)) (double v)
+                                        :else v)))
+                         {} r))
+            rows))))
+
+(defn write-layer!
+  "Write `dset` to `path` as a GeoPackage. `crs` is the CRS of its
+   geometries, an \"EPSG:N\" string. A GeoPackage is the cache format
+   because GDAL reads and writes it with no other library. JVM only."
+  [dset path crs]
+  (let [rows (vec (ds/rows dset :as-maps))
+        same (one-type-rows rows)]
+    (ds/write-gdal! (if (identical? rows same) dset (ds/->dataset same))
+                    path {:layer "layer" :epsg (epsg-code crs)})))
+
+(defn read-layer
+  "Read the dataset that write-layer! wrote to `path`. A boolean comes
+   back as 1 or 0, and the read adds the feature id as :fid."
+  [path]
+  (ds/load-gdal! path))
+
+(defn write-rows!
+  "Write `dset` to `path` with write-layer!, and write its sidecar: `kinds`
+   (the columns/value-kinds of the rows before a keyword became its name),
+   the column names and the CRS."
+  [dset kinds path crs]
+  (write-layer! dset path crs)
+  (util/write-edn! (sidecar-path path)
+                   (assoc kinds :columns (mapv name (ds/column-names dset)) :crs crs)))
+
+(defn read-rows
+  "The rows that write-rows! wrote to `path`, as maps with keyword keys.
+   The sidecar restores each keyword and each boolean, and it names the
+   columns to keep."
+  [path]
+  (let [side (util/read-edn (sidecar-path path))
+        rows (columns/rehydrate-rows (read-layer path) side)
+        cols (mapv keyword (:columns side))]
+    (mapv (fn [r] (select-keys r cols)) rows)))
+
+;; The hash of :key names the version, therefore :key must hold every input
+;; that changes the result. With no :crs, the first geometry gives it, and a
+;; result with no CRS is stored as EPSG:4326.
+;; A miss reads the file back, because a hit and a miss must give the same
+;; rows. The JS runtime has no run-component: the checkpoint runs on the JVM.
+(defn ^:op checkpoint
+  {:outputs {:result {:type :dataset :role :table}}}
+  [^:table ^{:type :dataset} rows
+   ^{:type :map} spec
+   ^{:type :component} component]
+  (let [path      (layer-path (:dir spec) (:prefix spec) (version-hash (:key spec))
+                              (:layer spec))
+        side      (sidecar-path path)
+        run-opts  (select-keys spec [:timeout-ms])
+        read-back (fn [] (ds/->dataset (read-rows path)))]
+    (util/make-dirs! (:dir spec))
+    (cond
+      (and (util/file-exists? path) (util/file-exists? side))
+      (do (println (str "  checkpoint " (last (str/split path #"/")) ": read"))
+          (read-back))
+
+      (not (util/file-exists? (:dir spec)))
+      (do (println (str "  checkpoint " (:prefix spec) "-" (:layer spec)
+                        ": computed, not stored (no file system)"))
+          (run/run-component component rows run-opts))
+
+      :else
+      (let [out  (run/run-component component rows run-opts)
+            out  (if (ds/dataset? out) (ds/rows out :as-maps) out)
+            ;; The file stores no keyword. The sidecar restores it from its
+            ;; name on the read.
+            flat (mapv (fn [r] (reduce-kv (fn [m k v] (assoc m k (if (keyword? v) (name v) v)))
+                                          {} r))
+                       out)
+            crs  (or (:crs spec)
+                     (some (fn [r] (when-let [g (:geometry r)] (f/get-crs g))) out)
+                     "EPSG:4326")]
+        (write-rows! (ds/->dataset flat)
+                     (assoc (columns/value-kinds out) :key (:key spec))
+                     path crs)
+        (when-not (false? (:prune? spec))
+          (prune-stale! (:dir spec) (str (:prefix spec) "-" (:layer spec) "-")
+                        (version-hash (:key spec))))
+        (println (str "  checkpoint " (last (str/split path #"/")) ": computed"))
+        (read-back)))))

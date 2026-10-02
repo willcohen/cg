@@ -1,0 +1,666 @@
+(ns boston
+  "Existing-zoning conformity of Boston parcels, over the public GIS layers
+   of the city. The file gives cg.parcel and cg.zoning the Boston column
+   names, thresholds and lot-area rules. One file, three uses:
+
+     - Opened in the map (CG: Open Map): the tail defs the map layers of
+       `scope`.
+     - Run as a script (bb run examples/boston.cg): the tail
+       analyzes `scope` and prints a summary, and the last model gives
+       the parcels as a map layer.
+     - Loaded by another file or a test (run/load-module): a library with
+       no side effects.
+
+   The JVM starts its worker pool at the first flow. On the JS runtime the
+   host starts the pool."
+  (:require [cg.dataset :as ds]
+            [cg.feature :as f]
+            [cg.geo :as geo]
+            [cg.run :as run]
+            [cg.util :as util]
+            [cg.macros :refer [table->]]
+            [clojure.string :as str]))
+
+(run/load-module "src/cg/parcel.cg")
+(clojure.core/require '[cg.parcel :as parcel])
+(run/load-module "src/cg/columns.cg")
+(clojure.core/require '[cg.columns :as columns])
+(run/load-module "src/cg/cache.cg")
+(clojure.core/require '[cg.cache :as cache])
+(run/load-module "src/cg/layer.cg")
+(clojure.core/require '[cg.layer :as layer])
+(run/load-module "src/cg/export.cg")
+(clojure.core/require '[cg.export :as export])
+(run/load-module "src/cg/zoning.cg")
+(clojure.core/require '[cg.zoning :as zoning])
+
+;; Each scope keys its own cache. A district takes minutes on a cold run, and
+;; :city takes about an hour.
+(def scope {:district "Jamaica Plain Neighborhood"})
+
+(def cache-dir (cache/resolve-dir ".cg-cache/layers"))
+(def analysis-cache-dir (cache/resolve-dir ".cg-cache/analysis"))
+(def analysis-crs "EPSG:2249")
+
+;; The layer catalog. :version is a part of each cache key: change it when
+;; the city publishes a new revision of the layer.
+
+(def gis-base "https://gis.bostonplans.org/hosting/rest/services/")
+
+(def zoning-spec
+  {:url (str gis-base "Zoning_Subdistricts_Data/FeatureServer/0")
+   :version "2026-07-09"
+   :cache-dir cache-dir})
+
+(def parcels-spec
+  {:url (str gis-base "FY26_Parcels_Detailed/FeatureServer/0")
+   :opts {:out-fields (str "MAP_PAR_ID,PID,ST_NUM,ST_NAME,UNIT_NUM,LU,LU_DESC,"
+                           "RES_UNITS,COM_UNITS,GROSS_AREA,LIVING_AREA,LAND_SF,"
+                           "YR_BUILT,BLDG_SEQ,NUM_BLDGS,OWN_OCC")
+          :result-record-count 2000}
+   :version "fy26-2026-07-09"
+   :cache-dir cache-dir})
+
+(def buildings-spec
+  {:url (str gis-base "Boston_Buildings/FeatureServer/9")
+   :opts {:out-fields "PART_USE,BLDG_HGT_2010,GRND_ELEV_2010,ROOF_ELEV_2010,Land_Use"
+          :result-record-count 2000}
+   :version "2026-07-09"
+   :cache-dir cache-dir})
+
+(def impervious-spec
+  {:url (str "https://services.arcgis.com/sFnw0xNflSi8J0uh/ArcGIS/rest/"
+             "services/Impervious_Surface/FeatureServer/0")
+   ;; The object-id field of this layer is FID. The default order of the
+   ;; loader, "OBJECTID ASC", gives HTTP 400.
+   :opts {:out-fields "FID,TYPE" :order-by "FID ASC"
+          :result-record-count 2000}
+   :version "2026-07-31"
+   :cache-dir cache-dir})
+
+(def layer-versions
+  [(:version zoning-spec) (:version parcels-spec) (:version buildings-spec)])
+
+;; EPSG:2249 is in US survey feet.
+(def boston-units
+  {:length "ft" :area "sf" :large-area "acres" :area-per-large-area 43560.0})
+
+(def boston-parcel-schema
+  {:parcel-id-keys       [:MAP_PAR_ID :id]
+   :required-id-keys     [:MAP_PAR_ID]
+   :gross-area-col       :SUM_GROSS_AREA
+   :units-col            :EXIST_Total_Res_Units
+   :commercial-units-col :COM_UNITS})
+
+;; Reads a subdistrict code of the zoning layer, of the form YF-Z000, into
+;; :max-unit-count (Y) and :min-lot-size (Z000).
+(defn boston-subdistrict-code-attrs
+  [code]
+  (let [match (when (string? code) (re-matches #"^(\d)F-(\d)000$" code))]
+    {:max-unit-count (when match (zoning/safe-parse-long (nth match 1)))
+     :min-lot-size   (when match (zoning/safe-parse-long (str (nth match 2) "000")))}))
+
+;; The keys are the Article and Zoning_Subdistrict values. A subdistrict with
+;; no entry uses the :min-lot-size of boston-subdistrict-code-attrs.
+(def boston-lot-area-rules
+  (let [r (fn [base units add]
+            {:form :per-unit :by :dwelling-units :base base :base-n units :per add})]
+    {"55" {"1F-3000" (r 3000 1 nil) "1F-4000" (r 4000 1 nil)
+           "1F-5000" (r 5000 1 nil) "1F-6000" (r 6000 1 nil)
+           "1F-9000" (r 9000 1 nil)
+           "2F-4000" (r 3000 1 1000) "2F-5000" (r 3000 1 2000)
+           "2F-7000" (r 5000 1 2000) "2F-9000" (r 6000 1 3000)
+           "3F-4000" (r 3000 1 1000) "3F-5000" (r 3000 1 2000)}
+     "56" {"1F-6000" (r 6000 1 nil) "1F-8000" (r 8000 1 nil)
+           "2F-6000" (r 6000 2 nil)}
+     "67" {"1F-6000" (r 6000 1 nil)
+           "2F-5000" (r 5000 1 3000)
+           "3F-4000" (r 4000 1 2000)}
+     "69" {"1F-6000" (r 6000 1 nil) "1F-9000" (r 9000 1 nil)
+           "2F-5000" (r 5000 1 3000)
+           "3F-4000" (r 4000 1 2000)}}))
+
+(def boston-zoning-schema
+  {:district-col            :Zoning_District
+   :subdistrict-col         :Zoning_Subdistrict
+   :subdistrict-type-col    :Subdistrict_Type
+   :max-far-col             :Max_FAR
+   :rear-setback-col        :Rear_Setback
+   :max-height-col          :Max_Height
+   :side-setback-col        :Side_Setback
+   :front-setback-col       :Front_Setback
+   :article-col             :Article
+   :subdistrict-code->attrs boston-subdistrict-code-attrs
+   :unique-code-sep         "_"})
+
+;; The three largest-* measures have no rule: the rule set names them to
+;; write their columns.
+(def boston-current-rule-data
+  (let [edges (fn [id types agg]
+                {:id id :quantity :length :form :edges :types types :key :setback :agg agg})
+        row   (fn [k] {:form :row :key k})]
+    {:measures (into zoning/canonical-measures
+                     [(edges :largest-front-setback [:front :primary-front] :max)
+                      (edges :largest-rear-setback [:rear] :max)
+                      (edges :largest-side-setback [:side] :max)])
+     :columns  {:front-setback         :actual-front-setback
+                :rear-setback          :actual-rear-setback
+                :side-setback          :actual-side-setback
+                :largest-front-setback :actual-largest-front-setback
+                :largest-rear-setback  :actual-largest-rear-setback
+                :largest-side-setback  :actual-largest-side-setback
+                :lot-area              :actual-lot-area
+                :building-lot-coverage :actual-lot-coverage
+                :gross-floor-area      :actual-gross-area
+                :dwelling-units        :actual-units
+                :floor-area-ratio      :calculated-far
+                :building-height       :actual-building-height}
+     :rules
+     [{:id :front :measure :front-setback :dir :floor :core? true
+       :limit (row :primary-front-setback)}
+      {:id :rear :measure :rear-setback :dir :floor :core? true
+       :limit (row :primary-rear-setback)}
+      {:id :side :measure :side-setback :dir :floor :core? true
+       :limit (row :primary-side-setback)}
+      {:id :lot-size :measure :lot-area :dir :floor :core? true
+       :limit {:form :first
+               :of [{:form :lookup :table boston-lot-area-rules
+                     :by [:primary-article :primary-subdistrict]}
+                    (row :primary-min-lot-size)]}
+       :lower-bound-without :dwelling-units
+       :required-column :required-lot-area}
+      {:id :unit-count :measure :dwelling-units :dir :ceiling :core? true
+       :limit (row :primary-max-unit-count)}
+      {:id :far :measure :floor-area-ratio :dir :ceiling :core? true
+       :limit (row :primary-max-far)}
+      ;; No lot-coverage limit is in the public layers, therefore the table
+      ;; is empty and the verdict is :unknown.
+      {:id :lot-coverage :measure :building-lot-coverage :dir :ceiling
+       :limit {:form :lookup :table {} :by [:primary-unique-code]}}
+      {:id :height :measure :building-height :dir :ceiling
+       :limit (row :primary-max-height)}]
+     :per-edge {:column :setbacks :rules [:front :rear :side]}}))
+
+(def boston-current-rules (zoning/rule-set boston-current-rule-data))
+
+;; Lengths are in feet. cg.parcel reads each key and holds no value of its
+;; own.
+(def boston-2026-thresholds
+  {:units                            boston-units
+   :min-front-street-width           20.0
+   :corner-max-angle-deg             135.0
+   :rear-angle-tolerance-deg         45.0
+   :pointed-lot-max-angle-deg        80.0
+   :pointed-lot-min-rear-length      10.0
+   :construct-imaginary-rear?        true
+   :primary-front-selector           :most-building-frontage
+   :treat-curved-street-as-tangent?  true
+   :split-edge-at-abutting-changes?  true
+   :abutting-split-min-segment-length 2.0
+   :min-frontage-length              10.0
+   :same-street-angle-deg            25.0
+   :same-street-offset               15.0
+   :same-street-gap                  25.0
+   :corner-gap                       40.0
+   :through-parallel-tol-deg         25.0
+   :vertex-tolerance                 1.0e-3
+   ;; The integer literals stay integers: a right-of-way probe that finds
+   ;; no parcel gives :right-of-way-width-max as it is.
+   :right-of-way-width-step          5
+   :right-of-way-width-max           500
+   :right-of-way-width-resolution    0.1
+   :slice-vertex-snap                0.1
+   :slice-dedup                      1.0e-3
+   :split-min-coarse                 6.0
+   :pointed-rear-step                0.5
+   :pointed-rear-max                 500
+   ;; The areas are in square feet. A one-story shed or garage is lower than
+   ;; :max-height, and a two-story building is higher.
+   :coverage-exempt-structure        {:max-area                 120.0
+                                      :small-dwelling-max-area  200.0
+                                      :small-dwelling-max-units 2
+                                      :max-height               15.0}})
+
+;; BLDG_HGT_2010 is in feet. A value of zero or less is missing data.
+(def boston-2026-opts
+  {:thresholds         boston-2026-thresholds
+   :schema             boston-parcel-schema
+   :building-height-fn (fn [mb] (let [h (:BLDG_HGT_2010 mb)]
+                                  (when (and (number? h) (pos? h)) (double h))))})
+
+;; Change analysis-version when a change to the analysis code makes the
+;; cached rows wrong. A change to the rule data makes a new key without it.
+(def analysis-version "15")
+
+(defn cache-hash
+  [scope-config]
+  (cache/version-hash [analysis-version layer-versions boston-current-rule-data
+                       scope-config]))
+
+(def debug-layer-specs
+  [["edges" :debug-edges] ["envelope" :debug-envelope]
+   ["boundary" :debug-boundary] ["setbacks" :debug-setbacks]])
+
+;; The units that a residential land use implies when an assessing record
+;; has no RES_UNITS.
+(def lu-implied-units {"R1" 1.0 "R2" 2.0 "R3" 3.0 "R4" 4.0})
+
+(defn ^:op roll-up-parcels
+  {:outputs {:result {:type :vector :role :table}}}
+  [^:table ^{:type :dataset} parcels-raw ^{:type :map} lu-implied-units]
+  (let [units (fn [row]
+                (let [ru (:RES_UNITS row)]
+                  (if (and ru (pos? ru)) (double ru) (get lu-implied-units (:LU row) 0.0))))]
+    (vec
+     (for [[mpid rows] (group-by :MAP_PAR_ID (ds/rows parcels-raw :as-maps))
+           :when mpid]
+       (let [r0 (first rows)]
+         (assoc r0
+                :EXIST_Total_Res_Units (reduce + 0.0 (map units rows))
+                :SUM_GROSS_AREA        (reduce + 0.0 (keep :GROSS_AREA rows))
+                :N_RECORDS             (count rows)))))))
+
+;; run-component gives these to run-model as :row-id-keys. The trace then
+;; names a parcel row by its parcel id.
+(def parcel-row-id-keys [:MAP_PAR_ID :id])
+
+;; The rung heads are fully qualified, because an aliased head resolves
+;; through the requires of the file that runs the op.
+
+(defn ^:op analyze-parcels
+  {:outputs {:result {:type :dataset :role :table}}}
+  [^:table ^{:type :dataset} rows
+   ^{:type :dataset} parcels
+   ^{:type :dataset} buildings
+   ^{:type :dataset} zoning
+   ^{:type :dataset} impervious
+   ^{:type :map} opts]
+  (table-> :rows
+    (cg.parcel/prepare-parcel)
+    (cg.parcel/preliminary-checks boston-parcel-schema)
+    (cg.parcel/determine-effective-boundary {})
+    (cg.parcel/analyze-parcel parcels buildings opts)
+    (cg.zoning/get-primary-zoning-info zoning boston-zoning-schema)
+    (cg.zoning/analyze-parcel-conformity {:parcel-schema boston-parcel-schema
+                                         :rules boston-current-rules})
+    (cg.parcel/analyze-parcel-impervious impervious)))
+
+(defn label-neighborhood
+  [row]
+  (assoc row
+         :nbhd (:primary-zoning-district row)
+         :primary-subdistrict
+         (when-let [uc (:primary-unique-code row)]
+           (let [i (str/index-of uc "_")]
+             (when i (subs uc (inc i)))))))
+
+;; A district fetches only the features near it, because a browser cannot
+;; hold a layer of the whole city.
+(defn near
+  [spec extent pad]
+  (let [[x0 y0 x1 y1] extent]
+    (assoc-in spec [:opts :extra-params]
+              {"geometry"     (str/join "," [(- x0 pad) (- y0 pad) (+ x1 pad) (+ y1 pad)])
+               "geometryType" "esriGeometryEnvelope"
+               "inSR"         (subs analysis-crs 5)
+               "spatialRel"   "esriSpatialRelIntersects"})))
+
+;; A query with inSR and no outSR gets its answer in the CRS of the layer.
+(def impervious-crs "EPSG:3857")
+
+;; A box in the analysis CRS is not a box in another CRS. The result is the
+;; extent of the four corners after the reprojection.
+(defn ^:async extent-in
+  "The extent of `extent` plus `pad`, in `crs`."
+  [crs extent pad]
+  (let [[x0 y0 x1 y1] extent
+        box (f/set-crs (f/polygon [[(- x0 pad) (- y0 pad)] [(+ x1 pad) (- y0 pad)]
+                                   [(+ x1 pad) (+ y1 pad)] [(- x0 pad) (+ y1 pad)]
+                                   [(- x0 pad) (- y0 pad)]])
+                       analysis-crs)
+        out (await (layer/reproject-to crs (ds/->dataset {:geometry [box]}) {}))]
+    (layer/extent (ds/column out :geometry))))
+
+;; The compute runs on the worker pool of the caller and writes no cache.
+(defn ^:async compute-district-analysis!
+  [scope]
+  (let [district      (:district scope)
+        zoning-raw    (columns/keywordize-cols (await (ds/ensure-dataset zoning-spec)))
+        zoning-2249   (layer/ensure-indexed (await (layer/reproject-to analysis-crs zoning-raw {})))
+        sub-rows      (zoning/district-subdistrict-rows zoning-2249 :Zoning_District district)
+        scope-union   (:geometry (geo/union sub-rows))
+        parcels-raw   (columns/keywordize-cols
+                       (await (ds/ensure-dataset
+                               (near parcels-spec (layer/extent [scope-union]) 1.0))))
+        rolled        (roll-up-parcels parcels-raw lu-implied-units)
+        parcels       (layer/ensure-indexed
+                       (ds/filter-intersecting (ds/->dataset rolled) scope-union))
+        ;; The buildings and the impervious polygons come from the envelope
+        ;; of the parcels, because a parcel at the edge of the district can
+        ;; go past the envelope of the district.
+        around        (layer/extent (ds/column parcels :geometry))
+        buildings-raw (columns/keywordize-cols
+                       (await (ds/ensure-dataset (near buildings-spec around 50.0))))
+        buildings     (layer/ensure-indexed
+                       (await (layer/reproject-to analysis-crs buildings-raw {})))
+        ;; One impervious polygon of the city has 931,046 vertices, and a
+        ;; phone tab cannot hold it. The fetch drops each of its holes and
+        ;; parts that is more than 500 ft from the parcels.
+        imp-box       (await (extent-in impervious-crs around 500.0))
+        ;; A page of 2000 of these polygons can pass the 50 MB buffer of the
+        ;; wasm fetch.
+        imp           (columns/keywordize-cols
+                       (await (ds/ensure-dataset
+                               ;; Only the reprojection feeds the rows, so the
+                               ;; raw layer does not stay in memory.
+                               (-> (near impervious-spec around 50.0)
+                                   (assoc :keep? false)
+                                   (assoc-in [:opts :result-record-count] 500)
+                                   (assoc-in [:opts :clip-extent] imp-box)))))
+        imp-2249      (layer/ensure-indexed
+                       (await (layer/reproject-to analysis-crs imp {:batch-size 4000})))
+        analyzed      (await (run/run-component
+                              "analyze-parcels"
+                              {:rows       parcels   :parcels    parcels
+                               :buildings  buildings :zoning     zoning-2249
+                               :impervious imp-2249
+                               :opts       boston-2026-opts}
+                              {:timeout-ms 5400000 :row-id-keys parcel-row-id-keys}))
+        rows          (mapv label-neighborhood (ds/rows analyzed :as-maps))]
+    {:analyzed-rows rows
+     :debug-layers  (parcel/debug-layers rows analysis-crs boston-units)
+     :zoning-2249   zoning-2249
+     :parcels       parcels
+     :buildings     buildings
+     :parcels-rolled-rows rolled
+     :subdistricts
+     (layer/tag-crs
+      (ds/->dataset {:geometry   (mapv :geometry sub-rows)
+                     "category"  (mapv :Zoning_Subdistrict sub-rows)
+                     "objectid"  (mapv :OBJECTID sub-rows)})
+      analysis-crs)}))
+
+;; The city scope gives no debug layers: its edge layer is about 470,000
+;; lines, and their reprojection needs more than a 16 GB heap. The compute
+;; runs on the worker pool of the caller and writes no cache.
+(defn ^:async compute-city-analysis!
+  []
+  (let [zoning-raw    (columns/keywordize-cols (await (ds/ensure-dataset zoning-spec)))
+        parcels-raw   (columns/keywordize-cols (await (ds/ensure-dataset parcels-spec)))
+        buildings-raw (columns/keywordize-cols (await (ds/ensure-dataset buildings-spec)))
+        rolled        (roll-up-parcels parcels-raw lu-implied-units)
+        zoning-2249   (layer/ensure-indexed (await (layer/reproject-to analysis-crs zoning-raw {})))
+        parcels       (layer/ensure-indexed (ds/->dataset rolled))
+        buildings     (layer/ensure-indexed
+                       (await (layer/reproject-to analysis-crs buildings-raw {})))
+        imp           (columns/keywordize-cols (await (ds/ensure-dataset impervious-spec)))
+        imp-2249      (layer/ensure-indexed
+                       (await (layer/reproject-to analysis-crs imp {:batch-size 4000})))
+        _             (println (str "city scope: " (ds/row-count parcels)
+                                    " parcels through the analysis flow"))
+        analyzed      (await (run/run-component
+                              "analyze-parcels"
+                              {:rows       parcels    :parcels    parcels
+                               :buildings  buildings  :zoning     zoning-2249
+                               :impervious imp-2249
+                               :opts       boston-2026-opts}
+                              {:timeout-ms 21600000 :row-id-keys parcel-row-id-keys}))
+        rows          (mapv label-neighborhood (ds/rows analyzed :as-maps))]
+    {:analyzed-rows rows
+     :zoning-2249   zoning-2249
+     :parcels       parcels
+     :buildings     buildings
+     :parcels-rolled-rows rolled}))
+
+;; Each cache is in EPSG:4326, because the map draws EPSG:4326. One pooled
+;; transform at write time replaces a reprojection at each map fetch.
+(def to-4326
+  (table-> :input (cg.dataset/transform-crs analysis-crs "EPSG:4326")))
+
+(defn reproject [dset]
+  (when dset (run/run-model to-4326 {:input dset} {:timeout-ms 1800000})))
+
+(defn good-rows [computed]
+  (filterv (fn [row] (and (:geometry row) (not (:error row))))
+           (:analyzed-rows computed)))
+
+(defn ^:async write-caches!
+  [computed prefix hash]
+  (let [_         (util/make-dirs! analysis-cache-dir)
+        rows-path (cache/layer-path analysis-cache-dir prefix hash "rows")
+        rows      (good-rows computed)
+        rows-2249 (mapv parcel/flatten-row rows)
+        out-4326  (await (reproject (ds/->dataset rows-2249)))]
+    ;; The file stores a keyword as a string and a boolean as a number. The
+    ;; sidecar records those columns, and the read gives the values back.
+    (cache/write-rows! out-4326 (columns/value-kinds rows) rows-path "EPSG:4326")
+    (doseq [[nm k] debug-layer-specs]
+      (when-let [dset (get (:debug-layers computed) k)]
+        (let [path (cache/layer-path analysis-cache-dir prefix hash (str "debug-" nm))]
+          (cache/write-layer! (await (reproject dset)) path "EPSG:4326"))))
+    (when-let [subs (:subdistricts computed)]
+      (cache/write-layer! (await (reproject subs))
+                          (cache/layer-path analysis-cache-dir prefix hash "subdistricts")
+                          "EPSG:4326"))
+    out-4326))
+
+;; The layers stay in memory on the JS runtime, because it cannot write a
+;; GeoPackage.
+(defn ^:async memory-layers
+  [computed]
+  (let [rows  (mapv parcel/flatten-row (good-rows computed))
+        debug (:debug-layers computed)]
+    {:analyzed-rows rows
+     :rows-4326     (layer/tag-crs (await (reproject (ds/->dataset rows))) "EPSG:4326")
+     :debug-layers  {:debug-edges    (await (reproject (:debug-edges debug)))
+                     :debug-envelope (await (reproject (:debug-envelope debug)))
+                     :debug-boundary (await (reproject (:debug-boundary debug)))
+                     :debug-setbacks (await (reproject (:debug-setbacks debug)))}
+     :subdistricts  (await (reproject (:subdistricts computed)))}))
+
+;; A map layer and an export hold a keyword as its name.
+(defn keyword-names
+  [row]
+  (reduce-kv (fn [m k v] (assoc m k (if (keyword? v) (name v) v))) {} row))
+
+;; A complete cache set, or nil. A district set has the rows and the four
+;; debug layers. A city set has the rows only. :rows-4326 is the flat rows
+;; as a map layer.
+(defn read-cached-analysis
+  [prefix hash]
+  (let [city?      (= prefix "boston-city")
+        rows-path  (cache/layer-path analysis-cache-dir prefix hash "rows")
+        kinds-path (cache/sidecar-path rows-path)
+        dpath      (fn [nm] (cache/layer-path analysis-cache-dir prefix hash (str "debug-" nm)))
+        paths      (cond-> [rows-path kinds-path]
+                     (not city?)
+                     (into (map (fn [[nm _]] (dpath nm)) debug-layer-specs)))]
+    (if (every? util/file-exists? paths)
+      (let [rows (cache/read-rows rows-path)]
+        {:source :cache
+         :analyzed-rows rows
+         :debug-layers (when-not city?
+                         (into {} (map (fn [[nm k]] [k (layer/read-geo-cache (dpath nm) "EPSG:4326")])
+                                       debug-layer-specs)))
+         :subdistricts (let [p (cache/layer-path analysis-cache-dir prefix
+                                                 hash "subdistricts")]
+                         (when (util/file-exists? p)
+                           (layer/read-geo-cache p "EPSG:4326")))
+         :rows-4326 (layer/tag-crs
+                     (layer/ensure-indexed (ds/->dataset (mapv keyword-names rows)))
+                     "EPSG:4326")})
+      nil)))
+
+;; opts: :scope, :city or {:district "<Zoning_District name>"}. A compute
+;; reads back the caches that it wrote, and a cache hit and a compute give
+;; the same :analyzed-rows and map layers. The cache read and the compute
+;; are let bindings, because the canvas draws each as a node.
+(defn ^:async ensure-analysis!
+  [opts]
+  (let [scope    (:scope opts)
+        city?    (= :city scope)
+        _        (when-not (or city? (and (map? scope) (:district scope)))
+                   (throw (ex-info "the scope must be :city or {:district name}"
+                                   {:scope scope})))
+        ;; The impervious layer feeds the rows, and its version is in the key.
+        config   (if city?
+                   {:scope scope :impervious-version (:version impervious-spec)}
+                   (assoc scope :impervious-version (:version impervious-spec)))
+        hash     (cache-hash config)
+        prefix   (if city? "boston-city" "boston-district")
+        files?   (ds/write-gdal?)
+        cached   (when files? (read-cached-analysis prefix hash))
+        computed (when-not cached
+                   (let [result   (await (if city?
+                                           (compute-city-analysis!)
+                                           (compute-district-analysis! scope)))
+                         out-4326 (when files? (await (write-caches! result prefix hash)))
+                         re-read  (if files?
+                                    (read-cached-analysis prefix hash)
+                                    (await (memory-layers result)))]
+                     (merge result
+                            (dissoc re-read :source)
+                            {:source :computed
+                             :computed-rows (:analyzed-rows result)
+                             :conformity-4326 (or out-4326 (:rows-4326 re-read))})))]
+    (or cached computed)))
+
+;; The lengths and areas of the exports are in feet and square feet.
+(defn ^:async export-district!
+  [district out-prefix]
+  (let [a    (await (ensure-analysis! {:scope {:district district}}))
+        ;; :indexed-id is the spatial index id of the compute. Because a
+        ;; cached row has string column names, the dissoc names both
+        ;; spellings.
+        rows (mapv #(dissoc % :indexed-id "indexed-id")
+                   (ds/rows (:rows-4326 a) :as-maps))
+        gpkg (str out-prefix ".gpkg")
+        csv  (str out-prefix ".csv")]
+    (cache/write-layer! (ds/->dataset rows) gpkg "EPSG:4326")
+    (ds/write-csv (ds/->dataset (mapv #(dissoc % :geometry) rows)) csv)
+    {:gpkg gpkg :csv csv :rows (count rows)}))
+
+;; ds/->dataset gives the columns in hash order. The exports put them in
+;; stable groups, with the geometry last.
+
+(def parcel-identity-columns
+  ["MAP_PAR_ID" "parcel_id" "PID" "fid" "ST_NUM" "ST_NAME" "UNIT_NUM" "nbhd"
+   "LU" "LU_DESC" "RES_UNITS" "COM_UNITS" "GROSS_AREA" "LIVING_AREA"
+   "LAND_SF" "YR_BUILT" "BLDG_SEQ" "NUM_BLDGS" "OWN_OCC"
+   "N_RECORDS" "SUM_GROSS_AREA" "EXIST_Total_Res_Units"])
+
+(def lot-analysis-columns
+  ["lot_type" "is_corner" "is_through" "frontage_count"
+   "street_edge_count" "lot_edge_count" "edge_method" "is_rectangular"
+   "lot_area" "street_frontage" "envelope_area"
+   "envelope_ratio" "building_coverage_area" "building_coverage_ratio"
+   "building_coverage_excluded_count" "building_coverage_excluded_area"
+   "is_buildings_analyzed" "main_building_footprint_area"
+   "main_building_height" "calculated_far" "impervious_area" "pct_impervious"])
+
+(def boston-export-order
+  {:ordered [parcel-identity-columns lot-analysis-columns]
+   :groups  [{:prefix "actual_"}
+             {:prefix "primary_"}
+             {:contains "conformity"}]})
+
+;; opts ({} for none): :only-corner? true keeps the corner parcels,
+;; :only-lot-types is a set of lot-type names to keep, and :layer is the GPKG
+;; layer name (default "boston_parcels"). :lot-types in the result is the
+;; tally before the filters.
+(defn ^:async export-city!
+  [out-prefix opts]
+  (let [a     (await (ensure-analysis! {:scope :city}))
+        rows  (ds/rows (:rows-4326 a) :as-maps)
+        lot-type (fn [r] (or (:lot-type r) (get r "lot-type")))
+        corner-flag (fn [r] (boolean (or (:corner? r) (get r "corner?"))))
+        tally (reduce (fn [m r]
+                        (let [k (or (lot-type r) "nil")]
+                          (assoc m k (inc (get m k 0)))))
+                      {} rows)
+        keep? (:only-lot-types opts)
+        rows  (cond
+                (:only-corner? opts) (filterv corner-flag rows)
+                keep? (filterv #(contains? keep? (lot-type %)) rows)
+                :else rows)]
+    (assoc (export/export-rows! rows out-prefix
+                                (or (:layer opts) "boston_parcels")
+                                boston-export-order)
+           :lot-types tally)))
+
+(defn print-summary
+  [analysis]
+  (let [rows (:analyzed-rows analysis)]
+    (println (str "boston[" (name (:source analysis)) "]: "
+                  (count rows) " analyzed parcels"))
+    (doseq [[verdict n] (sort-by (comp str key)
+                                 (frequencies (map :overall-conformity rows)))]
+      (println (str "  " (if verdict (name verdict) "no verdict") ": " n)))))
+
+;; The analysis runs only when this file is the opened file or the file of
+;; a run. Each def is a top-level form, because the JS runtime finds a def at
+;; the start of a line.
+
+(def session-analysis
+  (when (or (= "boston.cg" (run/session-file))
+            (= "boston.cg" (run/script-file)))
+    (await (ensure-analysis! {:scope scope}))))
+(def debug-edges (:debug-edges (:debug-layers session-analysis)))
+(def debug-envelope (:debug-envelope (:debug-layers session-analysis)))
+(def debug-boundary (:debug-boundary (:debug-layers session-analysis)))
+(def debug-setbacks (:debug-setbacks (:debug-layers session-analysis)))
+(def subdistricts (:subdistricts session-analysis))
+(def parcels (:rows-4326 session-analysis))
+(when session-analysis (print-summary session-analysis))
+
+;; The colors are in legend order. Teal against orange stays distinct with
+;; red-green color blindness, which green against red does not.
+(def verdict-colors
+  {:conforming     "#009d9a"
+   :nonconforming  "#eb6200"
+   :unknown        "#525252"
+   :not-applicable "#a8a8a8"})
+
+;; These are not verdict colors, because an edge is drawn on a parcel.
+(def edge-type-colors
+  {:front "#1192e8" :primary-front "#6929c4" :side "#005d5d" :rear "#fa4d56"})
+
+(def rule-labels
+  {:front "Front setback" :rear "Rear setback" :side "Side setback"
+   :lot-size "Lot size" :unit-count "Units" :far "FAR"
+   :lot-coverage "Lot coverage" :height "Height"})
+
+(def parcel-popup
+  (zoning/rule-popup
+   boston-current-rules
+   {:title  [:ST_NUM :ST_NAME]
+    :labels rule-labels
+    :units  boston-units
+    :facts  [{:label "Parcel" :value :MAP_PAR_ID}
+             {:label "Land use" :value :LU_DESC}
+             {:label "Subdistrict" :value :primary-subdistrict}
+             :lot-type
+             {:label "Street frontage" :value :street-frontage :unit "ft"}
+             {:label "Building coverage" :value :actual-lot-coverage :format :percent}
+             {:label "Impervious surface" :value :pct-impervious :unit "%"}]}))
+
+;; A map run of conformity also draws these two models, because each
+;; ends in map-layer. The debug layers have string column names (see cg.parcel).
+(def edges
+  (table-> :debug-edges
+    (map-layer {:name "edges" :kind :line :counts false
+                :color-by "category" :colors edge-type-colors
+                :popup {:title "parcel-id" :status "category"}})))
+
+(def setbacks
+  (table-> :debug-setbacks
+    (map-layer {:name "setbacks" :kind :line :counts false
+                :color-by "category" :colors edge-type-colors
+                :popup {:title "parcel-id" :status "category" :facts ["label"]}})))
+
+;; The last model of the file, which a script run gives.
+(def conformity
+  (table-> :parcels
+    (map-layer {:name "conformity" :kind :fill :opacity 0.55
+                :color-by :overall-conformity :colors verdict-colors
+                :popup parcel-popup})))

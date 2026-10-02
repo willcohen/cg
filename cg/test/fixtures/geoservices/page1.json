@@ -1,0 +1,20 @@
+{
+  "objectIdFieldName": "OBJECTID",
+  "geometryType": "esriGeometryPolygon",
+  "spatialReference": { "wkid": 4326, "latestWkid": 4326 },
+  "exceededTransferLimit": true,
+  "fields": [
+    { "name": "OBJECTID", "type": "esriFieldTypeOID", "alias": "OBJECTID" },
+    { "name": "NAME", "type": "esriFieldTypeString", "alias": "NAME", "length": 32 }
+  ],
+  "features": [
+    {
+      "attributes": { "OBJECTID": 1, "NAME": "A" },
+      "geometry": { "rings": [ [ [0, 0], [0, 1], [1, 1], [1, 0], [0, 0] ] ] }
+    },
+    {
+      "attributes": { "OBJECTID": 2, "NAME": "B" },
+      "geometry": { "rings": [ [ [1, 0], [1, 1], [2, 1], [2, 0], [1, 0] ] ] }
+    }
+  ]
+}

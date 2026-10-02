@@ -1,0 +1,6 @@
+<svg xmlns="http://www.w3.org/2000/svg" width="512" height="512" viewBox="0 0 512 512">
+  <rect width="512" height="512" rx="96" fill="#11161F"/>
+  <text x="50%" y="52%" dominant-baseline="central" text-anchor="middle"
+        font-family="system-ui,-apple-system,Segoe UI,sans-serif" font-weight="700"
+        font-size="230" fill="#4D9DFF">CG</text>
+</svg>

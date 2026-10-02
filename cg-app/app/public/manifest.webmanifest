@@ -1,0 +1,12 @@
+{
+  "name": "CG",
+  "short_name": "CG",
+  "start_url": "./",
+  "scope": "./",
+  "display": "standalone",
+  "background_color": "#11161F",
+  "theme_color": "#11161F",
+  "icons": [
+    { "src": "./icon.svg", "sizes": "any", "type": "image/svg+xml", "purpose": "any maskable" }
+  ]
+}

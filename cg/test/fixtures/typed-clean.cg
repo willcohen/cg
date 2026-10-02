@@ -1,0 +1,90 @@
+;; typed-clean.cg — fixture for cg.parser.types passes 1-3.
+;;
+;; Exercises:
+;;   - Loader binding with a string arg (ds/load-geojson).
+;;   - Numeric parameter used as a geo/buffer distance.
+;;   - Multi-op item-> model over the loader's output.
+;;   - User-defined ops (defn with ^:op) and downstream models that use
+;;     them as rungs.
+;;
+;; All op heads resolve via the built-in registry or the projected
+;; ops; all arg counts fit the signatures; all arg types match.
+;; Expectation: zero :unresolved-op / :op-arity-mismatch / :type-mismatch.
+
+(require '[cg.macros :refer [item-> table->]])
+(require '[cg.geo :as geo])
+(require '[cg.dataset :as ds])
+
+(def buffer-distance 50)
+
+(def parcels (ds/load-geojson "parcels.geojson"))
+
+(def buffered-model
+  (item-> :parcels
+    (geo/buffer buffer-distance)
+    (geo/simplify 1.0)
+    (geo/centroid)))
+
+(defn ^:op measure-parcel
+  {:outputs {:area {:type :number}}}
+  [^:row ^{:type :feature} parcel]
+  (geo/area parcel))
+
+;; A pipeline body is a table op: a row op returns a value.
+(defn ^:op measure-parcels
+  {:outputs {:area {:type :number}}}
+  [^:table parcels]
+  (item-> :parcels (geo/area)))
+
+(defn ^:op centroid-of
+  {:outputs {:c {:type :feature}}}
+  [^:row ^{:type :feature} parcel]
+  (let [c (geo/centroid parcel)]
+    c))
+
+(defn ^:op guarded-buffer
+  {:outputs {:f {:type :feature}}}
+  [^:row ^{:type :feature} parcel]
+  (when (some? parcel)
+    (geo/buffer parcel 5)))
+
+(defn ^:op reduce-areas
+  {:outputs {:total {:type :number}}}
+  [^:reducer ^{:type :dataset} group]
+  (reduce + 0 (map geo/area group)))
+
+(def parcel-areas
+  (item-> :parcels
+    (measure-parcel)))
+
+(def measured
+  (table-> :parcels
+    (measure-parcels)))
+
+(def reprojected
+  (table-> :input
+    (ds/transform-crs "EPSG:2249")))
+
+;; Distinguished ops (partition-by / aggregate / coalesce) exercised
+;; through built-in signatures. The parser only needs to admit +
+;; type-check these heads.
+(def grouped-parcels
+  (table-> :parcels
+    (partition-by :neighborhood)
+    (aggregate {:total {:op :sum :over :area}})))
+
+;; filter-by-column with a registered predicate.
+(def big-parcels
+  (table-> :parcels
+    (ds/filter-by-column :area :gt 1000)))
+
+(defn ^:op fill-defaults
+  {:outputs {:n {:type :number}}}
+  [^:table counts]
+  (item-> :counts (coalesce 0)))
+
+;; Sink pipeline: bare top-level threading-macro form whose
+;; terminal op is @sink-kind in cg.dsl.signatures/built-ins. The parser
+;; promotes this into CgFlow.sinks (no Model entry, no diagnostic).
+(table-> :big-parcels
+  (ds/write-geojson "out.geojson"))

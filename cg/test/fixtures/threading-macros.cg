@@ -1,0 +1,27 @@
+;; threading-macros.cg - Demonstrates the CG threading macros.
+;;
+;; Run with: cg run test/fixtures/threading-macros.cg --data parcels=<path>
+
+(require '[cg.macros :refer [item-> coll->]])
+(require '[cg.geo :as geo])
+
+(def buffer-simplify-model
+  (item-> :parcels
+    (geo/buffer 10)
+    (geo/simplify 1.0)))
+
+(def union-model
+  (coll-> :parcels
+    (geo/union)))
+
+(def centroid-model
+  (item-> :parcels
+    (geo/buffer 5)
+    (geo/simplify 0.5)
+    (geo/centroid)))
+
+(def configured-model
+  (item-> :parcels
+    (geo/buffer 10 {:quad-segs 8})
+    {:parallelism 4
+     :timeout-ms 10000}))

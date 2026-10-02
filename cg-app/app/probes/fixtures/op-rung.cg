@@ -1,0 +1,17 @@
+(require '[cg.macros :refer [item->]])
+(require '[cg.geo :as geo])
+(require '[cg.feature :as f])
+
+;; An op as a rung on the JS backend: measure-parcel as
+;; cg/test/fixtures/typed-clean.cg declares it, over one 10 x 10 square.
+(defn ^:op measure-parcel
+  {:outputs {:area {:type :number}}}
+  [^:row ^{:type :feature} parcel]
+  (geo/area parcel))
+
+(def squares
+  [(f/polygon [[0 0] [10 0] [10 10] [0 10] [0 0]])])
+
+(def areas
+  (item-> :squares
+    (measure-parcel)))

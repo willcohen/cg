@@ -1,0 +1,773 @@
+(ns cg.zoning
+  "The zoning district of a lot, and a verdict for each rule of a rule
+   set. get-primary-zoning-info gives a parcel row the district that covers
+   the largest part of the lot. analyze-parcel-conformity compares the
+   measurements of cg.parcel with the rules that the caller gives as data
+   (see rule-set). This module holds no rule and no column name of a city."
+  (:require [cg.dataset :as ds]
+            [cg.geo :as geo]
+            [cg.run :as run]
+            [cg.util :as util]))
+
+(run/load-module "src/cg/parcel.cg")
+(clojure.core/require '[cg.parcel :as parcel])
+
+;; The zoning schema is the map that the caller gives to
+;; get-primary-zoning-info. A missing key throws. These keys name columns
+;; of the zoning dataset: :district-col,
+;; :subdistrict-col, :subdistrict-type-col, :article-col, :max-far-col,
+;; :max-height-col, :front-setback-col, :rear-setback-col, :side-setback-col.
+;;   :subdistrict-code->attrs  fn of a subdistrict code, gives
+;;                             {:max-unit-count :min-lot-size}
+;;   :unique-code-sep          string between the district and the
+;;                             subdistrict in :primary-unique-code
+
+(def ^:private default-zoning-attributes
+  {:primary-unique-code      nil
+   :primary-article          nil
+   :primary-zoning-district  nil
+   :primary-subdistrict      nil
+   :primary-subdistrict-type nil
+   :primary-max-far          nil
+   :primary-rear-setback     nil
+   :primary-max-height       nil
+   :primary-side-setback     nil
+   :primary-front-setback    nil
+   :primary-max-unit-count   nil
+   :primary-min-lot-size     nil})
+
+(defn safe-parse-double [v]
+  (cond
+    (number? v) (double v)
+    (string? v) (util/parse-double v)
+    :else       nil))
+
+(defn safe-parse-long [v]
+  (cond
+    (integer? v) v
+    (number? v)  (long v)
+    (string? v)  (some-> (util/parse-double v) long)
+    :else        nil))
+
+(defn score-zoning-intersections
+  "The rows of `zoning-dataset` whose intersection with `parcel-geom` has
+   an area of more than zero, each with that area as :intersection-area."
+  [parcel-geom zoning-dataset]
+  (if-not (and parcel-geom
+               (not (geo/empty? parcel-geom))
+               zoning-dataset)
+    []
+    (keep (fn [zone]
+            (let [inter (geo/intersection parcel-geom (:geometry zone))]
+              (when (and inter (not (geo/empty? inter)) (pos? (geo/area inter)))
+                (assoc zone :intersection-area (geo/area inter)))))
+          (ds/rows (ds/select-intersects zoning-dataset parcel-geom) :as-maps))))
+
+(defn- zone-to-primary-attrs
+  "The map of :primary-* attributes of the zone row `winner-zone`.
+   `schema` is the zoning schema. A nil `winner-zone` gives
+   default-zoning-attributes."
+  [winner-zone schema]
+  (if-not winner-zone
+    default-zoning-attributes
+    (let [sv          (fn [k] (parcel/schema-value schema "the zoning schema" k))
+          col         (fn [k] (get winner-zone (sv k)))
+          district    (col :district-col)
+          subdistrict (col :subdistrict-col)
+          code-attrs  ((sv :subdistrict-code->attrs) subdistrict)]
+      {:primary-unique-code      (when (and district subdistrict)
+                                    (str district (sv :unique-code-sep)
+                                         subdistrict))
+       :primary-article          (col :article-col)
+       :primary-zoning-district  district
+       :primary-subdistrict      subdistrict
+       :primary-subdistrict-type (col :subdistrict-type-col)
+       :primary-max-far          (safe-parse-double (col :max-far-col))
+       :primary-rear-setback     (safe-parse-double (col :rear-setback-col))
+       :primary-max-height       (safe-parse-double (col :max-height-col))
+       :primary-side-setback     (safe-parse-double (col :side-setback-col))
+       :primary-front-setback    (safe-parse-double (col :front-setback-col))
+       :primary-max-unit-count   (:max-unit-count code-attrs)
+       :primary-min-lot-size     (:min-lot-size code-attrs)})))
+
+(defn get-primary-zoning-info-by-geom
+  "The :primary-* attributes of the zone of `zoning-dataset` that has the
+   largest intersection with `parcel-geom`, under the zoning schema
+   `schema`. If no zone intersects the parcel, the result is
+   default-zoning-attributes. The result does not change with the sequence
+   of the zone rows."
+  [parcel-geom zoning-dataset schema]
+  (let [scored (score-zoning-intersections parcel-geom zoning-dataset)
+        winner (parcel/max-by-stable :intersection-area
+                              #(parcel/geom-sort-key (:geometry %))
+                              scored)]
+    (zone-to-primary-attrs winner schema)))
+
+(defn ^:op get-primary-zoning-info
+  {:row-reads #{:geometry}
+   :row-writes #{:primary-unique-code :primary-article
+                 :primary-zoning-district :primary-subdistrict
+                 :primary-subdistrict-type
+                 :primary-max-far :primary-rear-setback
+                 :primary-max-height :primary-side-setback
+                 :primary-front-setback :primary-max-unit-count
+                 :primary-min-lot-size}
+   :outputs {:result {:type :map}}}
+  [^:row ^{:type :map} parcel-row
+   ^{:type :dataset} zoning-dataset
+   ^{:type :map} zoning-schema]
+  (reduce-kv assoc! parcel-row
+             (get-primary-zoning-info-by-geom (:geometry parcel-row)
+                                               zoning-dataset
+                                               zoning-schema)))
+
+(defn- arithmetic
+  "The result of the operator `op` on `args`. It is nil when an operand is
+   not a number, and when a divisor is 0. :+, :- and :* keep a long. :/
+   divides doubles, because two longs give a ratio on the JVM."
+  [op args]
+  (cond
+    (not (every? number? args)) nil
+    (= op :+)       (reduce + args)
+    (= op :-)       (reduce - args)
+    (= op :*)       (reduce * args)
+    (= op :larger)  (reduce max args)
+    (= op :smaller) (reduce min args)
+    (= op :/)       (when-not (some zero? (rest args))
+                      (reduce / (map double args)))))
+
+(defn limit-value
+  "The number that `limit` gives, or nil. `limit` is a number, a measure id,
+   a limit form (a map with :form) or an expression (a vector that starts
+   with an operator). `values` is the map of measure id to value, and
+   `facts` is the row. See rule-set for each form."
+  [limit values facts]
+  (cond
+    (number? limit) limit
+
+    (vector? limit)
+    (arithmetic (first limit) (mapv #(limit-value % values facts) (rest limit)))
+
+    (map? limit)
+    (let [form (:form limit)]
+      (cond
+        (= form :row)
+        (let [v (get facts (:key limit))] (when (number? v) v))
+
+        (= form :lookup)
+        (limit-value (get-in (:table limit)
+                             (into (mapv #(get facts %) (:by limit)) (:at limit)))
+                     values facts)
+
+        (= form :brackets)
+        (let [v (get values (:by limit))]
+          (when (number? v)
+            (when-let [step (first (filter #(or (nil? (:up-to %)) (<= v (:up-to %)))
+                                           (:steps limit)))]
+              (limit-value (:limit step) values facts))))
+
+        (= form :per-unit)
+        (let [n (get values (:by limit))]
+          (if (number? n)
+            (+ (:base limit)
+               (* (max 0 (- n (or (:base-n limit) 0))) (or (:per limit) 0)))
+            (:base limit)))
+
+        (= form :first)
+        (first (keep #(limit-value % values facts) (:of limit)))))
+
+    (nil? limit) nil
+
+    :else
+    (let [v (get values limit)] (when (number? v) v))))
+
+(defn- named? [x] (or (keyword? x) (string? x)))
+
+(defn- same-value?
+  "True when `a` and `b` are equal. 2 and 2.0 are equal. A keyword and its
+   name are equal, because a cached row and the JS runtime hold the name."
+  [a b]
+  (cond
+    (and (number? a) (number? b)) (== a b)
+    (and (named? a) (named? b))   (= (name a) (name b))
+    :else                         (= a b)))
+
+(defn- condition-operand [x values facts]
+  (cond
+    (or (true? x) (false? x)) x
+    (named? x)                (get values x)
+    :else                     (limit-value x values facts)))
+
+(defn condition-value
+  "The value of `condition`: true, false, or nil when an operand has no
+   value. See rule-set for each operator."
+  [condition values facts]
+  (let [op   (first condition)
+        args (rest condition)
+        part (fn [c] (condition-value c values facts))]
+    (cond
+      (= op :and)
+      (let [vs (mapv part args)]
+        (cond (some false? vs) false
+              (some nil? vs)   nil
+              :else            true))
+
+      (= op :or)
+      (let [vs (mapv part args)]
+        (cond (some true? vs) true
+              (some nil? vs)  nil
+              :else           false))
+
+      (= op :not)
+      (let [v (part (first args))]
+        (when (some? v) (not v)))
+
+      (= op :in)
+      (let [v (get values (first args))]
+        (when (some? v)
+          (boolean (some #(same-value? v %) (second args)))))
+
+      :else
+      (let [a (condition-operand (first args) values facts)
+            b (condition-operand (second args) values facts)]
+        (when (and (some? a) (some? b))
+          (cond
+            (= op :=)    (same-value? a b)
+            (= op :not=) (not (same-value? a b))
+            (not (and (number? a) (number? b))) nil
+            (= op :<)    (< a b)
+            (= op :<=)   (<= a b)
+            (= op :>)    (> a b)
+            (= op :>=)   (>= a b)))))))
+
+;; The measures of a lot that a rule can limit: a name, and how to read the
+;; value from an analyzed row. A rule set names its :measures, and it can
+;; add its own.
+(def canonical-measures
+  [{:id :front-setback :quantity :length :form :edges
+    :types [:front :primary-front] :key :setback :agg :min}
+   {:id :rear-setback :quantity :length :form :edges :types [:rear] :key :setback :agg :min}
+   {:id :side-setback :quantity :length :form :edges :types [:side] :key :setback :agg :min}
+   {:id :cumulative-side-setback :quantity :length :form :edges
+    :types [:side] :key :setback :agg :sum}
+   {:id :lot-area :quantity :area :form :metric :key :lot-area}
+   {:id :building-lot-coverage :quantity :ratio :form :metric :key :building-coverage-ratio}
+   {:id :building-footprint :quantity :area :form :row :key :main-building-footprint-area}
+   {:id :building-height :quantity :length :form :row :key :main-building-height}
+   {:id :roof-slope :quantity :ratio :form :row :key :main-building-roof-slope}
+   {:id :gross-floor-area :quantity :area :form :schema-col :key :gross-area-col :parse :double}
+   {:id :dwelling-units :quantity :count :form :schema-col :key :units-col
+    :parse :long :pos-only? true}
+   {:id :off-street-parking-spaces :quantity :count :form :schema-col :key :parking-col
+    :parse :long}
+   {:id :floor-area-ratio :quantity :ratio :form :ratio :num :gross-floor-area :den :lot-area}
+   {:id :lot-area-per-dwelling-unit :quantity :area :form :ratio
+    :num :lot-area :den :dwelling-units}])
+
+(defn- edge-values
+  "The numeric values of the key `k` on the edges whose :edge-type is one
+   of `types`."
+  [edges types k]
+  (->> edges
+       (filter (fn [e] (some #(= (:edge-type e) %) types)))
+       (keep #(get % k))
+       (filter number?)))
+
+(defn- aggregate
+  "The :min, :max or :sum of `vals`, or nil when `vals` is empty."
+  [agg vals]
+  (when (seq vals)
+    (cond
+      (= agg :min) (apply min vals)
+      (= agg :max) (apply max vals)
+      (= agg :sum) (reduce + vals))))
+
+(defn- raw-measure
+  "The value of the measure `spec` before the :pos-only? filter. `values`
+   holds the measures that come before it."
+  [spec values row parcel-schema]
+  (let [form (:form spec)]
+    (cond
+      (= form :row)    (get row (:key spec))
+      (= form :metric) (get (get row :metrics) (:key spec))
+      (= form :edges)  (aggregate (:agg spec)
+                                  (edge-values (get row :edges) (:types spec) (:key spec)))
+      (= form :alias)  (get values (:of spec))
+
+      (= form :schema-col)
+      (let [col   (get parcel-schema (:key spec))
+            v     (when (some? col) (get row col))
+            parse (:parse spec)]
+        (cond
+          (= parse :long)   (safe-parse-long v)
+          (= parse :double) (safe-parse-double v)
+          :else             v))
+
+      (= form :ratio)
+      (let [n (get values (:num spec))
+            d (get values (:den spec))]
+        (when (and (number? n) (number? d) (pos? d))
+          (/ (double n) (double d)))))))
+
+(defn- measure-pass
+  "{:values {id value} :raw {id value}}. :values is for the rules. :raw
+   holds each :pos-only? measure before the filter, because its column
+   keeps the value that the data gives."
+  [rule-set row parcel-schema]
+  (reduce (fn [acc spec]
+            (let [id (:id spec)
+                  v  (raw-measure spec (:values acc) row parcel-schema)]
+              (if (:pos-only? spec)
+                {:values (assoc (:values acc) id (when (and (number? v) (pos? v)) v))
+                 :raw    (assoc (:raw acc) id v)}
+                (assoc acc :values (assoc (:values acc) id v)))))
+          {:values {} :raw {}}
+          (:measures rule-set)))
+
+(defn measure-values
+  "The map of measure id to value for `row`, as the rules read it.
+   `rule-set` holds :measures in an order where a :ratio or :alias measure
+   comes after the measures that it reads, as rule-set gives them."
+  [rule-set row parcel-schema]
+  (:values (measure-pass rule-set row parcel-schema)))
+
+(def ^:private measure-forms [:row :metric :schema-col :edges :ratio :alias])
+(def ^:private limit-forms [:row :lookup :brackets :per-unit :first])
+(def ^:private arithmetic-operators [:+ :- :* :/ :larger :smaller])
+(def ^:private condition-operators [:= :not= :< :<= :> :>= :in :and :or :not])
+
+(defn- label [x] (if (named? x) (name x) (pr-str x)))
+
+(defn- labels [xs] (apply str (interpose ", " (map label xs))))
+
+(defn- check-legal!
+  "Throw when `x` is not one of `legal`. The message names `x` and lists
+   the legal values."
+  [where what x legal]
+  (when-not (some #(= x %) legal)
+    (throw (ex-info (str where ": " what " " (label x) " is not legal. The legal values are: "
+                         (labels legal) ".")
+                    {:value x :legal legal}))))
+
+(defn- check-distinct!
+  [what xs]
+  (reduce (fn [seen x]
+            (when (get seen (label x))
+              (throw (ex-info (str "rule-set: two " what " " (label x) ".") {:value x})))
+            (assoc seen (label x) true))
+          {} xs))
+
+(defn- table-leaves [table depth]
+  (if (and (pos? depth) (map? table))
+    (mapcat #(table-leaves % (dec depth)) (vals table))
+    [table]))
+
+(defn- limit-measure-ids
+  "The measure ids that `limit` reads. It throws for a limit form or an
+   operator that is not legal."
+  [where limit]
+  (cond
+    (or (nil? limit) (number? limit)) []
+
+    (vector? limit)
+    (do (check-legal! where "the operator" (first limit) arithmetic-operators)
+        (vec (mapcat #(limit-measure-ids where %) (rest limit))))
+
+    (map? limit)
+    (let [form (:form limit)
+          ids  (fn [limits] (vec (mapcat #(limit-measure-ids where %) limits)))]
+      (check-legal! where "the limit form" form limit-forms)
+      (cond
+        (= form :brackets) (into [(:by limit)] (ids (map #(:limit %) (:steps limit))))
+        (= form :per-unit) [(:by limit)]
+        (= form :first)    (ids (:of limit))
+        (= form :lookup)   (ids (table-leaves (:table limit)
+                                              (+ (count (:by limit)) (count (:at limit)))))
+        :else              []))
+
+    :else [limit]))
+
+(defn- condition-measure-ids
+  "The measure ids that `condition` reads. It throws for an operator that
+   is not legal."
+  [where condition]
+  (let [op   (when (vector? condition) (first condition))
+        args (when (vector? condition) (rest condition))]
+    (check-legal! where "the condition operator" op condition-operators)
+    (cond
+      (or (= op :and) (= op :or) (= op :not))
+      (vec (mapcat #(condition-measure-ids where %) args))
+
+      (= op :in)
+      [(first args)]
+
+      :else
+      (vec (mapcat (fn [x] (if (or (true? x) (false? x)) [] (limit-measure-ids where x)))
+                   args)))))
+
+(defn- check-measure! [spec measure-ids]
+  (let [where (str "measure " (label (:id spec)))
+        form  (:form spec)
+        need! (fn [id] (check-legal! where "the measure" id measure-ids))]
+    (check-legal! where "the measure form" form measure-forms)
+    (cond
+      (= form :edges)      (check-legal! where "the aggregate" (:agg spec) [:min :max :sum])
+      (= form :schema-col) (when (some? (:parse spec))
+                             (check-legal! where "the parse" (:parse spec) [:long :double]))
+      (= form :ratio)      (do (need! (:num spec)) (need! (:den spec)))
+      (= form :alias)      (need! (:of spec)))))
+
+(defn- measure-reads [spec]
+  (cond
+    (= :ratio (:form spec)) [(:num spec) (:den spec)]
+    (= :alias (:form spec)) [(:of spec)]
+    :else                   []))
+
+(defn- ordered-measures
+  "`specs` in an order where each measure comes after the measures that it
+   reads. It throws when a measure reads itself."
+  [specs]
+  (loop [todo specs
+         done []
+         seen {}]
+    (if (empty? todo)
+      done
+      (let [ready? (fn [spec] (every? #(get seen %) (measure-reads spec)))
+            ready  (filterv ready? todo)]
+        (when (empty? ready)
+          (throw (ex-info (str "rule-set: a measure reads itself through :alias or :ratio: "
+                               (labels (map #(:id %) todo)) ".")
+                          {:measures (mapv #(:id %) todo)})))
+        (recur (filterv #(not (ready? %)) todo)
+               (into done ready)
+               (reduce (fn [m spec] (assoc m (:id spec) true)) seen ready))))))
+
+(defn- column-key [suffix & parts]
+  (keyword (str (apply str parts) (when suffix (str "-" (name suffix))))))
+
+(defn- prepare-rule
+  "`rule` with its column names and with :reads, the measure ids that it
+   reads. `earlier` holds the ids of the rules before it."
+  [rule data measure-ids earlier]
+  (let [id     (:id rule)
+        where  (str "rule " (label id))
+        suffix (:suffix data)
+        column (column-key suffix (if (:column rule)
+                                    (name (:column rule))
+                                    (str (name id) "-conformity")))]
+    (if (:all-of rule)
+      (do (doseq [r (:all-of rule)]
+            (check-legal! where "the rule in :all-of" r earlier))
+          (assoc rule :column column :reads []))
+      (let [m-times (:margin-times rule)
+            reads   (vec (concat [(:measure rule)]
+                                 (limit-measure-ids where (:limit rule))
+                                 (when (contains? rule :when)
+                                   (condition-measure-ids where (:when rule)))
+                                 (when (:lower-bound-without rule) [(:lower-bound-without rule)])
+                                 (when m-times [m-times])))]
+        (doseq [m reads]
+          (check-legal! where "the measure" m measure-ids))
+        (check-legal! where "the direction" (:dir rule) [:floor :ceiling])
+        (assoc rule
+               :column column
+               :reads reads
+               :required-column
+               (cond
+                 (:required-column rule) (column-key suffix (name (:required-column rule)))
+                 (:required? data)       (column-key suffix "required-" (name id)))
+               :margin-column
+               (when (:margins? data) (column-key suffix (name id) "-margin"))
+               :scaled-margin-column
+               (when (and (:margins? data) m-times)
+                 (column-key suffix (name id) "-margin-times-" (name m-times))))))))
+
+(defn rule-set
+  "Check the rule set `data` and give it in the form that the checker
+   reads. It throws when the data is not legal, and the message lists the
+   legal values. The data holds no fn.
+
+   data:
+     :measures   vector of measure specs. canonical-measures is the usual
+                 start.
+     :rules      vector of rules.
+     :columns    optional map of measure id to column name. With the map,
+                 the checker writes only those measures. With no map, it
+                 writes actual-<id> for each measure that a rule reads.
+     :per-edge   optional {:column c :rules [rule ids]}. The column gets
+                 one verdict for each edge, from the listed rule whose
+                 measure reads that edge type.
+     :suffix     optional text that goes last on each column name.
+     :required?  true writes required-<rule id>, the limit of each rule.
+     :margins?   true writes <rule id>-margin for each rule.
+
+   A measure spec is {:id :quantity :form ...}. :quantity is a label, and
+   the checker does not read it. :form is one of:
+     :row         :key is a key of the row.
+     :metric      :key is a key of the :metrics of the row.
+     :schema-col  :key is a key of the parcel schema, which names a column
+                  of the row. :parse is :long or :double. :pos-only? true
+                  makes a value that is not positive unknown.
+     :edges       :types are edge types, :key is a key of an edge, and :agg
+                  is :min, :max or :sum.
+     :ratio       :num and :den are measure ids.
+     :alias       :of is a measure id.
+
+   A rule is {:id :measure :dir :limit}. :dir is :floor (the value must be
+   at least the limit) or :ceiling (at most the limit). A value equal to
+   the limit conforms. Optional keys:
+     :core? true             the rule enters the overall verdict.
+     :when c                 the rule applies only when the condition c is
+                             true.
+     :lower-bound-without m  when the measure m is unknown, :conforming
+                             becomes :unknown.
+     :column, :required-column  column names.
+     :margin-times m         a second margin, multiplied by the measure m.
+   A rule {:id :all-of [rule ids]} has no measure. Its verdict is the AND
+   of the named rules, which must come before it.
+
+   A limit is a number, a measure id, an expression or a limit form:
+     [op a b ...]   op is :+, :-, :*, :/, :larger or :smaller. Each operand
+                    is a limit.
+     {:form :row :key k}   a column of the row.
+     {:form :lookup :table t :by [row keys] :at [keys]}   a nested table.
+                    The values of the :by keys, then the :at keys, are the
+                    path. A leaf is a limit.
+     {:form :brackets :by m :steps [{:up-to n :limit l} ... {:limit l}]}
+                    the first step whose :up-to is at or above the measure
+                    m. A step with no :up-to takes each value.
+     {:form :per-unit :by m :base b :base-n n :per p}   b, plus p for each
+                    unit of the measure m more than n.
+     {:form :first :of [limits]}   the first limit that gives a value.
+
+   A condition is one of:
+     [:= a b], and :not=, :<, :<=, :>, :>=. An operand is a number, true,
+                    false, a measure id or an expression.
+     [:in m [names]]   the measure m is one of the literal names.
+     [:and c ...], [:or c ...], [:not c].
+
+   A verdict is :conforming, :nonconforming, :unknown or :not-applicable.
+   It is :unknown when the value or the limit is not a number, or when the
+   condition is unknown. It is :not-applicable when the condition is false.
+   The overall verdict ignores :not-applicable."
+  [data]
+  (let [measures    (:measures data)
+        measure-ids (mapv #(:id %) measures)
+        suffix      (:suffix data)
+        columns     (:columns data)
+        _           (check-distinct! "measures have the id" measure-ids)
+        _           (doseq [spec measures] (check-measure! spec measure-ids))
+        _           (check-distinct! "rules have the id" (map #(:id %) (:rules data)))
+        ordered     (ordered-measures measures)
+        rules       (reduce (fn [done rule]
+                              (conj done (prepare-rule rule data measure-ids
+                                                       (mapv #(:id %) done))))
+                            [] (:rules data))
+        _           (doseq [id (keys columns)]
+                      (check-legal! ":columns" "the measure" id measure-ids))
+        read?       (fn [id] (some (fn [rule] (some #(= id %) (:reads rule))) rules))
+        measure-columns
+        (vec (keep (fn [id]
+                     (cond
+                       (and columns (contains? columns id))
+                       [id (column-key suffix (name (get columns id)))]
+
+                       (and (nil? columns) (read? id))
+                       [id (column-key suffix "actual-" (name id))]))
+                   measure-ids))
+        spec-of     (fn [id] (first (filter #(= id (:id %)) measures)))
+        edge-spec   (fn edge-spec [id]
+                      (let [spec (spec-of id)]
+                        (cond
+                          (= :alias (:form spec)) (edge-spec (:of spec))
+                          (= :edges (:form spec)) spec)))
+        edge-rules  (filterv #(edge-spec (:measure %)) rules)
+        per-edge    (when-let [pe (:per-edge data)]
+                      (doseq [id (:rules pe)]
+                        (check-legal! ":per-edge" "the rule on an :edges measure" id
+                                      (mapv #(:id %) edge-rules)))
+                      {:column (column-key suffix (name (:column pe)))
+                       :rules  (vec (keep (fn [rule]
+                                            (when (some #(= (:id rule) %) (:rules pe))
+                                              {:id    (:id rule)
+                                               :dir   (:dir rule)
+                                               :types (:types (edge-spec (:measure rule)))}))
+                                          edge-rules))})
+        overall     (column-key suffix "overall-conformity")]
+    (check-distinct! "results have the column"
+                     (concat (map second measure-columns)
+                             (mapcat (fn [rule]
+                                       (keep #(get rule %)
+                                             [:column :required-column :margin-column
+                                              :scaled-margin-column]))
+                                     rules)
+                             [overall]
+                             (when per-edge [(:column per-edge)])))
+    {:measures        ordered
+     :rules           rules
+     :measure-columns measure-columns
+     :overall-column  overall
+     :per-edge        per-edge}))
+
+(defn- verdict
+  [dir actual limit]
+  (cond
+    (not (and (number? actual) (number? limit))) :unknown
+    (= dir :floor) (if (< actual limit) :nonconforming :conforming)
+    :else          (if (> actual limit) :nonconforming :conforming)))
+
+(defn- and-verdicts
+  "The AND of `verdicts`. It ignores each :not-applicable."
+  [verdicts]
+  (let [vs (filterv #(not= :not-applicable %) verdicts)]
+    (cond
+      (empty? vs)                     :not-applicable
+      (some #(= :nonconforming %) vs) :nonconforming
+      (some #(= :unknown %) vs)       :unknown
+      :else                           :conforming)))
+
+(defn- rule-result [rule values facts]
+  (let [actual  (get values (:measure rule))
+        limit   (limit-value (:limit rule) values facts)
+        applies (if (contains? rule :when)
+                  (condition-value (:when rule) values facts)
+                  true)
+        bound   (:lower-bound-without rule)
+        v       (verdict (:dir rule) actual limit)
+        margin  (when (and (number? actual) (number? limit))
+                  (if (= :floor (:dir rule)) (- actual limit) (- limit actual)))
+        times   (when (:margin-times rule) (get values (:margin-times rule)))]
+    {:verdict       (cond
+                      (false? applies) :not-applicable
+                      (nil? applies)   :unknown
+                      (and bound (= v :conforming) (nil? (get values bound))) :unknown
+                      :else            v)
+     :actual        actual
+     :required      limit
+     :margin        margin
+     :scaled-margin (when (and (number? margin) (number? times)) (* margin times))}))
+
+(defn rule-results
+  "The map of rule id to {:verdict :actual :required :margin
+   :scaled-margin} for the rules of `rule-set`. `values` is the map of
+   measure-values. `facts` is the row, or any map that holds the keys that
+   the limits read."
+  [rule-set values facts]
+  (reduce (fn [results rule]
+            (assoc results (:id rule)
+                   (if (:all-of rule)
+                     {:verdict (and-verdicts (mapv #(:verdict (get results %))
+                                                   (:all-of rule)))}
+                     (rule-result rule values facts))))
+          {} (:rules rule-set)))
+
+(defn overall-verdict
+  "The AND of the verdicts of the :core? rules."
+  [rule-set results]
+  (and-verdicts (mapv #(:verdict (get results (:id %)))
+                      (filter #(:core? %) (:rules rule-set)))))
+
+(defn result-columns
+  "The map of column to value for one row: the measure columns from
+   `values`, then the verdict of each rule with its limit and margins when
+   the rule set asks for them, then the overall verdict."
+  [rule-set values results]
+  (let [put     (fn [m k v] (if k (assoc m k v) m))
+        columns (reduce (fn [m pair] (assoc m (second pair) (get values (first pair))))
+                        {} (:measure-columns rule-set))
+        columns (reduce (fn [m rule]
+                          (let [r (get results (:id rule))]
+                            (-> (assoc m (:column rule) (:verdict r))
+                                (put (:required-column rule) (:required r))
+                                (put (:margin-column rule) (:margin r))
+                                (put (:scaled-margin-column rule) (:scaled-margin r)))))
+                        columns (:rules rule-set))]
+    (assoc columns (:overall-column rule-set) (overall-verdict rule-set results))))
+
+(defn- limit-column
+  "The column that holds the limit of `rule`, or nil: its required column,
+   or the key of a :row limit."
+  [rule]
+  (or (:required-column rule)
+      (when (= :row (:form (:limit rule))) (:key (:limit rule)))))
+
+(defn rule-popup
+  "The :popup of a map-layer of checked rows: the overall verdict, and one
+   row for each rule of `rule-set` with a measure. opts: :title and :facts
+   for map-layer, :labels (rule id to label) and :units (quantity to unit)."
+  [rule-set opts]
+  (let [columns  (into {} (:measure-columns rule-set))
+        quantity (into {} (map (fn [m] [(:id m) (:quantity m)]) (:measures rule-set)))]
+    (merge (select-keys opts [:title :facts])
+           {:status    (:overall-column rule-set)
+            :highlight :nonconforming
+            :rules     (vec (for [rule (:rules rule-set)
+                                  :when (:measure rule)]
+                              (assoc {:label  (get (:labels opts) (:id rule) (name (:id rule)))
+                                      :actual (get columns (:measure rule))
+                                      :status (:column rule)
+                                      :unit   (get (:units opts) (get quantity (:measure rule)))}
+                                     (if (= :floor (:dir rule)) :min :max)
+                                     (limit-column rule))))})))
+
+(defn ^:op min-setback-by-edge-type
+  {:outputs {:result {:type :number}}}
+  [^{:type :vector} edges ^{:type :set} edge-types]
+  (aggregate :min (edge-values edges edge-types :setback)))
+
+(defn ^:op max-setback-by-edge-type
+  {:outputs {:result {:type :number}}}
+  [^{:type :vector} edges ^{:type :set} edge-types]
+  (aggregate :max (edge-values edges edge-types :setback)))
+
+(defn- edge-results
+  "One map for each edge of `edges`. An edge gets the verdict of the
+   :per-edge rule whose measure reads its edge type, against the limit
+   that the rule used. An edge of a different type is :unknown."
+  [per-edge edges results]
+  (mapv (fn [e]
+          (let [et   (:edge-type e)
+                rule (first (filter (fn [r] (some #(= et %) (:types r)))
+                                    (:rules per-edge)))]
+            {:edge-length             (:length e)
+             :abuts-right-of-way?              (= :street (:abutting e))
+             :right-of-way-width               (or (:right-of-way-width e) 0)
+             :edge-type               et
+             :setback-to-bldg         (:setback e)
+             :edge-setback-conformity (if rule
+                                        (verdict (:dir rule) (:setback e)
+                                                 (:required (get results (:id rule))))
+                                        :unknown)}))
+        edges))
+
+;; `rules` is the result of rule-set. It names the row keys that the op
+;; reads and the columns that the op writes, therefore the static sets
+;; below cannot list them.
+(defn ^:op analyze-parcel-conformity
+  {:row-reads #{:edges :metrics}
+   :outputs {:result {:type :map}}}
+  [^:row ^{:type :map} parcel-row
+   & {:keys! [rules parcel-schema]}]
+  (let [pass     (measure-pass rules parcel-row parcel-schema)
+        results  (rule-results rules (:values pass) parcel-row)
+        columns  (result-columns rules (merge (:values pass) (:raw pass)) results)
+        per-edge (:per-edge rules)
+        columns  (if per-edge
+                   (assoc columns (:column per-edge)
+                          (edge-results per-edge (:edges parcel-row) results))
+                   columns)]
+    ;; apply-row-chain gives parcel-row as a transient, therefore assoc!
+    ;; and not assoc.
+    (reduce-kv assoc! parcel-row columns)))
+
+(defn district-subdistrict-rows
+  "The rows of `zoning-ds` whose `district-field` equals `district`: the
+   polygons that make up one district. Throws when no row matches."
+  [zoning-ds district-field district]
+  (let [rows (filterv #(= district (get % district-field))
+                      (ds/rows zoning-ds :as-maps))]
+    (when (empty? rows)
+      (throw (ex-info (str "no subdistricts with " (name district-field) " "
+                           (pr-str district))
+                      {:district district :district-field district-field})))
+    rows))

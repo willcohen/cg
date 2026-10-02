@@ -1,0 +1,154 @@
+{
+  "name": "cg-vscode",
+  "displayName": "CG",
+  "description": "CG Flow Graph editor and runtime for VS Code",
+  "version": "0.0.1",
+  "publisher": "wcohen",
+  "license": "Apache-2.0 WITH LLVM-exception",
+  "author": {
+    "name": "Will Cohen"
+  },
+  "engines": {
+    "vscode": ">=1.85.0",
+    "node": ">=18.0.0"
+  },
+  "extensionDependencies": [
+    "betterthantomorrow.calva"
+  ],
+  "activationEvents": [
+    "workspaceContains:**/*.cg",
+    "onCustomEditor:cg.flowEditor"
+  ],
+  "main": "dist/extension.js",
+  "contributes": {
+    "customEditors": [
+      {
+        "viewType": "cg.flowEditor",
+        "displayName": "CG: Flow Graph",
+        "selector": [
+          {
+            "filenamePattern": "*.cg"
+          }
+        ],
+        "supportsMultipleEditorsPerDocument": true
+      }
+    ],
+    "commands": [
+      {
+        "command": "cg.evalJvm",
+        "category": "CG",
+        "title": "Eval (JVM)"
+      },
+      {
+        "command": "cg.evalJs",
+        "category": "CG",
+        "title": "Eval (JS)"
+      },
+      {
+        "command": "cg.setRuntime",
+        "category": "CG",
+        "title": "Set Runtime"
+      },
+      {
+        "command": "cg.refreshRuntime",
+        "category": "CG",
+        "title": "Refresh Runtime"
+      },
+      {
+        "command": "cg.runEval",
+        "category": "CG",
+        "title": "Run"
+      },
+      {
+        "command": "cg.openMap",
+        "category": "CG",
+        "title": "Open Map"
+      },
+      {
+        "command": "cg.showRunStatus",
+        "category": "CG",
+        "title": "Show Run Status"
+      },
+      {
+        "command": "cg.revealInCanvas",
+        "category": "CG",
+        "title": "Reveal in Canvas"
+      }
+    ],
+    "menus": {
+      "editor/context": [
+        {
+          "command": "cg.revealInCanvas",
+          "when": "resourceExtname == .cg",
+          "group": "navigation"
+        }
+      ],
+      "commandPalette": [
+        {
+          "command": "cg.revealInCanvas",
+          "when": "resourceExtname == .cg"
+        }
+      ]
+    },
+    "configuration": {
+      "title": "CG",
+      "properties": {
+        "cg.runtime": {
+          "type": "string",
+          "default": "auto",
+          "enum": [
+            "jvm",
+            "js",
+            "auto"
+          ],
+          "enumDescriptions": [
+            "Always use the JVM REST backend",
+            "Always use the in-process JS runtime",
+            "Auto-detect: JVM if REST server is reachable, otherwise JS"
+          ],
+          "description": "Which runtime to use for CG eval operations"
+        },
+        "cg.cljKondoPath": {
+          "type": "string",
+          "default": "",
+          "description": "Path to the clj-kondo binary used to lint .cg buffers. Leave empty to look it up on PATH. When no binary is found, .cg files get parser diagnostics only."
+        }
+      }
+    },
+    "languages": [
+      {
+        "id": "clojure",
+        "extensions": [
+          ".cg"
+        ],
+        "aliases": [
+          "CG"
+        ],
+        "icon": {
+          "light": "assets/cg-file-icon.svg",
+          "dark": "assets/cg-file-icon.svg"
+        }
+      }
+    ]
+  },
+  "scripts": {
+    "watch": "chokidar 'src/**/*.cljs' 'src/**/*.cljc' -c 'npm run compile'",
+    "compile": "node build-extension.mjs",
+    "release": "node build-extension.mjs --minify",
+    "bundle-webview": "node webview-bundle/esbuild.webview.mjs",
+    "build-cg-app": "node build-cg-app.mjs",
+    "dev": "npm run build-cg-app && npm run compile && npm run bundle-webview",
+    "pretest": "npm run compile",
+    "test": "node run-tests.mjs"
+  },
+  "dependencies": {
+    "@yogthos/tree-sitter-clojure": "0.0.14",
+    "web-tree-sitter": "^0.26.8"
+  },
+  "devDependencies": {
+    "@xyflow/react": "^12.0.0",
+    "chokidar-cli": "^3.0.0",
+    "esbuild": "^0.21.0",
+    "squint-cljs": "0.14.210"
+  }
+}

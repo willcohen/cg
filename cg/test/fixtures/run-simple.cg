@@ -1,0 +1,10 @@
+;; run-simple.cg - Simple runnable example.
+;;
+;; Run with: cg run test/fixtures/run-simple.cg --data parcels=<path>
+
+(require '[cg.macros :refer [item->]])
+(require '[cg.geo :as geo])
+
+(def buffer-model
+  (item-> :parcels
+    (geo/buffer 10)))

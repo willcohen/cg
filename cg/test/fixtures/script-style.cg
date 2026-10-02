@@ -1,0 +1,28 @@
+;; A script in the old style: prints, a file read and a file write at the
+;; top level, between two models. The parser tests read it for its
+;; diagnostics. No test runs it.
+
+(require '[cg.dataset :as ds])
+(require '[cg.geo :as geo])
+(require '[cg.run :as run])
+(require '[cg.macros :refer [table->]])
+
+(println "Loading the lots...")
+(def lots-raw (ds/load-geojson "data/lots.geojson"))
+
+(defn reproject-to [target-crs ds-raw]
+  (run/run-model (table-> :input (ds/transform-crs "EPSG:4326" target-crs))
+                 {:input ds-raw}
+                 {:timeout-ms 300000}))
+
+(def lots (reproject-to "EPSG:3857" lots-raw))
+
+(def buffer-flow
+  (table-> :rows
+    (geo/buffer 10)))
+
+(def export-flow
+  (table-> :input (ds/transform-crs "EPSG:3857" "EPSG:4326")))
+
+(ds/write-geojson lots "data/lots-out.geojson")
+(println "Done")

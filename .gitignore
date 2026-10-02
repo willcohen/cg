@@ -1,0 +1,164 @@
+# Development tools.
+# Track .clj-kondo/config.edn and .clj-kondo/hooks/ (project-specific
+# linting config); ignore the per-dep imports cache and runtime caches.
+# These patterns contain a slash, so they anchor to this directory. The inner
+# cg/ module has its own .clj-kondo, so match at any depth as well.
+.clj-kondo/.cache/
+.clj-kondo/.DS_Store
+.clj-kondo/imports/
+**/.clj-kondo/.cache/
+**/.clj-kondo/.DS_Store
+**/.clj-kondo/imports/
+.cpcache
+.portal
+.lsp
+.direnv
+.clojure-mcp
+.calva
+.nrepl-portal
+.nrepl-port
+.envrc
+
+# Platform-specific
+.DS_Store
+
+# Project-local cg flow trace files (cg.trace writes per-run JSONL here).
+**/tmp/cg-traces/
+
+# Dependencies
+**/node_modules/**
+
+# Browser packages that `bb vendor-deps` copies for build:app-static.
+cg-app/shared/ui/public/vendor/
+# Written by `bb importmap:write` from cg-app/importmap.mjs.
+cg-app/shared/ui/public/importmap.json
+# Built by cg-app tasks: build:cg, bundle:map-core, bundle:run-core, css:build
+cg-app/shared/ui/public/cg-bundled-*.mjs*
+cg-app/shared/ui/public/cg-map.mjs*
+cg-app/shared/ui/public/cg-run.mjs*
+cg-app/shared/ui/public/css/styles.css*
+
+# Build outputs
+classes
+**/out/
+**/dist/
+**/public/js/
+**/public/css/output.css
+**/*.jar
+
+# Compiled squint output; the sources are the .cljc under the same paths.
+# index.mjs is the one hand-written .mjs under cg/src/cg/ and stays tracked.
+cg/src/cg/**/*.mjs
+!cg/src/cg/index.mjs
+
+# Compiled squint output for the VS Code extension; the sources are the
+# .cljs under the same paths. The hand-written .mjs at the cg-vscode root
+# and under webview-bundle/ stay tracked.
+cg-vscode/src/cg_vscode/**/*.mjs
+cg-vscode/test/cg_vscode/**/*.mjs
+
+# Compiled squint output of cg-app; the sources are the .cljs under the same
+# paths.
+cg-app/app/js/
+cg-app/app/dist-static/
+cg-app/app/src/**/*.mjs
+cg-app/app/src/**/*.jsx
+cg-app/app/test/**/*.mjs
+cg-app/app/test/**/*.jsx
+cg-app/shared/squint/js/
+cg-app/shared/squint/src/**/*.mjs
+cg-app/shared/squint/test/**/*.mjs
+
+# Allium specs are not committed to public repos.
+*.allium
+
+# MCP server config is per-machine, not for public repos.
+.mcp.json
+
+# Package managers
+**/package-lock.json
+!/cg/package-lock.json
+!/cg-app/package-lock.json
+!/cg-vscode/package-lock.json
+
+# Backups
+**/*.backup
+**/*.bak
+**/*.orig.*
+
+# Logs
+**/*.log
+**/npm-debug.*
+
+# Environment
+.env
+.env.local
+
+# Editors and JVM heap dumps
+**/.idea/**
+**/*.iml
+**/*.hprof
+
+# Signing keys and profiles. These rules stop a commit of a secret.
+**/*.jks
+**/*.keystore
+**/*.p8
+**/*.p12
+**/*.key
+**/*.mobileprovision
+
+# .vscode/ is local. cg-vscode/.vscode/ holds three shared files.
+.vscode/
+!cg-vscode/.vscode/
+cg-vscode/.vscode/*
+!cg-vscode/.vscode/launch.json
+!cg-vscode/.vscode/tasks.json
+!cg-vscode/.vscode/settings.json
+**/*.sublime-*
+.classpath
+.project
+.settings/
+
+# Archive
+**/future-reference/**
+
+# Local work that is not in the repository: the brand sources and the React
+# Native shells
+/cg-brand/
+cg-app/platforms/
+cg-app/mobile/
+
+# Documentation and planning files (remove to track)
+WORKPLAN.md
+WORKPLAN-ARCHIVE.md
+docs/plans/
+# bb build:demo writes the demo here.
+docs/index.html
+docs/cg-app.mjs
+docs/cg-wasmts-handler.mjs
+docs/.nojekyll
+docs/css/
+docs/examples/
+docs/modules/
+TECHNICAL_ANALYSIS.md
+
+# The caches of ensure-dataset and of the examples.
+cg/.cg-cache/
+cg-app/.cg-cache/
+
+# Generated cljc test suites (compiled by `bb squint:test`; rebuilt on demand).
+# Every .mjs under cg/test/cg/ is squint output; the sources are the .cljc.
+cg/test/cg/**/*.mjs
+
+# JVM backend ephemeral-port handshake (bb backend:dev --port-file)
+.cg-backend-port
+
+# Agent guides are local, not project artifacts
+AGENTS.md
+CLAUDE.md
+
+# Editor tool state, written at runtime
+.eca/
+.joyride/mcp-server/
+.claude/
+skills-lock.json

@@ -1,0 +1,36 @@
+(ns test.op-parity
+  "Fixture for cg.run.op-parity-test: one op of each shape that the parser
+   and cg.run/var-op-decl both read.")
+
+(defn ^:op ^:idempotent tag
+  "A row op with param types and a row contract."
+  {:row-reads #{:geometry :id} :row-writes #{:tag}
+   :outputs {:row {:type :map}}}
+  [^:row row ^{:type :number} size label]
+  (assoc row :tag [size label]))
+
+(defn ^:op whole
+  [^:table rows ^{:type :component} step n]
+  [rows step n])
+
+(defn ^:op arity
+  ([^:row x a] (arity x a 1))
+  ([^:row x a b] [x a b]))
+
+(defn ^:op with-opts
+  [^:row x & {:keys! [a] :keys [b] :or {b 2}}]
+  [x a b])
+
+(defn ^:op many-opts
+  "An option map with 9 keys of each kind and 9 defaults, more than an
+   array map keeps in order on the JVM."
+  [^:table rows & {:keys! [a b c d e f g h i]
+                   :keys [j k l m n o p q r]
+                   :or {j 10 k 11 l 12 m 13 n 14 o 15 p 2.5 q "x" r :y}}]
+  [rows a b c d e f g h i j k l m n o p q r])
+
+(defn ^:op destructured
+  [^:row {:keys [geometry]} {:keys [d]}]
+  [geometry d])
+
+(defn- ^:op private-op [^:row x] x)

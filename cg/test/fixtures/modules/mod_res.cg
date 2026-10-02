@@ -1,0 +1,5 @@
+(ns test.mod-res
+  "Fixture for load_module_test: a module that the JVM reads from the
+   classpath, because its path is not a file from the working folder.")
+
+(def origin "resource")

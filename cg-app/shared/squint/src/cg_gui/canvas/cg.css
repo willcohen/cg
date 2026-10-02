@@ -1,0 +1,495 @@
+/* The flow canvas. Carbon tokens, with VS Code theme variables as the
+   fallback for the webview, which loads no Carbon styles. */
+
+.react-flow {
+  --canvas-surface: var(--cds-layer-01, var(--vscode-editorWidget-background, #f4f4f4));
+  --canvas-surface-2: var(--cds-layer-02, var(--vscode-sideBar-background, #ffffff));
+  --canvas-surface-sunk: var(--cds-layer-accent-01, var(--vscode-input-background, #e0e0e0));
+  --canvas-hover: var(--cds-layer-hover-01, var(--vscode-list-hoverBackground, #e8e8e8));
+  --canvas-canvas: var(--cds-background, var(--vscode-editor-background, #ffffff));
+  --canvas-line: var(--cds-border-subtle-01, var(--vscode-panel-border, #c6c6c6));
+  --canvas-line-strong: var(--cds-border-strong-01, var(--vscode-contrastBorder, #8d8d8d));
+  /* border-strong on a layer is under 3:1 in the dark themes. */
+  --canvas-wire: var(--cds-icon-secondary, var(--vscode-foreground, #525252));
+  --canvas-ink: var(--cds-text-primary, var(--vscode-foreground, #161616));
+  --canvas-ink-muted: var(--cds-text-secondary, var(--vscode-descriptionForeground, #525252));
+  --canvas-ink-helper: var(--cds-text-helper, var(--vscode-descriptionForeground, #6f6f6f));
+  --canvas-accent: var(--cds-interactive, var(--vscode-focusBorder, #0f62fe));
+  --canvas-link: var(--cds-link-primary, var(--vscode-textLink-foreground, #0f62fe));
+  --canvas-focus: var(--cds-focus, var(--vscode-focusBorder, #0f62fe));
+  --canvas-run: var(--cds-support-warning, var(--vscode-editorWarning-foreground, #f1c21b));
+  --canvas-run-bg: var(--cds-notification-background-warning, var(--vscode-inputValidation-warningBackground, #fcf4d6));
+  --canvas-complete: var(--cds-support-success, var(--vscode-testing-iconPassed, #24a148));
+  --canvas-complete-bg: var(--cds-notification-background-success, var(--vscode-diffEditor-insertedLineBackground, #defbe6));
+  --canvas-error: var(--cds-support-error, var(--vscode-errorForeground, #da1e28));
+  --canvas-error-bg: var(--cds-notification-background-error, var(--vscode-inputValidation-errorBackground, #fff1f1));
+  --canvas-on-color: var(--cds-text-on-color, var(--vscode-button-foreground, #ffffff));
+  --canvas-button: var(--cds-button-primary, var(--vscode-button-background, #0f62fe));
+  --canvas-button-hover: var(--cds-button-primary-hover, var(--vscode-button-hoverBackground, #0050e6));
+  --canvas-mode-table: var(--cds-tag-color-teal, var(--vscode-charts-green, #005d5d));
+  --canvas-mode-item: var(--cds-tag-color-purple, var(--vscode-charts-purple, #6929c4));
+  --canvas-mode-coll: var(--cds-tag-color-blue, var(--vscode-charts-blue, #0043ce));
+  --canvas-mode-map: var(--cds-tag-color-magenta, var(--vscode-charts-orange, #9f1853));
+  --canvas-mono: var(--cds-code-01-font-family, var(--vscode-editor-font-family, ui-monospace, monospace));
+  --canvas-sp-01: var(--cds-spacing-01, 2px);
+  --canvas-sp-02: var(--cds-spacing-02, 4px);
+  --canvas-sp-03: var(--cds-spacing-03, 8px);
+  --canvas-sp-04: var(--cds-spacing-04, 12px);
+  --canvas-sp-05: var(--cds-spacing-05, 16px);
+}
+
+/* The app stylesheet loads after this file and paints React Flow too. */
+div.react-flow { background-color: var(--canvas-canvas); }
+
+.react-flow .react-flow__background-pattern circle { fill: var(--canvas-line); opacity: 1; }
+.react-flow .react-flow__edge-path { stroke: var(--canvas-wire); stroke-width: 1.5px; }
+.react-flow .react-flow__handle {
+  background-color: var(--canvas-line-strong); border: 1px solid var(--canvas-surface);
+  width: 6px; height: 6px; min-width: 0; min-height: 0;
+}
+
+.cg-node {
+  background: var(--canvas-surface);
+  border: 1px solid var(--canvas-line);
+  border-radius: 0;
+  padding: var(--canvas-sp-03) var(--canvas-sp-05);
+  min-width: 200px;
+  color: var(--canvas-ink);
+  font: 400 12px/16px system-ui, sans-serif;
+  position: relative;
+  box-sizing: border-box;
+}
+
+.cg-node.running  { border-color: var(--canvas-run);      background: var(--canvas-run-bg); }
+.cg-node.complete { border-color: var(--canvas-complete); background: var(--canvas-complete-bg); }
+.cg-node.error    { border-color: var(--canvas-error);    background: var(--canvas-error-bg); }
+.cg-node.selected { outline: 2px solid var(--canvas-focus); outline-offset: -2px; }
+.cg-node.run-model { box-shadow: 0 0 0 2px var(--canvas-accent); }
+
+.cg-node.defop-call .cg-head { color: var(--canvas-link); }
+.cg-node.template-call { border-style: dashed; }
+
+.cg-node.chip {
+  min-width: 0;
+  padding: var(--canvas-sp-01) var(--canvas-sp-03);
+}
+.cg-node.chip .cg-head {
+  font-size: 12px; line-height: 16px; font-weight: 400;
+  color: var(--canvas-ink-muted);
+  overflow: hidden; text-overflow: ellipsis;
+}
+
+.cg-node .node-diag-badge {
+  position: absolute; top: var(--canvas-sp-02); right: var(--canvas-sp-03);
+  width: 16px; height: 16px; border-radius: 50%;
+  display: flex; align-items: center; justify-content: center;
+  font: 600 12px/16px system-ui, sans-serif;
+  background: var(--canvas-run); color: var(--cds-text-inverse, #161616);
+}
+
+/* Must match title-font in convert.cljs. */
+.cg-head {
+  font: var(--cds-heading-compact-01-font-weight, 600) var(--cds-heading-compact-01-font-size, 14px)/18px system-ui, sans-serif;
+  letter-spacing: var(--cds-heading-compact-01-letter-spacing, 0.16px);
+  white-space: nowrap;
+}
+.cg-sub {
+  font-family: var(--canvas-mono);
+  font-size: var(--cds-code-01-font-size, 12px); line-height: 16px;
+  letter-spacing: var(--cds-code-01-letter-spacing, 0.32px);
+  color: var(--canvas-ink-muted);
+  white-space: nowrap; overflow: hidden; text-overflow: ellipsis;
+}
+.cg-val {
+  font-family: var(--canvas-mono); font-size: 12px; line-height: 16px;
+  color: var(--canvas-ink-muted); margin-top: var(--canvas-sp-01);
+}
+
+/* In the bottom right corner. This keeps one card height before and
+   during a run. */
+.cg-stat {
+  position: absolute; right: var(--canvas-sp-03); bottom: var(--canvas-sp-02);
+  display: flex; align-items: center; gap: var(--canvas-sp-02);
+  padding-left: var(--canvas-sp-02);
+  background: inherit;
+  font-size: var(--cds-label-01-font-size, 12px); line-height: 16px;
+  letter-spacing: var(--cds-label-01-letter-spacing, 0.32px);
+  color: var(--canvas-ink-muted);
+}
+.cg-stat span { width: 6px; height: 6px; border-radius: 50%; background: var(--canvas-ink-helper); display: inline-block; }
+.cg-node.running .cg-stat span  { background: var(--canvas-run); }
+.cg-node.complete .cg-stat span { background: var(--canvas-complete); }
+.cg-node.error .cg-stat span    { background: var(--canvas-error); }
+
+.cg-progress {
+  position: absolute; left: 0; right: 0; bottom: 0; height: 3px;
+  background: var(--canvas-line); overflow: hidden;
+}
+.cg-progress-fill { height: 100%; background: var(--canvas-run); transition: width 120ms linear; }
+
+.cg-source-link { display: inline-block; margin-top: var(--canvas-sp-02); font-size: 12px; color: var(--canvas-link); }
+
+.cg-defop-chevron {
+  position: absolute; top: var(--canvas-sp-02); right: var(--canvas-sp-03);
+  cursor: pointer; color: var(--canvas-link);
+  line-height: 1; z-index: 2;
+  user-select: none;
+  /* The VS Code stylesheet hides and centers it. */
+  opacity: 1;
+  transform: none;
+}
+.cg-defop-chevron:hover { color: var(--canvas-ink); }
+.cg-defop-chevron svg { fill: currentColor; transition: transform 0.1s ease; }
+.cg-defop-chevron.expanded svg { transform: rotate(90deg); }
+
+.cg-dive-btn {
+  position: absolute; top: var(--canvas-sp-02); right: var(--canvas-sp-03);
+  cursor: pointer; color: var(--canvas-link);
+  line-height: 1; z-index: 2;
+  user-select: none; opacity: 1;
+}
+.cg-dive-btn.with-chevron { right: 24px; }
+.cg-dive-btn:hover { color: var(--canvas-ink); }
+.cg-dive-btn svg { fill: currentColor; }
+.cg-node.divable { border-style: dashed; }
+
+.cg-dive-menu {
+  position: absolute; top: 20px; right: var(--canvas-sp-02); z-index: 5;
+  display: flex; flex-direction: column; gap: 1px;
+  padding: var(--canvas-sp-02);
+  background: var(--canvas-surface-2);
+  border: 1px solid var(--canvas-line);
+  box-shadow: 0 2px 6px rgb(0 0 0 / 0.3);
+  max-width: 260px;
+}
+.cg-dive-choice {
+  background: none; border: none; cursor: pointer;
+  padding: var(--canvas-sp-01) var(--canvas-sp-03);
+  color: var(--canvas-link); text-align: left;
+  font: 12px/16px var(--canvas-mono);
+  white-space: nowrap; overflow: hidden; text-overflow: ellipsis;
+}
+.cg-dive-choice:hover { background: var(--canvas-hover); color: var(--canvas-ink); }
+
+.cg-crumbs {
+  display: flex; align-items: center; gap: var(--canvas-sp-01);
+  padding: var(--canvas-sp-02) var(--canvas-sp-03);
+  background: var(--canvas-surface);
+  border: 1px solid var(--canvas-line);
+  font: 12px/16px var(--canvas-mono);
+  max-width: 60vw; flex-wrap: wrap;
+}
+.cg-crumb {
+  background: none; border: none; padding: var(--canvas-sp-01) var(--canvas-sp-02);
+  color: var(--canvas-link); cursor: pointer;
+  font: inherit;
+}
+.cg-crumb:hover { background: var(--canvas-hover); color: var(--canvas-ink); }
+.cg-crumb.current { color: var(--canvas-ink); cursor: default; }
+.cg-crumb.current:hover { background: none; }
+.cg-crumb-sep { color: var(--canvas-ink-muted); }
+.cg-crumb-hint { color: var(--canvas-ink-helper); padding-left: var(--canvas-sp-02); }
+
+/* An edge over a node would take the mousedown that starts a node drag. */
+.react-flow__edge { pointer-events: none; }
+
+.react-flow .cg-edge-groups .react-flow__edge-path {
+  stroke: var(--canvas-mode-table);
+  stroke-width: 3px;
+  filter: drop-shadow(2.5px 2.5px 0 var(--canvas-line));
+}
+.react-flow .cg-edge-dataset .react-flow__edge-path { stroke: var(--canvas-wire); stroke-width: 1.5px; }
+.react-flow .cg-edge-map .react-flow__edge-path { stroke: var(--canvas-mode-map); stroke-width: 2px; }
+
+.cg-edge-badge {
+  background: var(--canvas-mode-table); color: var(--canvas-on-color);
+  font: 600 12px/16px var(--canvas-mono);
+  padding: 0 var(--canvas-sp-02); border-radius: 1rem;
+}
+
+.cg-ports { display: flex; flex-direction: column; gap: var(--canvas-sp-01); margin: var(--canvas-sp-02) 0 var(--canvas-sp-01); }
+.cg-ports-row { display: flex; flex-wrap: wrap; gap: var(--canvas-sp-02); }
+.cg-ports-out { justify-content: flex-end; }
+.cg-port {
+  font: 12px/16px var(--canvas-mono);
+  padding: 0 var(--canvas-sp-02);
+  border: 1px solid var(--canvas-line); color: var(--canvas-ink-muted);
+  background: var(--canvas-surface);
+}
+.cg-port.lvl-table  { border-color: var(--canvas-mode-table); color: var(--canvas-mode-table); }
+.cg-port.lvl-groups { border-color: var(--canvas-mode-table); color: var(--canvas-mode-table); }
+.cg-port.lvl-map    { border-color: var(--canvas-mode-map);   color: var(--canvas-mode-map); }
+.cg-port.lvl-dataset { border-color: var(--canvas-line); }
+.cg-port.lvl-row    { border-color: var(--canvas-mode-item);  color: var(--canvas-mode-item); }
+
+.cg-run-btn {
+  padding: var(--canvas-sp-02) var(--canvas-sp-05);
+  background: var(--canvas-button);
+  color: var(--canvas-on-color);
+  border: none;
+  cursor: pointer;
+  font: 12px/16px var(--canvas-mono);
+}
+.cg-run-btn:hover { background: var(--canvas-button-hover); }
+
+.cg-dir-btn {
+  margin-right: var(--canvas-sp-03);
+  padding: var(--canvas-sp-02) var(--canvas-sp-04);
+  background: var(--canvas-surface);
+  color: var(--canvas-ink);
+  border: 1px solid var(--canvas-line);
+  cursor: pointer;
+  font-size: 14px;
+  line-height: 1;
+}
+.cg-dir-btn:hover { border-color: var(--canvas-focus); color: var(--canvas-link); }
+
+.cg-report-params {
+  margin: var(--canvas-sp-02) 0 var(--canvas-sp-01);
+  padding: var(--canvas-sp-02) var(--canvas-sp-03);
+  border: 1px solid var(--canvas-line);
+  background: var(--canvas-surface-2);
+  font: 12px/16px var(--canvas-mono);
+  display: flex;
+  flex-direction: column;
+  gap: var(--canvas-sp-02);
+}
+.cg-report-field { display: flex; align-items: center; gap: var(--canvas-sp-02); }
+.cg-report-key { color: var(--canvas-ink-muted); min-width: 42px; }
+.cg-report-input, .cg-report-label, .cg-report-rule {
+  background: var(--cds-field-01, var(--vscode-input-background, #ffffff));
+  color: var(--canvas-ink);
+  border: none;
+  border-bottom: 1px solid var(--canvas-line-strong);
+  font: inherit;
+  padding: var(--canvas-sp-01) var(--canvas-sp-02);
+  min-width: 0;
+}
+.cg-report-input { flex: 1; }
+.cg-report-entry { display: flex; align-items: center; gap: var(--canvas-sp-02); }
+.cg-report-label { width: 40%; }
+.cg-report-rule { flex: 1; }
+.cg-report-add, .cg-report-rm {
+  background: transparent;
+  color: var(--canvas-ink);
+  border: 1px solid var(--canvas-line);
+  cursor: pointer;
+  font: inherit;
+  line-height: 1;
+  padding: var(--canvas-sp-01) var(--canvas-sp-02);
+}
+.cg-report-add:hover, .cg-report-rm:hover { border-color: var(--canvas-focus); color: var(--canvas-link); }
+
+.cg-node.sink-call {
+  border-style: double;
+  border-width: 3px;
+  border-color: var(--canvas-accent);
+}
+
+.cg-node.opaque-block {
+  border-style: dashed;
+  background: transparent;
+  color: var(--canvas-ink-muted);
+  /* The opaque grid steps 280px. */
+  max-width: 240px;
+}
+
+.cg-node.opaque-block .cg-head,
+.cg-node.cls-opaque .cg-head {
+  font: 400 12px/16px var(--canvas-mono);
+  overflow: hidden;
+  white-space: nowrap;
+  text-overflow: ellipsis;
+}
+
+.cg-node.cls-param {
+  border-color: var(--canvas-line);
+  background: var(--canvas-surface-sunk);
+  padding: var(--canvas-sp-02) var(--canvas-sp-04);
+}
+.cg-node.cls-param .cg-head { font-size: 12px; line-height: 16px; color: var(--canvas-ink); }
+.cg-node.cls-param .cg-sub { font-size: 12px; line-height: 16px; }
+
+/* The row height must equal field-row-height in convert.cljs. */
+.cg-fields { display: flex; flex-direction: column; }
+.cg-field {
+  display: flex; align-items: center; gap: var(--canvas-sp-03);
+  height: 24px;
+  font: 400 12px/16px var(--canvas-mono);
+}
+.cg-field-key { color: var(--canvas-ink-muted); white-space: nowrap; }
+.cg-field-input {
+  flex: 1; min-width: 0; height: 20px; box-sizing: border-box;
+  background: var(--cds-field-01, var(--vscode-input-background, #ffffff));
+  color: var(--canvas-ink);
+  border: none;
+  border-bottom: 1px solid var(--canvas-line-strong);
+  border-radius: 0;
+  font: inherit;
+  padding: 0 var(--canvas-sp-02);
+}
+.cg-field-input:hover { border-bottom-color: var(--canvas-ink); }
+.cg-field-input:focus { outline: 2px solid var(--canvas-focus); outline-offset: -2px; }
+.cg-field-input[aria-invalid="true"] {
+  outline: 2px solid var(--canvas-error); outline-offset: -2px;
+}
+
+.cg-node.model-head { border-color: var(--canvas-accent); }
+
+.cg-node.block-container {
+  border-color: var(--canvas-line);
+  background: var(--canvas-surface-sunk);
+}
+
+.cg-node.block-container .cg-head {
+  font: 500 12px/16px var(--canvas-mono);
+  overflow: hidden;
+  white-space: nowrap;
+  text-overflow: ellipsis;
+}
+
+.cg-node.block-body {
+  border: none;
+  border-left: 2px solid var(--canvas-line);
+  background: var(--canvas-surface);
+  min-width: 0;
+  padding: var(--canvas-sp-02) var(--canvas-sp-03);
+  overflow: hidden;
+  white-space: nowrap;
+  text-overflow: ellipsis;
+}
+
+.cg-node.block-body .cg-head { font: 400 12px/16px var(--canvas-mono); }
+
+.cg-node.block-body.opaque-block {
+  border-left: 2px dashed var(--canvas-ink-helper);
+  max-width: none;
+}
+
+.react-flow .react-flow__handle.cg-quiet-handle {
+  width: 1px; height: 1px; min-width: 0; min-height: 0;
+  border: none; background: transparent; opacity: 0;
+}
+
+.cg-node.cg-thread {
+  min-width: 0;
+  width: 100%; height: 100%;
+  padding: 0;
+  background: var(--canvas-surface-2);
+  border: 1px solid var(--canvas-line-strong);
+  border-top: 3px solid var(--canvas-mode);
+}
+.cg-node.cg-thread.selected { outline: 2px solid var(--canvas-focus); outline-offset: -2px; }
+.cg-thread.mode-table { --canvas-mode: var(--canvas-mode-table); }
+.cg-thread.mode-item  { --canvas-mode: var(--canvas-mode-item); }
+.cg-thread.mode-coll  { --canvas-mode: var(--canvas-mode-coll); }
+.cg-thread.mode-map   { --canvas-mode: var(--canvas-mode-map); }
+.cg-thread { --canvas-mode: var(--canvas-line-strong); }
+
+/* Must fit the frame-head height in layout.cljs. */
+.cg-thread-head {
+  display: flex; align-items: center; gap: var(--canvas-sp-03);
+  height: 44px; padding: 0 var(--canvas-sp-05);
+  border-bottom: 1px solid var(--canvas-line);
+  white-space: nowrap;
+}
+.cg-thread-title {
+  font: 600 var(--cds-heading-compact-02-font-size, 16px)/22px system-ui, sans-serif;
+  color: var(--canvas-ink);
+}
+
+:where(.cg-tag) {
+  display: inline-flex; align-items: center;
+  height: 18px; padding: 0 var(--canvas-sp-03);
+  border-radius: 1rem;
+  font: 400 12px/16px system-ui, sans-serif;
+  background: var(--canvas-surface-sunk); color: var(--canvas-ink);
+}
+.cg-thread-head .cg-tag { margin: 0; }
+
+.cg-thread-port {
+  position: absolute; box-sizing: border-box;
+  height: 24px; padding: 0 var(--canvas-sp-03);
+  display: flex; align-items: center; justify-content: center;
+  font: 12px/16px var(--canvas-mono);
+  color: var(--canvas-ink);
+  background: var(--canvas-surface);
+  border: 1px solid var(--canvas-mode);
+  border-radius: 1rem;
+  white-space: nowrap; overflow: hidden;
+}
+.cg-thread-port.result { border-style: dashed; }
+
+.cg-thread-band {
+  position: absolute; box-sizing: border-box;
+  border: 1px dashed var(--canvas-mode);
+  background: var(--canvas-surface);
+}
+.cg-thread-band-label {
+  position: absolute; left: var(--canvas-sp-03); top: var(--canvas-sp-01);
+  font-size: var(--cds-label-01-font-size, 12px); line-height: 16px;
+  letter-spacing: var(--cds-label-01-letter-spacing, 0.32px);
+  color: var(--canvas-ink-muted);
+}
+
+/* Must match port-row-height and port-gap in convert.cljs. */
+.cg-side-row {
+  position: relative;
+  display: flex; align-items: center; gap: var(--canvas-sp-03);
+  height: 20px;
+  font: 12px/16px var(--canvas-mono);
+  letter-spacing: var(--cds-code-01-letter-spacing, 0.32px);
+  white-space: nowrap;
+}
+.cg-side-name { color: var(--canvas-ink-muted); }
+.cg-side-val {
+  padding: 0 var(--canvas-sp-02);
+  background: var(--canvas-surface-sunk); color: var(--canvas-ink);
+}
+/* The port sits on the left border of the card: 16px padding, 1px border. */
+.cg-side-dot {
+  position: absolute; left: -21px; top: 50%;
+  width: 7px; height: 7px; box-sizing: border-box;
+  border: 1.5px solid var(--canvas-wire); border-radius: 50%;
+  background: var(--canvas-surface-2);
+  transform: translateY(-50%);
+}
+.cg-side-dot.wired { background: var(--canvas-wire); }
+.cg-wire {
+  position: absolute; right: calc(100% + 17px); top: 0; height: 100%;
+  display: flex; align-items: center;
+  pointer-events: none;
+}
+.cg-wire::before {
+  content: ""; position: absolute; left: 0; right: 0; top: 50%;
+  border-top: 1.5px solid var(--canvas-wire);
+  transform: translateY(-50%);
+}
+.cg-wire-label {
+  position: relative; margin-left: var(--canvas-sp-03);
+  padding: 0 var(--canvas-sp-02);
+  background: var(--canvas-surface-2); color: var(--canvas-ink);
+}
+.cg-wire.frame-in .cg-wire-label {
+  margin-left: -1px; padding: 0 var(--canvas-sp-03);
+  border: 1px solid var(--canvas-wire); border-radius: 1rem;
+  background: var(--canvas-surface);
+}
+.cg-node.in-thread.run-model { box-shadow: none; }
+
+.react-flow .cg-thread-line .react-flow__edge-path {
+  stroke: var(--canvas-mode-line, var(--canvas-line-strong));
+  stroke-width: 4px;
+}
+.react-flow .cg-thread-line.mode-table { --canvas-mode-line: var(--canvas-mode-table); }
+.react-flow .cg-thread-line.mode-item  { --canvas-mode-line: var(--canvas-mode-item); }
+.react-flow .cg-thread-line.mode-coll  { --canvas-mode-line: var(--canvas-mode-coll); }
+.react-flow .cg-thread-line.mode-map   { --canvas-mode-line: var(--canvas-mode-map); }
+.react-flow .cg-thread-line.mode-item .react-flow__edge-path {
+  stroke-dasharray: 0.1 9; stroke-linecap: round; stroke-width: 6px;
+}
+.react-flow .cg-thread-line.mode-coll .react-flow__edge-path { stroke-width: 2px; }
+
+.react-flow .cg-side-line .react-flow__edge-path {
+  stroke: var(--canvas-wire); stroke-width: 1.5px;
+}

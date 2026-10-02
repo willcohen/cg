@@ -1,0 +1,62 @@
+;; typed-mismatch.cg — fixture for cg.parser.types passes 1-5.
+;;
+;; Plants one of each kind of checker diagnostic:
+;;   - :unresolved-op           — unknown head 'totally/missing'.
+;;   - :op-arity-mismatch       — geo/buffer with zero args, ds/load-geojson with 3.
+;;   - :type-mismatch           — string where number expected.
+;;   - :pipeline-type-mismatch  — ds/transform-crs (:dataset out) feeding geo/buffer
+;;                                (:feature row in).
+;;   - :op-output-mismatch      — a table op declares :number output but its body
+;;                                terminal produces :feature.
+;;
+;; This fixture is intentionally non-conforming. Tests assert the
+;; presence of each diagnostic code; they do not assert exact counts
+;; so adding new lines here is safe as long as the codes remain
+;; present.
+
+(require '[cg.macros :refer [item-> table->]])
+(require '[cg.geo :as geo])
+(require '[cg.dataset :as ds])
+
+;; :unresolved-op
+(def lost (totally/missing 1 2))
+
+;; :op-arity-mismatch (too few)
+(def empty-buffer
+  (item-> :parcels (geo/buffer)))
+
+;; :op-arity-mismatch (too many)
+(def overflow (ds/load-geojson "a" "b" "c"))
+
+;; :type-mismatch (string where number expected)
+(def bad-distance
+  (item-> :parcels (geo/buffer "ten")))
+
+;; :pipeline-type-mismatch (ds/transform-crs output :dataset → geo/buffer row-in :feature)
+(def bad-flow
+  (table-> :ds
+    (ds/transform-crs "EPSG:2249")
+    (geo/buffer 10)))
+
+;; :op-output-mismatch (body terminal returns :feature, declared :number)
+(defn ^:op bad-output
+  {:outputs {:n {:type :number}}}
+  [^:table parcels]
+  (item-> :parcels (geo/centroid)))
+
+;; :unknown-predicate via filter-by-column.
+;; Threading-body case: dataset is implicit, predicate sits at arg 1.
+(def bad-filter-threading
+  (table-> :ds
+    (ds/filter-by-column :area :starts-with? 10)))
+
+;; :unknown-predicate via filter-by-column in a function-call Binding.
+;; Dataset is explicit, predicate sits at arg 2.
+(def bad-filter-binding
+  (ds/filter-by-column ds :area :ends-with? 10))
+
+;; :unsinked-top-level-pipeline — bare top-level threading-macro form
+;; whose terminal op is not @sink-kind in cg.dsl.signatures/built-ins.
+;; ds/transform-crs is :transformer-kind, so this fires the diagnostic.
+(table-> :ds
+  (ds/transform-crs "EPSG:2249"))

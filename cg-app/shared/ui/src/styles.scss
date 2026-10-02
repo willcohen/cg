@@ -1,0 +1,168 @@
+@use '@carbon/styles' with (
+  $font-path: '/fonts'
+);
+
+@use '@carbon-labs/react-resizer/scss/resizer';
+
+// GlobalTheme sets only the React context. The app sets data-carbon-theme
+// on the root element.
+:root[data-carbon-theme='white'] {
+  @include styles.theme(styles.$white);
+}
+
+:root[data-carbon-theme='g10'] {
+  @include styles.theme(styles.$g10);
+}
+
+:root[data-carbon-theme='g90'] {
+  @include styles.theme(styles.$g90);
+}
+
+:root[data-carbon-theme='g100'] {
+  @include styles.theme(styles.$g100);
+}
+
+// The theme when the root element has no data-carbon-theme.
+:root {
+  @include styles.theme(styles.$g100);
+}
+
+html,
+body {
+  margin: 0;
+  padding: 0;
+  width: 100%;
+  height: 100%;
+  background-color: var(--cds-background);
+  color: var(--cds-text-primary);
+  min-height: 100vh;
+}
+
+#app,
+.app-root {
+  width: 100%;
+  height: 100%;
+  background-color: var(--cds-background);
+  color: var(--cds-text-primary);
+}
+
+// Overrides the Carbon default background of the content area.
+.cds--content {
+  background-color: var(--cds-background);
+  color: var(--cds-text-primary);
+}
+
+// Carbon and React Flow shrink a pressed button.
+.cds--btn:active,
+.react-flow__controls button:active {
+  transform: none;
+}
+
+.sr-only {
+  position: absolute;
+  width: 1px;
+  height: 1px;
+  padding: 0;
+  margin: -1px;
+  overflow: hidden;
+  clip: rect(0, 0, 0, 0);
+  white-space: nowrap;
+  border-width: 0;
+}
+
+.react-flow {
+  background-color: var(--cg-surface);
+}
+
+.react-flow__pane {
+  background-color: transparent;
+}
+
+.react-flow__background-pattern circle {
+  fill: var(--cg-line-soft);
+  opacity: 0.5;
+}
+
+// The inner .cg-node is the visible node. The React Flow wrapper only sets
+// the position.
+.react-flow__node,
+.react-flow__node-default,
+.react-flow__node-input,
+.react-flow__node-output {
+  background: transparent;
+  border: 0;
+  padding: 0;
+  box-shadow: none;
+  color: var(--cg-ink);
+}
+
+.react-flow__controls button {
+  background-color: var(--cg-surface-raised);
+  border: 1px solid var(--cg-line);
+  color: var(--cg-ink);
+
+  &:hover {
+    background-color: var(--cg-surface-sunk);
+    border-color: var(--cg-accent);
+  }
+
+  svg {
+    fill: var(--cg-ink-muted);
+  }
+}
+
+.react-flow__minimap {
+  background-color: var(--cg-surface-raised);
+  border: 1px solid var(--cg-line);
+}
+
+.react-flow__minimap-canvas {
+  background-color: var(--cg-surface-raised);
+}
+
+.react-flow__minimap-mask {
+  fill: var(--cg-accent);
+  fill-opacity: 0.18;
+}
+
+.react-flow__minimap-node {
+  fill: var(--cg-surface-sunk);
+  stroke: var(--cg-line);
+}
+
+.react-flow__edge-path {
+  stroke: var(--cg-accent);
+  stroke-width: 1.5px;
+}
+
+.react-flow__edge.selected .react-flow__edge-path {
+  stroke: var(--cg-accent);
+  stroke-width: 3px;
+}
+
+.react-flow__handle {
+  background-color: var(--cg-accent);
+  border: 2px solid var(--cg-surface-raised);
+  width: 8px;
+  height: 8px;
+
+  &:hover {
+    background-color: var(--cg-accent);
+    opacity: 0.85;
+  }
+}
+
+.maplibregl-popup-content {
+  background-color: var(--cds-layer-01);
+  color: var(--cds-text-primary);
+  border: 1px solid var(--cds-border-subtle-01);
+  border-radius: 4px;
+}
+
+// The pulse loop in canvas.cljs sets --cg-pulse-opacity on <html> each
+// frame, for all running nodes to pulse in one phase. Without the
+// .cg-pulse-locked class, each node keeps its own animation.
+:root.cg-pulse-locked .cg-node.running .cg-stat span {
+  animation: none;
+  opacity: var(--cg-pulse-opacity, 1);
+}

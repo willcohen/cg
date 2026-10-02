@@ -1,0 +1,8 @@
+*
+*/**
+
+!package.json
+!assets/**/[^.]*.*
+!dist/extension.js
+!dist/webview/bundle.js
+!dist/webview/index.html

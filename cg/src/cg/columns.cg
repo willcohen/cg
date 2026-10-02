@@ -1,0 +1,110 @@
+(ns cg.columns
+  "Column helpers for the analysis modules: the value kinds of rows, the
+   rehydration of cached rows, geometry-key normalization, and export
+   column names and order. They work on any dataset. The caller gives the
+   column lists and the sort key."
+  (:require [cg.dataset :as ds]
+            [clojure.string :as str]))
+
+(defn bool3-val
+  "Restore a stringified three-valued boolean: \"true\"/\"false\"/\"unknown\"
+   come back as true/false/:unknown; every other value passes through."
+  [v]
+  (case v "true" true "false" false "unknown" :unknown v))
+
+(defn bool-val
+  "Restore a boolean that a file stored as a number: 1 gives true and 0
+   gives false. Each other value passes through."
+  [v]
+  (cond
+    (and (number? v) (== v 1)) true
+    (and (number? v) (== v 0)) false
+    :else v))
+
+(defn kwize-val
+  "Restore a stringified keyword value; blank strings and non-strings pass
+   through."
+  [v]
+  (if (and (string? v) (seq v)) (keyword v) v))
+
+(defn value-kinds
+  "The columns of `rows` whose values a file write changes, as sets of
+   column-name strings. :keyword-cols hold keywords and no booleans,
+   :three-valued-cols hold booleans and keywords, and :boolean-cols hold
+   booleans and no keywords."
+  [rows]
+  (let [seen (reduce (fn [acc r]
+                       (reduce-kv (fn [acc k v]
+                                    (cond (keyword? v) (assoc-in acc [(name k) :keyword] true)
+                                          (boolean? v) (assoc-in acc [(name k) :boolean] true)
+                                          :else acc))
+                                  acc r))
+                     {} rows)
+        cols (fn [keywords? booleans?]
+               (into (sorted-set)
+                     (keep (fn [[c s]]
+                             (when (and (= keywords? (boolean (:keyword s)))
+                                        (= booleans? (boolean (:boolean s))))
+                               c)))
+                     seen))]
+    {:keyword-cols      (cols true false)
+     :three-valued-cols (cols true true)
+     :boolean-cols      (cols false true)}))
+
+(defn rehydrate-rows
+  "The rows of `dset` as maps with keyword keys. `kinds` is the
+   value-kinds of the rows that were written. The values of its
+   :keyword-cols come back as keywords, the values of its
+   :three-valued-cols as booleans or keywords, and the values of its
+   :boolean-cols as booleans."
+  [dset kinds]
+  ;; contains? below, because squint cannot call a set that is not a literal.
+  (let [kw-cols (:keyword-cols kinds)
+        b3-cols (:three-valued-cols kinds)
+        b-cols  (or (:boolean-cols kinds) #{})]
+    (mapv (fn [r] (reduce-kv (fn [m k v]
+                               (let [ks (name k)]
+                                 (assoc m (keyword ks)
+                                        (cond
+                                          (contains? kw-cols ks) (kwize-val v)
+                                          (contains? b3-cols ks) (kwize-val (bool3-val v))
+                                          (contains? b-cols ks)  (bool-val v)
+                                          :else                  v))))
+                             {} r))
+          (ds/rows dset :as-maps))))
+
+;; A file read can name the geometry column with the string "geometry". The
+;; select and reproject consumers read the keyword :geometry.
+(defn geom-keyed-row [r]
+  (reduce-kv (fn [m k v] (assoc m (if (= (name k) "geometry") :geometry k) v))
+             {} r))
+
+;; GDAL gives string column names, and the analysis ops read keyword keys.
+(defn keywordize-cols [d]
+  (ds/rename-columns d (into {} (for [c (ds/column-names d)
+                                      :when (string? c)]
+                                  [c (keyword c)]))))
+
+(defn export-column-name
+  "The export spelling of column name `k`, for SQL-shaped consumers:
+   :lot-type gives \"lot_type\" and :rectangular? gives \"is_rectangular\".
+   A name with no hyphen and no ? comes back with no change."
+  [k]
+  (let [s (name k)]
+    (if (str/ends-with? s "?")
+      (str "is_" (str/replace (subs s 0 (dec (count s))) "-" "_"))
+      (str/replace s "-" "_"))))
+
+(defn export-column-order
+  "Order `cols` by `sort-key`, with :geometry last."
+  [cols sort-key]
+  (concat (sort-by sort-key (remove #(= % :geometry) cols))
+          (filterv #(= % :geometry) cols)))
+
+(defn row-col
+  "The value of column `k` in row `r`, under its keyword name or its string
+   name. A cached row has one or the other, because the reader
+   paths differ."
+  [r k]
+  (let [v (get r (keyword k))]
+    (if (some? v) v (get r (name k)))))

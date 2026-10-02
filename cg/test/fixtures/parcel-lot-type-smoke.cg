@@ -1,0 +1,492 @@
+;; parcel-lot-type-smoke.cg — lot-type classification smoke.
+;;
+;; Exercises the directed interior-angle corner test (edge-junction-angle) and
+;; the corner / through / mid-block split in classify-lot-type on synthetic
+;; edges.
+;; cg.parcel-lot-type-smoke-test runs it in the suite; alone:
+;;   bb run test/fixtures/parcel-lot-type-smoke.cg
+;; Throws (non-zero exit) on any failed assertion.
+
+(require '[cg.feature :as f])
+(require '[cg.geo :as geo])
+(require '[cg.dataset :as ds])
+(require '[cg.math :as math])
+(require '[cg.run :as run])
+(run/load-module "src/cg/parcel.cg")
+(run/load-module "src/cg/zoning.cg")
+(require '[cg.parcel :as parcel])
+(require '[cg.zoning :as zoning])
+
+;; cg.parcel holds no threshold. A full thresholds map in feet, with
+;; :widest-right-of-way as the primary-front selector.
+(def thresholds
+  {:units                             {:length "ft" :area "sf" :large-area "acres"
+                                       :area-per-large-area 43560.0}
+   :min-front-street-width            20.0
+   :corner-max-angle-deg              135.0
+   :rear-angle-tolerance-deg          45.0
+   :pointed-lot-max-angle-deg         80.0
+   :pointed-lot-min-rear-length       10.0
+   :construct-imaginary-rear?         true
+   :primary-front-selector            :widest-right-of-way
+   :treat-curved-street-as-tangent?   true
+   :split-edge-at-abutting-changes?   true
+   :abutting-split-min-segment-length 2.0
+   :min-frontage-length               10.0
+   :same-street-angle-deg             25.0
+   :same-street-offset                15.0
+   :same-street-gap                   25.0
+   :corner-gap                        40.0
+   :through-parallel-tol-deg          25.0
+   :vertex-tolerance                  1.0e-3
+   :right-of-way-width-step           5
+   :right-of-way-width-max            500
+   :right-of-way-width-resolution     0.1
+   :slice-vertex-snap                 0.1
+   :slice-dedup                       1.0e-3
+   :split-min-coarse                  6.0
+   :pointed-rear-step                 0.5
+   :pointed-rear-max                  500
+   :coverage-exempt-structure         {:max-area 120.0 :small-dwelling-max-area 200.0
+                                       :small-dwelling-max-units 2 :max-height 15.0}})
+(def dummy (f/linestring [[0.0 0.0] [1.0 0.0]]))
+
+(defn ls [pts] (f/linestring (mapv (fn [[x y]] [(double x) (double y)]) pts)))
+(defn edge [pts abut] {:edge (ls pts) :abutting abut})
+
+(def results (atom []))
+(defn check [label expected actual]
+  (let [ok (= expected actual)]
+    (swap! results conj ok)
+    (println (if ok "PASS" "FAIL") "-" label "(expected" expected "got" actual ")")))
+
+(check "two perpendicular adjacent streets -> corner" :corner
+  (parcel/classify-lot-type dummy
+    [(edge [[0 0] [10 0]] :street)
+     (edge [[10 0] [10 10]] :street)
+     (edge [[10 10] [0 10]] :lot)
+     (edge [[0 10] [0 0]] :lot)]
+    thresholds))
+
+(check "two opposite parallel streets -> through" :through
+  (parcel/classify-lot-type dummy
+    [(edge [[0 0] [10 0]] :street)
+     (edge [[10 0] [10 10]] :lot)
+     (edge [[10 10] [0 10]] :street)
+     (edge [[0 10] [0 0]] :lot)]
+    thresholds))
+
+(check "bent single frontage (shallow turn) -> mid-block (demoted)" :mid-block
+  (parcel/classify-lot-type dummy
+    [(edge [[0 0] [10 0]] :street)
+     (edge [[10 0] [20 1]] :street)
+     (edge [[20 1] [20 10]] :lot)
+     (edge [[20 10] [0 10]] :lot)
+     (edge [[0 10] [0 0]] :lot)]
+    thresholds))
+
+(check "disjoint non-parallel streets (chamfered corner) -> corner" :corner
+  (parcel/classify-lot-type dummy
+    [(edge [[0 0] [10 0]] :street)
+     (edge [[12 2] [12 12]] :street)
+     (edge [[10 0] [12 2]] :lot)]
+    thresholds))
+
+(check "one street -> mid-block" :mid-block
+  (parcel/classify-lot-type dummy
+    [(edge [[0 0] [10 0]] :street) (edge [[10 0] [0 0]] :lot)] thresholds))
+
+(check "no street -> interior" :interior
+  (parcel/classify-lot-type dummy [(edge [[0 0] [10 0]] :lot)] thresholds))
+
+;; Three streets around a block-end lot: two parallel opposite frontages
+;; and a connector. The lot is a corner lot and a through lot at the same
+;; time, not :multi-frontage.
+(check "three streets, parallel pair + connector -> end-cap" :end-cap
+  (parcel/classify-lot-type dummy
+    [(edge [[0 0] [10 0]] :street)
+     (edge [[10 0] [10 10]] :street)
+     (edge [[10 10] [0 10]] :street)] thresholds))
+
+(check "four streets -> multi-frontage" :multi-frontage
+  (parcel/classify-lot-type dummy
+    [(edge [[0 0] [10 0]] :street)
+     (edge [[10 0] [10 10]] :street)
+     (edge [[10 10] [0 10]] :street)
+     (edge [[0 10] [0 0]] :street)] thresholds))
+
+(defn wedge [pts abut rw] {:edge (ls pts) :abutting abut :right-of-way-width rw})
+
+(check "narrow (<20ft) second street is not a frontage -> mid-block" :mid-block
+  (parcel/classify-lot-type dummy
+    [(wedge [[0 0] [10 0]] :street 30)
+     (wedge [[10 0] [10 10]] :street 8)
+     (edge [[10 10] [0 10]] :lot)
+     (edge [[0 10] [0 0]] :lot)]
+    thresholds))
+
+(check "sliver (<10ft long) second street is not a frontage -> mid-block" :mid-block
+  (parcel/classify-lot-type dummy
+    [(wedge [[0 0] [10 0]] :street 30)
+     (wedge [[10 0] [10 4]] :street 30)
+     (edge [[10 4] [0 10]] :lot)
+     (edge [[0 10] [0 0]] :lot)]
+    thresholds))
+
+(check "all streets narrow -> widest fallback keeps mid-block, not interior" :mid-block
+  (parcel/classify-lot-type dummy
+    [(wedge [[0 0] [10 0]] :street 10)
+     (wedge [[10 0] [10 10]] :street 5)
+     (edge [[10 10] [0 10]] :lot)
+     (edge [[0 10] [0 0]] :lot)]
+    thresholds))
+
+;; A jog divides one street frontage into two collinear edges. They group
+;; as one frontage, so the lot stays a plain corner. A 7 ft jog once
+;; counted as a third frontage.
+(check "jogged same-street frontage counts once -> corner" :corner
+  (parcel/classify-lot-type dummy
+    [(wedge [[0 0] [10 0]] :street 30)
+     (wedge [[12 1] [22 1]] :street 30)
+     (wedge [[22 1] [22 11]] :street 30)
+     (edge [[22 11] [0 10]] :lot)
+     (edge [[0 10] [0 0]] :lot)]
+    thresholds))
+
+(let [r (parcel/classify-frontages
+          [(wedge [[0 0] [30 0]] :street 30)
+           (wedge [[30 10] [0 10]] :street 30)
+           (wedge [[0 10] [0 0]] :street 30)
+           (edge [[30 0] [30 10]] :lot)]
+          thresholds)]
+  (check "end-cap: lot-type" :end-cap (:lot-type r))
+  (check "end-cap: corner? true" true (:corner? r))
+  (check "end-cap: through? true" true (:through? r))
+  (check "end-cap: frontage-count 3" 3 (:frontage-count r)))
+
+(let [r (parcel/classify-frontages
+          [(wedge [[0 0] [10 0]] :street 30)
+           (wedge [[10 0] [10 10]] :street 30)
+           (edge [[10 10] [0 10]] :lot)
+           (edge [[0 10] [0 0]] :lot)]
+          thresholds)]
+  (check "corner: corner? true" true (:corner? r))
+  (check "corner: through? false" false (:through? r)))
+
+(let [r (parcel/classify-frontages
+          [(wedge [[0 0] [10 0]] :street 30)
+           (edge [[10 0] [10 10]] :lot)
+           (wedge [[10 10] [0 10]] :street 30)
+           (edge [[0 10] [0 0]] :lot)]
+          thresholds)]
+  (check "through: corner? false" false (:corner? r))
+  (check "through: through? true" true (:through? r)))
+
+;; An interrupted corner apex: the frontages end 12 ft apart (a lot gap
+;; where the neighbor's corner touches), the gap continues the first
+;; frontage, and the streets meet at 90 degrees. The old parallel test
+;; at 45 degrees classified this :through.
+(check "interrupted corner apex -> corner" :corner
+  (parcel/classify-lot-type dummy
+    [(wedge [[0 0] [30 0]] :street 40)
+     (edge [[30 0] [42 0]] :lot)
+     (wedge [[42 0] [42 -30]] :street 40)
+     (edge [[42 -30] [0 -35]] :lot)
+     (edge [[0 -35] [0 0]] :lot)]
+    thresholds))
+
+;; A shallow through lot: frontages 10 ft apart but offset ACROSS the
+;; lot, so no alignment holds and the pair keeps the parallel path.
+(check "shallow through lot stays through" :through
+  (parcel/classify-lot-type dummy
+    [(wedge [[0 0] [10 0]] :street 30)
+     (edge [[10 0] [10 10]] :lot)
+     (wedge [[10 10] [0 10]] :street 30)
+     (edge [[0 10] [0 0]] :lot)]
+    thresholds))
+
+;; Disjoint and 35 degrees apart at a 60 ft gap: not parallel within
+;; the tightened 25-degree tolerance. The result is :corner (a corner with
+;; a cut across it), not :through.
+(check "35-degree divergence is not parallel -> corner" :corner
+  (parcel/classify-lot-type dummy
+    [(wedge [[0 0] [40 0]] :street 40)
+     (edge [[40 0] [95 15]] :lot)
+     (wedge [[95 15] [130 40]] :street 40)
+     (edge [[130 40] [0 -40]] :lot)]
+    thresholds))
+
+;; A cul-de-sac bulb divides into facets at a shallow bend (about 152
+;; degrees). bend-continuation? joins them into one curved frontage, so
+;; the lot is :through against the opposite street, not
+;; :multi-frontage.
+(check "cul-de-sac bulb facets group as one frontage -> through" :through
+  (parcel/classify-lot-type dummy
+    [(wedge [[0 0] [60 0]] :street 30)
+     (edge [[60 0] [58 60]] :lot)
+     (wedge [[58 60] [30 67]] :street 80)
+     (wedge [[30 67] [1 61]] :street 85)
+     (edge [[1 61] [0 0]] :lot)]
+    thresholds))
+
+(check "bend-continuation?: facets at ~152 deg" true
+  (parcel/bend-continuation?
+    (wedge [[58 60] [30 67]] :street 80)
+    (wedge [[30 67] [1 61]] :street 85)
+    thresholds))
+(check "bend-continuation?: 90-deg corner is not a continuation" false
+  (parcel/bend-continuation?
+    (wedge [[0 0] [10 0]] :street 30)
+    (wedge [[10 0] [10 10]] :street 30)
+    thresholds))
+
+(let [nj (parcel/near-gap-junction (ls [[0 0] [30 0]]) (ls [[42 0] [42 -30]]))]
+  (check "near-gap-junction: apex gap measured" true
+    (< 11.9 (:gap nj) 12.1))
+  (check "near-gap-junction: apex gap aligned" true (:aligned? nj))
+  (check "near-gap-junction: apex interior ~90" true
+    (< 89.0 (:interior nj) 91.0)))
+(let [nj (parcel/near-gap-junction (ls [[0 0] [10 0]]) (ls [[10 10] [0 10]]))]
+  (check "near-gap-junction: through pair not aligned" false (:aligned? nj)))
+
+;; A curve corner that ends on the next corner's index has no interior
+;; span. Before the correction, the equal index took the wrap branch and
+;; emitted the ENTIRE ring as one edge (one lot covered its boundary
+;; three times and counted 4 street edges where 2 exist).
+(let [ring [[0.0 0.0] [0.0 10.0] [10.0 10.0] [10.0 0.0] [5.0 0.0] [0.0 0.0]]
+      perim 35.0
+      ecs (parcel/corners->edge-coords ring
+            [{:type :vertex :idx 0}
+             {:type :vertex :idx 1}
+             {:type :vertex :idx 2}
+             {:type :curve :coord [7.5 0.0] :start-idx 3 :end-idx 4}
+             {:type :vertex :idx 4}])
+      seg-len (fn [cs] (reduce + 0.0 (map (fn [[a b]]
+                                            (let [dx (- (first b) (first a))
+                                                  dy (- (second b) (second a))]
+                                              (math/sqrt (+ (* dx dx) (* dy dy)))))
+                                          (partition 2 1 cs))))]
+  (check "equal-index curve corner emits no wrap edge" true
+    (every? #(< (seg-len %) (* 0.9 perim)) ecs)))
+
+;; Two adjacent curve corners on one boundary index: the span between
+;; their mid-points is the edge, not a gap and not a wrap.
+(let [ring [[0.0 0.0] [2.0 0.0] [4.0 0.0] [6.0 0.0] [8.0 0.0]
+            [10.0 0.0] [10.0 10.0] [0.0 10.0] [0.0 0.0]]
+      ecs (parcel/corners->edge-coords ring
+            [{:type :curve :coord [3.0 0.0] :start-idx 1 :end-idx 3}
+             {:type :curve :coord [7.0 0.0] :start-idx 3 :end-idx 5}
+             {:type :vertex :idx 6}
+             {:type :vertex :idx 7}])]
+  (check "adjacent curve corners on one index -> mid-point span" true
+    (boolean (some #(= % [[3.0 0.0] [7.0 0.0]]) ecs))))
+
+;; ~151 deg interior turn: bend under 135 cutoff, corner under 160.
+(def knob-edges
+  [(edge [[0 0] [10 0]] :street)
+   (edge [[10 0] [19 5]] :street)
+   (edge [[19 5] [0 10]] :lot)
+   (edge [[0 10] [0 0]] :lot)])
+(check "knob 135: ~151 deg turn -> mid-block" :mid-block
+  (parcel/classify-lot-type dummy knob-edges (assoc thresholds :corner-max-angle-deg 135.0)))
+(check "knob 160: ~151 deg turn -> corner" :corner
+  (parcel/classify-lot-type dummy knob-edges (assoc thresholds :corner-max-angle-deg 160.0)))
+
+(let [r (parcel/edge-junction-angle (ls [[0 0] [10 0]]) (ls [[10 0] [10 10]]) 1.0e-6)]
+  (check "junction perpendicular: shared?" true (:shared? r))
+  (check "junction perpendicular: interior ~90" true
+    (and (> (:interior r) 89.0) (< (:interior r) 91.0))))
+(let [r (parcel/edge-junction-angle (ls [[0 0] [10 0]]) (ls [[10 0] [20 1]]) 1.0e-6)]
+  (check "junction shallow bend: interior > 135" true (> (:interior r) 135.0)))
+(let [r (parcel/edge-junction-angle (ls [[0 0] [10 0]]) (ls [[0 10] [10 10]]) 1.0e-6)]
+  (check "junction disjoint: not shared" false (:shared? r))
+  (check "junction disjoint: nil interior" nil (:interior r)))
+
+(def sq (f/polygon [[0 0] [10 0] [10 10] [0 10] [0 0]]))
+(defn tedge [tag pts abut rw] {:tag tag :edge (ls pts) :abutting abut :right-of-way-width rw})
+(defn etype [result tag] (:edge-type (first (filter #(= tag (:tag %)) result))))
+(defn rear-count [result] (count (filter #(= :rear (:edge-type %)) result)))
+
+(let [r (parcel/assign-edge-types sq
+          [(tedge :bottom [[0 0] [10 0]] :street 30)
+           (tedge :right  [[10 0] [10 10]] :lot nil)
+           (tedge :top    [[10 10] [0 10]] :lot nil)
+           (tedge :left   [[0 10] [0 0]] :lot nil)]
+          :mid-block thresholds nil)]
+  (check "mid-block: bottom -> front" :front (etype r :bottom))
+  (check "mid-block: top (opposite) -> rear" :rear (etype r :top))
+  (check "mid-block: left -> side" :side (etype r :left))
+  (check "mid-block: right -> side" :side (etype r :right)))
+
+(let [r (parcel/assign-edge-types sq
+          [(tedge :bottom [[0 0] [10 0]] :street 30)
+           (tedge :right  [[10 0] [10 10]] :street 30)
+           (tedge :top    [[10 10] [0 10]] :lot nil)
+           (tedge :left   [[0 10] [0 0]] :lot nil)]
+          :corner thresholds nil)]
+  (check "corner: no rear (both non-front edges touch a front, crit iii)" 0 (rear-count r))
+  (check "corner: top -> side" :side (etype r :top))
+  (check "corner: left -> side" :side (etype r :left)))
+
+(let [r (parcel/assign-edge-types sq
+          [(tedge :bottom [[0 0] [10 0]] :street 30)
+           (tedge :right  [[10 0] [10 10]] :lot nil)
+           (tedge :top    [[10 10] [0 10]] :street 30)
+           (tedge :left   [[0 10] [0 0]] :lot nil)]
+          :through thresholds nil)]
+  (check "through: no rear (sides fail parallel crit i)" 0 (rear-count r))
+  (check "through: bottom is a front" true (contains? #{:front :primary-front} (etype r :bottom)))
+  (check "through: top is a front" true (contains? #{:front :primary-front} (etype r :top))))
+
+(let [r (parcel/assign-edge-types sq
+          [(tedge :bottom [[0 0] [10 0]] :street 30)
+           (tedge :right  [[10 0] [10 10]] :lot nil)
+           (tedge :top    [[10 10] [0 10]] :street 10)
+           (tedge :left   [[0 10] [0 0]] :lot nil)]
+          :through thresholds nil)]
+  (check "rear alley: narrow (<20ft) top street -> rear (criterion iv)" :rear (etype r :top))
+  (check "rear alley: bottom -> primary-front" :primary-front (etype r :bottom)))
+
+(check "edge-arc-table: 2-pt total" 10.0
+  (:total (parcel/edge-arc-table [[0.0 0.0] [10.0 0.0]])))
+(check "edge-arc-table: 3-pt cumulative arcs" [0.0 10.0 20.0]
+  (:arcs (parcel/edge-arc-table [[0.0 0.0] [10.0 0.0] [10.0 10.0]])))
+
+(def s6-samples
+  (mapv (fn [arc c] {:arc arc :cond c})
+        [1.0 3.0 5.0 7.0 9.0 11.0 13.0 15.0 17.0 19.0]
+        [:lot :lot :lot :street :street :street :street :lot :lot :lot]))
+(check "condition-runs: lot/street/lot -> 3 runs" 3
+  (count (parcel/condition-runs s6-samples 20.0)))
+(check "condition-runs: middle run bounds at sample midpoints" [6.0 14.0]
+  (let [r (second (parcel/condition-runs s6-samples 20.0))] [(:lo r) (:hi r)]))
+
+(check "merge-short-runs: sub-min sliver absorbed into neighbor -> 1 run" 1
+  (count (parcel/merge-short-runs
+           [{:cond :lot :lo 0.0 :hi 8.0}
+            {:cond :street :lo 8.0 :hi 9.0}
+            {:cond :lot :lo 9.0 :hi 20.0}] 2.0)))
+(check "merge-short-runs: two valid runs preserved" 2
+  (count (parcel/merge-short-runs
+           [{:cond :lot :lo 0.0 :hi 10.0}
+            {:cond :street :lo 10.0 :hi 20.0}] 2.0)))
+
+(check "arc-slice-coords: straight slice" [[0.0 0.0] [8.0 0.0]]
+  (parcel/arc-slice-coords [[0.0 0.0] [20.0 0.0]] [0.0 20.0] 0.0 8.0 0.1 1.0e-3))
+(check "arc-slice-coords: L-edge slice interpolates ends, keeps vertex"
+  [[5.0 0.0] [10.0 0.0] [10.0 5.0]]
+  (parcel/arc-slice-coords [[0.0 0.0] [10.0 0.0] [10.0 10.0]] [0.0 10.0 20.0] 5.0 15.0 0.1 1.0e-3))
+(check "dedup-coords: drops consecutive duplicate" [[0.0 0.0] [10.0 0.0]]
+  (parcel/dedup-coords [[0.0 0.0] [0.0 0.0] [10.0 0.0]] 1.0e-9))
+
+;; A near-copy of a vertex leaves a micro segment, which makes
+;; edge-junction-angle degenerate and turns a corner lot :corner-or-through.
+(check "arc-slice-coords: cut just past a vertex snaps onto it"
+  [[0.0 0.0] [25.0 0.0]]
+  (parcel/arc-slice-coords [[0.0 0.0] [25.0 0.0] [25.0 20.0]] [0.0 25.0 45.0]
+                           0.0 25.0004 0.1 1.0e-3))
+;; Same defect at the other end of the slice: the near-copy led instead.
+(check "arc-slice-coords: cut just short of a vertex snaps onto it"
+  [[25.0 0.0] [25.0 20.0]]
+  (parcel/arc-slice-coords [[0.0 0.0] [25.0 0.0] [25.0 20.0]] [0.0 25.0 45.0]
+                           24.9996 45.0 0.1 1.0e-3))
+;; Snapping is only for cuts that have effectively arrived at a vertex; a real
+;; mid-segment cut (a neighbor's corner meeting this frontage at a T) still
+;; interpolates.
+(check "arc-slice-coords: cut far from any vertex is not snapped"
+  [[0.0 0.0] [24.0 0.0]]
+  (parcel/arc-slice-coords [[0.0 0.0] [25.0 0.0] [25.0 20.0]] [0.0 25.0 45.0]
+                           0.0 24.0 0.1 1.0e-3))
+(check "snap-arc-to-vertex: within tolerance" 25.0
+  (parcel/snap-arc-to-vertex [0.0 25.0 45.0] 25.0004 0.1))
+(check "snap-arc-to-vertex: outside tolerance leaves the target alone" 24.0
+  (parcel/snap-arc-to-vertex [0.0 25.0 45.0] 24.0 0.1))
+
+;; Triangle lot: front (0,0)-(40,0), apex (20,50). width(y)=40-0.8y, so the
+;; farthest front-parallel chord >= 10 ft sits at y=37.5, (15,37.5)-(25,37.5).
+(def tri (f/polygon [[0 0] [40 0] [20 50] [0 0]]))
+(def tri-front (ls [[0 0] [40 0]]))
+(let [rear (parcel/construct-imaginary-rear-line tri tri-front 10.0 0.5 500)]
+  (check "imaginary rear: farthest >=10ft front-parallel chord" [[15.0 37.5] [25.0 37.5]]
+    (geo/coordinates rear))
+  (check "imaginary rear: length 10" 10.0 (geo/length rear)))
+
+(def tri-edges
+  [{:edge tri-front :edge-type :primary-front :abutting :street}
+   {:edge (ls [[40 0] [20 50]]) :edge-type :side :abutting :lot}
+   {:edge (ls [[20 50] [0 0]])  :edge-type :side :abutting :lot}])
+(let [ir (parcel/pointed-lot-imaginary-rear tri tri-edges :mid-block thresholds)]
+  (check "pointed lot: synthesizes a rear" :rear (:edge-type ir))
+  (check "pointed lot: rear flagged imaginary" true (:imaginary? ir)))
+(check "pointed lot already has a real rear -> no imaginary" nil
+  (parcel/pointed-lot-imaginary-rear tri
+    (conj tri-edges {:edge (ls [[5 30] [15 30]]) :edge-type :rear :abutting :lot})
+    :mid-block thresholds))
+(check "corner lot excluded from imaginary rear (rule)" nil
+  (parcel/pointed-lot-imaginary-rear tri tri-edges :corner thresholds))
+(check "shared sides at >80 deg -> no imaginary rear" nil
+  (parcel/pointed-lot-imaginary-rear sq
+    [{:edge (ls [[5 0] [5 10]]) :edge-type :primary-front :abutting :street}
+     {:edge (ls [[0 0] [10 0]]) :edge-type :side :abutting :lot}
+     {:edge (ls [[10 0] [10 10]]) :edge-type :side :abutting :lot}]
+    :mid-block thresholds))
+
+;; arc-edge is a quarter circle (center (10,0), r=10) from (0,0) to (10,10); its
+;; tangent at (0,0) is vertical. cross is a horizontal cross-street at (0,0), so
+;; the true (tangent) intersection angle is 90 deg; the first raw segment reads
+;; ~105 deg.
+(def arc-edge (ls [[0 0] [1.339746 5] [5 8.660254] [10 10]]))
+(def cross (ls [[0 0] [-10 0]]))
+(check "Step 8: edge-tangent-at on a straight edge = its first segment" [3.0 4.0]
+  (parcel/edge-tangent-at [[0.0 0.0] [3.0 4.0]]))
+(check "Step 8: tangent is a no-op on a straight junction" true
+  (let [s (ls [[0 0] [10 0]]) t (ls [[10 0] [10 10]])]
+    (< (math/abs (- (:interior (parcel/edge-junction-angle s t 1.0e-3 false))
+                    (:interior (parcel/edge-junction-angle s t 1.0e-3 true)))) 1.0e-6)))
+(check "Step 8: tangent changes a curving junction angle (>5 deg)" true
+  (> (math/abs (- (:interior (parcel/edge-junction-angle arc-edge cross 1.0e-3 false))
+                  (:interior (parcel/edge-junction-angle arc-edge cross 1.0e-3 true)))) 5.0))
+(check "Step 8: curving junction tangent angle ~90 (arc-tangent perp to cross)" true
+  (< (math/abs (- (:interior (parcel/edge-junction-angle arc-edge cross 1.0e-3 true)) 90.0)) 1.0))
+
+;; Building is 40 wide (x) x 10 tall (y); its broad face is toward the south
+;; (horizontal) street, so that front wins over the west (vertical) one.
+(check "building-width: picks the front the building faces widest" [[0.0 -5.0] [40.0 -5.0]]
+  (let [bldg  {:geometry (f/polygon [[0 0] [40 0] [40 10] [0 10] [0 0]])}
+        south {:edge (ls [[0 -5] [40 -5]]) :right-of-way-width 30 :edge-type :front}
+        west  {:edge (ls [[-5 0] [-5 10]]) :right-of-way-width 30 :edge-type :front}]
+    (geo/coordinates (:edge (parcel/primary-by-building-width [west south] bldg)))))
+(check "building-width: equal projection -> order-independent (deterministic)" true
+  (let [b  {:geometry (f/polygon [[0 0] [10 0] [10 10] [0 10] [0 0]])}
+        a1 {:edge (ls [[0 -5] [10 -5]]) :right-of-way-width 20 :edge-type :front}
+        a2 {:edge (ls [[0 15] [10 15]]) :right-of-way-width 20 :edge-type :front}]
+    (= (parcel/primary-by-building-width [a1 a2] b)
+       (parcel/primary-by-building-width [a2 a1] b))))
+
+(check "max-by-stable: equal key -> tiebreak wins, order-independent" true
+  (let [items [{:a 5 :k [2.0 0.0]} {:a 5 :k [1.0 0.0]} {:a 3 :k [9.0 0.0]}]]
+    (= (parcel/max-by-stable :a :k items)
+       (parcel/max-by-stable :a :k (reverse items))
+       {:a 5 :k [1.0 0.0]})))
+(check "primary-zoning: equal intersection area -> order-independent" true
+  (let [pg (f/polygon [[0 0] [10 0] [10 10] [0 10] [0 0]])
+        za {:geometry (f/polygon [[0 0] [5 0] [5 10] [0 10] [0 0]])
+            :DIST "D" :SUB "AAAA"}
+        zb {:geometry (f/polygon [[5 0] [10 0] [10 10] [5 10] [5 0]])
+            :DIST "D" :SUB "BBBB"}
+        schema {:district-col :DIST :subdistrict-col :SUB
+                :subdistrict-type-col :KIND :max-far-col :FAR
+                :rear-setback-col :REAR :max-height-col :HT
+                :side-setback-col :SIDE :front-setback-col :FRONT
+                :article-col :ART :subdistrict-code->attrs (fn [_] {})
+                :unique-code-sep "_"}
+        win (fn [rows] (:primary-unique-code
+                         (zoning/get-primary-zoning-info-by-geom pg (ds/->dataset rows) schema)))]
+    (= (win [za zb]) (win [zb za]) "D_AAAA")))
+
+(let [oks   (filter true? @results)
+      fails (remove true? @results)]
+  (println "")
+  (println (str "parcel lot-type smoke: " (count oks) " passed, " (count fails) " failed"))
+  (when (pos? (count fails))
+    (throw (ex-info "parcel lot-type smoke failures" {:failed (count fails)}))))

@@ -1,0 +1,45 @@
+{;; The backend is the only JVM code. Its aliases add its path.
+ :paths []
+
+ :deps {org.clojure/clojure {:mvn/version "1.11.1"}
+        cg/cg {:local/root "../cg"}
+        org.apache.logging.log4j/log4j-core {:mvn/version "2.20.0"}
+        org.apache.logging.log4j/log4j-slf4j-impl {:mvn/version "2.20.0"}}
+
+ ;; tools.deps does not take the :jvm-opts of a :local/root dep. Each JVM
+ ;; alias here must repeat the :jvm-opts of cg/deps.edn.
+ :aliases
+ {:backend {:extra-paths ["backend/src"]
+            :extra-deps {ring/ring-core {:mvn/version "1.11.0"}
+                         ring/ring-jetty-adapter {:mvn/version "1.11.0"}
+                         ring/ring-json {:mvn/version "0.5.1"}
+                         metosin/reitit-ring {:mvn/version "0.7.0"}
+                         ch.qos.logback/logback-classic {:mvn/version "1.4.14"}
+                         org.clojure/tools.logging {:mvn/version "1.2.4"}
+                         nrepl/nrepl {:mvn/version "1.1.0"}
+                         cider/cider-nrepl {:mvn/version "0.47.1"}}
+            :jvm-opts ["--enable-native-access=ALL-UNNAMED"]
+            :main-opts ["-m" "cg-app.backend.server"]}
+
+  :backend-nrepl {:extra-paths ["backend/src"]
+                  :extra-deps {nrepl/nrepl {:mvn/version "1.1.0"}
+                               cider/cider-nrepl {:mvn/version "0.47.1"}}
+                  :jvm-opts ["--enable-native-access=ALL-UNNAMED"]
+                  :main-opts ["-m" "nrepl.cmdline"
+                              "--middleware" "[cider.nrepl/cider-middleware]"
+                              "--port" "7888"]}
+
+  :backend-check {:extra-deps {babashka/fs {:mvn/version "0.5.20"}}}
+
+  :test {:extra-paths ["backend/src" "test"]
+         :extra-deps {ring/ring-core {:mvn/version "1.11.0"}
+                      ring/ring-jetty-adapter {:mvn/version "1.11.0"}
+                      ring/ring-json {:mvn/version "0.5.1"}
+                      metosin/reitit-ring {:mvn/version "0.7.0"}
+                      ch.qos.logback/logback-classic {:mvn/version "1.4.14"}
+                      org.clojure/tools.logging {:mvn/version "1.2.4"}
+                      io.github.cognitect-labs/test-runner
+                      {:git/tag "v0.5.1" :git/sha "dfb30dd"}}
+         :jvm-opts ["--enable-native-access=ALL-UNNAMED"]
+         :main-opts ["-m" "cognitect.test-runner"]
+         :exec-fn cognitect.test-runner.api/test}}}

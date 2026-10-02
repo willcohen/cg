@@ -1,0 +1,31 @@
+(ns parcel
+  "The parcel of Boston City Hall, with its attributes. Run it in cg/ with
+   `bb run examples/parcel.cg`, or load it in the web app and click Run. It
+   sends one request to the parcels layer of the city."
+  (:require [cg.dataset :as ds]
+            [cg.macros :refer [table->]]))
+
+;; The where clause selects one parcel on the server, by its id. outSR asks
+;; for longitude and latitude (EPSG:4326), because the map draws EPSG:4326.
+;; The url is the parcels layer that examples/boston.cg reads.
+(def query
+  {:url (str "https://gis.bostonplans.org/hosting/rest/services/"
+             "FY26_Parcels_Detailed/FeatureServer/0")
+   :opts {:where "MAP_PAR_ID = '0302615000'"
+          :extra-params {"outSR" "4326"}}})
+
+;; The file has an ns form, because the JS runtime can wait at the top level
+;; only in a module.
+(def city-hall (await (ds/ensure-dataset query)))
+
+;; Run executes the last threading-macro binding in the file. The popup of
+;; the parcel shows these facts, and all the fields of the layer below them.
+(def parcel
+  (table-> :city-hall
+    (map-layer {:name "city-hall" :kind :fill :opacity 0.5
+                :popup {:title "FULL_ADDRESS"
+                        :facts [{:label "Parcel" :value "MAP_PAR_ID"}
+                                {:label "Owner" :value "OWNER"}
+                                {:label "Land use" :value "LU_DESC"}
+                                {:label "Lot size" :value "LAND_SF" :unit "sf"}
+                                {:label "Year built" :value "YR_BUILT"}]}})))

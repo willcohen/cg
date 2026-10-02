@@ -1,0 +1,35 @@
+;; Exported clj-kondo configuration for net.willcohen/cg.
+;;
+;; A consumer imports it with:
+;;   clj-kondo --lint "$(clojure -Spath)" --copy-configs --skip-lint
+;; then names the copied directory in its own :config-paths, which also puts
+;; the hooks below on the hook classpath.
+;;
+;; cg lints itself through this export as well, from two config directories:
+;; cg/.clj-kondo (the module, which lints src) and the repository-root
+;; .clj-kondo (which lints the .cg example programs). Both hold a copy, so
+;; `bb ts:kondo` must be followed by the refresh command above in each.
+;;
+;; clj-kondo has no option for extra file extensions. A directory scan reads
+;; only clj, cljs, cljc, edn, bb, cljd and clj_kondo, so it skips every .cg
+;; program. Name them on the command line to lint them:
+;;   clj-kondo --lint $(ls cg/examples/*.cg)
+{:hooks
+ {:analyze-call
+  ;; cg.geo mints its whole public surface from the wasmts registry at compile
+  ;; time. Without the hook every call into that surface reads as an unresolved
+  ;; var. The macro is :refer'd, so a call site resolves to the ns that defines
+  ;; it; the alias spelling is registered too, for a call site that requires
+  ;; cg.ts-macros without :refer.
+  {cg.ts-macros/define-all-ts-fns hooks.cg.ts-macros/define-all-ts-fns
+   ts-macros/define-all-ts-fns hooks.cg.ts-macros/define-all-ts-fns
+
+   ;; cg's pseudo-threading macros (item->, coll->, table->, layers->)
+   ;; carry DSL bodies, not function calls. `(geo/buffer 100)` inside
+   ;; them is parsed by parse-operation-form, never invoked as a call.
+   ;; The hook rewrites op-forms to (do args...) so clj-kondo stops
+   ;; emitting :invalid-arity on op heads while still linting arg values.
+   cg.macros/item->   hooks.cg.macros/threading-macro
+   cg.macros/coll->   hooks.cg.macros/threading-macro
+   cg.macros/table->  hooks.cg.macros/threading-macro
+   cg.macros/layers-> hooks.cg.macros/threading-macro}}}

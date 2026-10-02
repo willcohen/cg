@@ -1,0 +1,28 @@
+{
+  "objectIdFieldName": "OBJECTID",
+  "geometryType": "esriGeometryPolygon",
+  "spatialReference": { "wkid": 4326, "latestWkid": 4326 },
+  "exceededTransferLimit": true,
+  "fields": [
+    { "name": "OBJECTID", "type": "esriFieldTypeOID", "alias": "OBJECTID" },
+    { "name": "NAME", "type": "esriFieldTypeString", "alias": "NAME", "length": 32 }
+  ],
+  "features": [
+    {
+      "attributes": { "OBJECTID": 1, "NAME": "HOLES" },
+      "geometry": { "rings": [
+        [ [-20, -20], [-20, 20], [20, 20], [20, -20], [-20, -20] ],
+        [ [2, 2], [4, 2], [4, 4], [2, 4], [2, 2] ],
+        [ [12, 12], [14, 12], [14, 14], [12, 14], [12, 12] ],
+        [ [9, 5], [11, 5], [11, 6], [9, 6], [9, 5] ]
+      ] }
+    },
+    {
+      "attributes": { "OBJECTID": 2, "NAME": "PARTS" },
+      "geometry": { "rings": [
+        [ [1, 1], [1, 3], [3, 3], [3, 1], [1, 1] ],
+        [ [30, 30], [30, 32], [32, 32], [32, 30], [30, 30] ]
+      ] }
+    }
+  ]
+}

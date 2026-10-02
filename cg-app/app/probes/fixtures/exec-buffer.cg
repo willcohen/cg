@@ -1,0 +1,22 @@
+;; Execution fixture for both backends. item-> over a def'd vector of
+;; raw points runs on either runtime with zero file I/O.
+;;
+;; Deliberately NOT parser-clean: the tree-sitter parser flags the vector-
+;; literal def (one diagnostic) because no geometry constructor is in the
+;; signature registry, and the registered dataset loaders (ds/geojson->dataset,
+;; ds/load-*) are unusable here — their JVM arrow promotion trips the Arrow
+;; allocator leak guard (pre-existing cg core bug, no JVM test covers it).
+;; The shell treats parser diagnostics as non-fatal (LoadFile @guidance):
+;; the flow still renders and Run still executes.
+(require '[cg.feature :as f])
+(require '[cg.geo :as geo])
+(require '[cg.macros :refer [item->]])
+
+(def pts [(f/point 0 0) (f/point 10 10)])
+
+(def buffered
+  (item-> pts
+          (geo/buffer 5)))
+
+^:cgproj
+{:nodes {:buffer-1 {:pos [300 200]}}}

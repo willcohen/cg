@@ -1,0 +1,13 @@
+;; model-inspection.cg - Example for model inspection.
+;;
+;; Inspect with: cg show-model test/fixtures/model-inspection.cg
+;; Regenerate code with: cg generate test/fixtures/model-inspection.cg
+
+(require '[cg.macros :refer [item->]])
+(require '[cg.geo :as geo])
+
+(def my-model
+  (item-> :parcels
+    (geo/buffer 100)
+    (geo/simplify 1.0)
+    (geo/centroid)))

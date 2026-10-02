@@ -1,0 +1,32 @@
+;; clj-kondo configuration for cg.
+;;
+;; The three imported directories are copied from the libraries themselves, not
+;; hand-written. Refresh them after a dependency bump with:
+;;   clj-kondo --lint "$(clojure -Spath)" --copy-configs --skip-lint
+;;
+;; net.willcohen/proj supplies hooks for the generated PROJ surface. Those fns
+;; are interned at runtime, so without the hooks every cg call site into
+;; proj/* reads as "Unresolved var". net.willcohen/native supplies
+;; hooks.native.generated, which the proj hooks depend on, plus the squint
+;; host-escape excludes every .cljc in this stack needs.
+;;
+;; net.willcohen/cg is cg's own export, on the classpath through this project's
+;; resources/. It supplies the hook for the cg.geo surface that
+;; (define-all-ts-fns) mints. cg lints itself through the copy, not through the
+;; export directly, so `bb ts:kondo` must be followed by the refresh command
+;; above before the new names reach this lint.
+{:config-paths ["imports/net.willcohen/native"
+                "imports/net.willcohen/proj"
+                "imports/net.willcohen/cg"]
+
+ ;; Rich comment blocks hold usage sketches with free symbols on purpose
+ ;; (`buildings`, `geom1`, an un-required `slurp`). They are documentation, not
+ ;; code paths, so unresolved names there are noise that hides the real ones.
+ :config-in-comment {:linters {:unresolved-symbol {:level :off}
+                               :unresolved-namespace {:level :off}}}
+
+ ;; cg.dataset registers these names as flow operations, not as vars:
+ ;; transform-crs is an operation group that expands to three steps, and
+ ;; filter-by-column is a DSL alias of cg.dataset/filter.
+ :linters {:unresolved-var {:exclude [cg.dataset/transform-crs
+                                      cg.dataset/filter-by-column]}}}

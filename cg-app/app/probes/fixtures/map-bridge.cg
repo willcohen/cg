@@ -1,0 +1,32 @@
+(require '[cg.dataset :as ds])
+(require '[cg.feature :as f])
+(require '[cg.macros :refer [table->]])
+
+;; Map-bridge fixture: a table-> flow whose result is a dataset with a
+;; geometry column, so running it on the JS backend should bridge onto the map as
+;; the cgdata-mapped layer.
+;;
+;; ds/->dataset is column-major and the right constructor for geometry on the
+;; JS backend: its cljs path does a SHALLOW coerce (not clj->js), so the WasmTS
+;; geometry handles pass through un-walked (clj->js descends into the geometry
+;; Proxy and throws "'ownKeys' on proxy" — squint #11 / #824). Geometries live
+;; in a plain cljs vector, same style as exec-buffer.cg's `pts`.
+;;
+;; Two small polygons already in EPSG:4326 (lng/lat): the convention is that
+;; map-bound flows terminate in EPSG:4326, honored here by construction. :zone
+;; is a scalar property that survives serialization; a nested-geometry column
+;; would be dropped by dataset->geojson-string's scalar-property guard.
+(def parcels
+  (ds/->dataset
+    {:geometry [(f/polygon [[-71.060 42.350] [-71.055 42.350]
+                            [-71.055 42.355] [-71.060 42.355]
+                            [-71.060 42.350]])
+                (f/polygon [[-71.050 42.350] [-71.045 42.350]
+                            [-71.045 42.355] [-71.050 42.355]
+                            [-71.050 42.350]])]
+     :zone ["R1" "R2"]}))
+
+;; The last threading-macro binding is what Run executes. A zero-op table->
+;; passes the source dataset straight to the result sink, so the run result is
+;; the parcels dataset.
+(def mapped (table-> :parcels))

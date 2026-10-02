@@ -1,0 +1,83 @@
+name: CI
+
+on:
+  push:
+    branches: [main]
+  pull_request:
+
+concurrency:
+  group: ${{ github.workflow }}-${{ github.ref }}
+  cancel-in-progress: true
+
+jobs:
+  js:
+    name: JS runtime and demo
+    runs-on: ubuntu-latest
+    timeout-minutes: 30
+    steps:
+      - uses: actions/checkout@v7
+      # The gates of this repository run on Node 26 only.
+      - uses: actions/setup-node@v7
+        with:
+          node-version: 26
+          package-manager-cache: false
+      - uses: DeLaGuardo/setup-clojure@13.6.1
+        with:
+          bb: 1.13.220
+      - name: Install the packages
+        run: |
+          (cd cg && bb npm:install)
+          (cd cg-app && bb setup && bb vendor-deps)
+      - name: Test on the JS runtime
+        run: cd cg && bb test:cljs
+      - name: Build the demo
+        run: cd cg-app && bb build:demo
+
+  jvm:
+    name: JVM runtime
+    runs-on: ubuntu-latest
+    timeout-minutes: 30
+    steps:
+      - uses: actions/checkout@v7
+      # The org.graalvm pins of cg/deps.edn must be the release of this JDK.
+      - uses: graalvm/setup-graalvm@v1.6.6
+        with:
+          distribution: graalvm-community
+          version: '25.3.4.1'
+          java-version: '25'
+      - uses: DeLaGuardo/setup-clojure@13.6.1
+        with:
+          bb: 1.13.220
+          cli: latest
+          clj-kondo: '2026.08.04'
+      - uses: actions/setup-node@v7
+        with:
+          node-version: 26
+          package-manager-cache: false
+      - uses: actions/cache@v6
+        with:
+          path: |
+            ~/.m2
+            ~/.gitlibs
+            ~/.clojure/.cpcache
+          key: jvm-${{ hashFiles('**/deps.edn') }}
+      # The JVM parser reads its grammar from cg/node_modules.
+      - name: Install the packages
+        run: cd cg && bb npm:install
+      # .clj-kondo/imports is not tracked, and bb lint does not make it. The
+      # class path holds the configs of the deps and of cg's own export.
+      - name: Import the clj-kondo configs
+        run: |
+          cd cg
+          cp=$(clojure -Spath)
+          clj-kondo --lint "$cp" --copy-configs --skip-lint
+      - name: Lint
+        run: cd cg && bb lint
+      - name: Test the library
+        run: cd cg && bb test
+      # The jar copies the parser files from cg/node_modules. This step does
+      # not deploy.
+      - name: Build the jar
+        run: cd cg && bb jar
+      - name: Test the backend
+        run: cd cg-app && clojure -M:test

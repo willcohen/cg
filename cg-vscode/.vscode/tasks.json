@@ -1,0 +1,45 @@
+{
+  "version": "2.0.0",
+  "tasks": [
+    {
+      "type": "npm",
+      "script": "dev",
+      "label": "npm: dev",
+      "detail": "bb build:vscode in cg-app, then compile the extension and stage the webview assets",
+      "group": {
+        "kind": "build",
+        "isDefault": true
+      },
+      "presentation": {
+        "reveal": "silent",
+        "panel": "dedicated",
+        "clear": true
+      },
+      "problemMatcher": []
+    },
+    {
+      "type": "npm",
+      "script": "compile",
+      "group": "build",
+      "label": "npm: compile",
+      "detail": "squint compile + esbuild bundle (extension host)",
+      "problemMatcher": []
+    },
+    {
+      "type": "npm",
+      "script": "release",
+      "group": "build",
+      "label": "npm: release",
+      "detail": "squint compile + esbuild bundle (minified)",
+      "problemMatcher": []
+    },
+    {
+      "type": "npm",
+      "script": "bundle-webview",
+      "group": "build",
+      "label": "npm: bundle-webview",
+      "detail": "esbuild webview bundle (skip cljs)",
+      "problemMatcher": []
+    }
+  ]
+}

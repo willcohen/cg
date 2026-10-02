@@ -1,0 +1,66 @@
+{
+  "name": "@wcohen/cg",
+  "version": "0.0.1",
+  "description": "Platform-independent GIS library for JavaScript and Clojure",
+  "homepage": "https://github.com/willcohen/cg",
+  "repository": {
+    "type": "git",
+    "url": "git+https://github.com/willcohen/cg.git",
+    "directory": "cg"
+  },
+  "bugs": "https://github.com/willcohen/cg/issues",
+  "main": "dist/cg.mjs",
+  "type": "module",
+  "engines": {
+    "node": ">=26"
+  },
+  "publishConfig": {
+    "access": "public"
+  },
+  "bin": {
+    "cg": "./bin/cg.mjs"
+  },
+  "exports": {
+    ".": "./dist/cg.mjs",
+    "./wasmts-handler": "./dist/cg-wasmts-handler.mjs"
+  },
+  "files": [
+    "dist/*.mjs",
+    "bin/",
+    "src/cg/*.cg",
+    "examples/",
+    "README.md",
+    "LICENSE"
+  ],
+  "scripts": {
+    "build": "node esbuild.config.mjs",
+    "cg": "node bin/cg.mjs"
+  },
+  "keywords": [
+    "gis",
+    "geospatial",
+    "geometry",
+    "clojure",
+    "clojurescript"
+  ],
+  "author": "Will Cohen",
+  "license": "Apache-2.0 WITH LLVM-exception",
+  "dependencies": {
+    "@wcohen/wasmts": "0.1.0-alpha7",
+    "@yogthos/tree-sitter-clojure": "0.0.14",
+    "arquero": "^8.0.3",
+    "cljc-flow": "^0.0.1",
+    "ffi-wasm": "0.0.3",
+    "gdal-wasm": "0.0.1",
+    "proj-wasm": "0.1.0",
+    "squint-cljs": "^0.14.210",
+    "web-tree-sitter": "0.26.8"
+  },
+  "devDependencies": {
+    "chokidar-cli": "^3.0.0",
+    "esbuild": "^0.19.0"
+  },
+  "overrides": {
+    "ffi-wasm": "0.0.3"
+  }
+}

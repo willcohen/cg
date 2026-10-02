@@ -1,0 +1,6 @@
+{
+  // Don't prompt "errors exist after running preLaunchTask" when the
+  // build prints warnings; just launch the dev host. preLaunchTask
+  // exit code is still respected — a real build failure aborts.
+  "debug.onTaskErrors": "debugAnyway"
+}

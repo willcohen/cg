@@ -1,0 +1,15 @@
+(ns test.mod-b
+  "Fixture for load_module_test: see mod_a.cg. The def of loud-greeting
+   reads mod_a at load time, as zoning.cg reads parcel.cg. The alias
+   export is a JS reserved word."
+  (:require [cg.run :as run]
+            [clojure.string :as export]))
+
+(run/load-module "test/fixtures/modules/mod_a.cg")
+(clojure.core/require '[test.mod-a :as a])
+
+(defn helper [] "b")
+
+(defn from-a [] (a/shout (a/helper)))
+
+(def loud-greeting (export/trim (a/shout a/greeting)))

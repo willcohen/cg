@@ -1,0 +1,31 @@
+;; simple.cg - A point, a line and a polygon, each with a buffer around it.
+;;
+;; Run it in cg/ with `bb run examples/simple.cg` or
+;; `node bin/cg.mjs run examples/simple.cg`. With the npm package, run
+;; `npx cg run simple.cg`. In the web app, load it and click Run. It needs
+;; no backend and no data files.
+
+(require '[cg.dataset :as ds])
+(require '[cg.feature :as f])
+(require '[cg.geo :as geo])
+(require '[cg.macros :refer [table->]])
+
+;; Three shapes. The coordinates are longitude and latitude
+;; (EPSG:4326). The dataset has one column for each property, with one value
+;; for each shape.
+(def shapes
+  (ds/->dataset
+    {:geometry [(f/point -71.0589 42.3601)
+                (f/linestring [[-71.0650 42.3550] [-71.0550 42.3580]])
+                (f/polygon [[-71.0500 42.3500] [-71.0450 42.3500]
+                            [-71.0450 42.3550] [-71.0500 42.3550]
+                            [-71.0500 42.3500]])]
+     :name ["point" "line" "polygon"]}))
+
+;; Run executes the last threading-macro binding in the file. table-> applies
+;; each operation to the dataset, one row at a time. The buffer distance has
+;; the units of the coordinates. Here, 0.0005 degrees is about 55 m north to
+;; south and about 41 m east to west.
+(def buffered
+  (table-> :shapes
+    (geo/buffer 0.0005)))

@@ -1,0 +1,3 @@
+;; For tools that start at the repo root, such as an editor REPL. cg/deps.edn
+;; holds the dependencies, the aliases and the JVM options. Run tasks from cg/.
+{:deps {cg/cg {:local/root "cg"}}}
