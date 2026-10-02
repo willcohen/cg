@@ -1,7 +1,7 @@
 (ns boston
-  "Existing-zoning conformity of Boston parcels, over the public GIS layers
+  "Existing-zoning conformity of Boston parcels, using the public GIS layers
    of the city. The file gives cg.parcel and cg.zoning the Boston column
-   names, thresholds and lot-area rules. One file, three uses:
+   names, thresholds and lot-area rules. This file can be:
 
      - Opened in the map (CG: Open Map): the tail defs the map layers of
        `scope`.
@@ -42,14 +42,14 @@
 (def analysis-cache-dir (cache/resolve-dir ".cg-cache/analysis"))
 (def analysis-crs "EPSG:2249")
 
-;; The layer catalog. :version is a part of each cache key: change it when
-;; the city publishes a new revision of the layer.
+;; :version is a part of each cache key: change it when the city publishes a
+;; new revision of the layer.
 
 (def gis-base "https://gis.bostonplans.org/hosting/rest/services/")
 
 (def zoning-spec
   {:url (str gis-base "Zoning_Subdistricts_Data/FeatureServer/0")
-   :version "2026-07-09"
+   :version "2026-10-02"
    :cache-dir cache-dir})
 
 (def parcels-spec
@@ -58,14 +58,14 @@
                            "RES_UNITS,COM_UNITS,GROSS_AREA,LIVING_AREA,LAND_SF,"
                            "YR_BUILT,BLDG_SEQ,NUM_BLDGS,OWN_OCC")
           :result-record-count 2000}
-   :version "fy26-2026-07-09"
+   :version "fy26-2026-10-02"
    :cache-dir cache-dir})
 
 (def buildings-spec
   {:url (str gis-base "Boston_Buildings/FeatureServer/9")
    :opts {:out-fields "PART_USE,BLDG_HGT_2010,GRND_ELEV_2010,ROOF_ELEV_2010,Land_Use"
           :result-record-count 2000}
-   :version "2026-07-09"
+   :version "2026-10-02"
    :cache-dir cache-dir})
 
 (def impervious-spec
@@ -75,7 +75,7 @@
    ;; loader, "OBJECTID ASC", gives HTTP 400.
    :opts {:out-fields "FID,TYPE" :order-by "FID ASC"
           :result-record-count 2000}
-   :version "2026-07-31"
+   :version "2026-10-02"
    :cache-dir cache-dir})
 
 (def layer-versions
@@ -241,8 +241,6 @@
   [["edges" :debug-edges] ["envelope" :debug-envelope]
    ["boundary" :debug-boundary] ["setbacks" :debug-setbacks]])
 
-;; The units that a residential land use implies when an assessing record
-;; has no RES_UNITS.
 (def lu-implied-units {"R1" 1.0 "R2" 2.0 "R3" 3.0 "R4" 4.0})
 
 (defn ^:op roll-up-parcels
