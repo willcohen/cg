@@ -21,6 +21,7 @@
             #?(:clj [net.willcohen.proj.handler :as proj-handler])
             #?(:clj [cg.pool :as cg-pool-reg])
             [cg.run.fusion :as fusion]
+            [cg.run.eos :as eos]
             #?(:clj [clojure.tools.logging :as log])
             #?(:cljs ["cljc-flow/flow" :as flow])
             #?(:cljs ["cljc-flow/core" :as ca])
@@ -847,25 +848,22 @@
 
 (defn- table-source-step
   "A source step for table-> mode: it registers the dataset context and emits
-  `ds` in batches, each in a FlowDataset wrapper."
+  `ds` in batches, each in a FlowDataset wrapper, then eos/eos."
   [ds opts]
   ;; No index in the cljs context: no step queries it, and its build walks
   ;; each geometry of the table for each flow.
   (let [ctx-id (dataset/register-dataset-context!
                 ds #?(:clj opts :cljs (assoc opts :build-index? false)))
         batches (dataset/dataset->batches ds opts)
-        batch-count (count batches)
         table-meta {:cg.dataset/table-rows (dataset/row-count ds)}
         wrapped-batches (mapv #(dataset/wrap-dataset % table-meta) batches)]
     (fn step-fn
-      ([] {:params {:context-id ctx-id
-                    :batch-count batch-count}
+      ([] {:params {:context-id ctx-id}
            :ins {:trigger "Start signal"}
            :outs {:out "Dataset batches"}})
 
       ([_args]
-       {:batch-count batch-count
-        :batches wrapped-batches
+       {:batches wrapped-batches
         :context-id ctx-id
         :emitting false})
 
@@ -878,7 +876,7 @@
        (if (:emitting state)
          [state {}]
          [(assoc state :emitting true)
-          {:out (:batches state)}])))))
+          {:out (conj (:batches state) eos/eos)}])))))
 
 #?(:clj
    (defn- assemble-batches
@@ -906,19 +904,19 @@
          assembled))))
 
 (defn- table-sink-step
-  "A sink step for table-> mode: when `expected-batch-count` batches are in,
-  it stores the assembled dataset in `result-atom` and calls `completion-fn`."
-  [result-atom expected-batch-count completion-fn]
+  "A sink step for table-> mode: when each of its `n-inputs` connections sent
+  eos/eos, it stores the assembled dataset in `result-atom` and calls
+  `completion-fn`."
+  [result-atom n-inputs completion-fn]
   (fn step-fn
-    ([] {:params {:expected-batch-count expected-batch-count}
+    ([] {:params {:n-inputs n-inputs}
          :ins {:in "Dataset batches"}
          :outs {}})
 
     ;; The batches stay wrapped in the state, because postwalk must not walk
     ;; into them.
     ([_args]
-     {:received-count 0
-      :expected expected-batch-count
+     {:eos-count 0
       :batches []})
 
     ([state lifecycle]
@@ -929,15 +927,13 @@
      state)
 
     ([state _in-name msg]
-     (let [new-batches (conj (:batches state) msg)
-           new-count (inc (:received-count state))
-           new-state (assoc state :batches new-batches :received-count new-count)]
-       (when (and (:expected new-state)
-                  (= new-count (:expected new-state))
-                  completion-fn)
-         (reset! result-atom (assemble-batches new-batches))
-         (completion-fn))
-       [new-state {}]))))
+     (if (eos/eos? msg)
+       (let [n (inc (:eos-count state))]
+         (when (and (= n n-inputs) completion-fn)
+           (reset! result-atom (assemble-batches (:batches state)))
+           (completion-fn))
+         [(assoc state :eos-count n) {}])
+       [(update state :batches conj msg) {}]))))
 
 (defn- bind-sources
   "Map each source node id of `model` to its data in `bindings`, which has
@@ -1191,7 +1187,29 @@
          result-atom (atom nil)
          completed (atom false)
          completion-fn #(reset! completed true)
-         batch-counts (atom {})
+
+        ;; Each edge is a connection [[from :out] [to :in]]. No trigger conn is
+        ;; necessary, because both flow systems make the :trigger channels
+        ;; from the step descriptions. Fusion: an edge into a folded node is
+        ;; internal and is dropped, and an edge from the last node of a fused
+        ;; group leaves from the representative.
+         conns (into []
+                     (keep (fn [edge]
+                             (let [{:keys [from to]} edge]
+                               (cond
+                                 (contains? skipped-ids to) nil
+                                 (contains? last-to-rep from)
+                                 [[(get last-to-rep from) :out] [to :in]]
+                                 (contains? skipped-ids from) nil
+                                 :else [[from :out] [to :in]]))))
+                     (:edges model))
+
+        ;; A table proc sends eos/eos after an eos/eos from each of these.
+         n-inputs (frequencies (map (fn [[_ [to _]]] to) conns))
+         table-step (fn [pid step]
+                      (if is-table-mode?
+                        (eos/forward-eos step (get n-inputs pid 0))
+                        step))
 
         ;; trace/with-worker-busy attributes the work on each row to the pool
         ;; thread that ran it.
@@ -1268,10 +1286,13 @@
                       (contains? fused-steps pid)
                       (assoc acc pid
                              {:proc #?(:clj  (make-process
-                                              (instrument-flow-step
-                                               (wire-pid model pid)
-                                               (get fused-steps pid)))
-                                       :cljs (make-process (get fused-steps pid)))
+                                              (table-step
+                                               pid
+                                               (instrument-flow-step
+                                                (wire-pid model pid)
+                                                (get fused-steps pid))))
+                                       :cljs (make-process
+                                              (table-step pid (get fused-steps pid))))
                               :args {}})
 
                       :else
@@ -1279,15 +1300,12 @@
                              (case (:type node)
                                :source
                                (if is-table-mode?
-                                 (let [ds (get sources pid)
-                                       _ (when-not (dataset/dataset? ds)
-                                           (throw (ex-info "table-> mode requires dataset bindings"
-                                                           {:source pid
-                                                            :data-type (type ds)})))
-                                       step (table-source-step ds (or batch-opts {}))
-                                       batch-count (:batch-count (:params (step)))]
-                                   (swap! batch-counts assoc pid batch-count)
-                                   {:proc (make-process step)
+                                 (let [ds (get sources pid)]
+                                   (when-not (dataset/dataset? ds)
+                                     (throw (ex-info "table-> mode requires dataset bindings"
+                                                     {:source pid
+                                                      :data-type (type ds)})))
+                                   {:proc (make-process (table-source-step ds (or batch-opts {})))
                                     :args {}})
                                  {:proc (make-process (source-step (get sources pid)))
                                   :args {}})
@@ -1300,27 +1318,31 @@
                                             {})]
                                  (if has-incoming-edge?
                                    {:proc (make-process
-                                           (instrument-flow-step
-                                            (wire-pid model pid)
-                                            (operation->step node opts)))
+                                           (table-step
+                                            pid
+                                            (instrument-flow-step
+                                             (wire-pid model pid)
+                                             (operation->step node opts))))
                                     :args args}
                                 ;; No incoming edge: a source operation.
-                                   {:proc (make-process
-                                           (instrument-flow-step
-                                            (wire-pid model pid)
-                                            (source-operation->step
-                                             (resolve-operation (:fn node))
-                                             (:params node)
-                                             (op-schema node))))
-                                    :args {}}))
+                                   (let [step (instrument-flow-step
+                                               (wire-pid model pid)
+                                               (source-operation->step
+                                                (resolve-operation (:fn node))
+                                                (:params node)
+                                                (op-schema node)))]
+                                     {:proc (make-process
+                                             (if is-table-mode?
+                                               (eos/end-with-eos step)
+                                               step))
+                                      :args {}})))
 
                                :sink
                                (if is-table-mode?
-                                 (let [expected-batches (reduce + 0 (vals @batch-counts))]
-                                   {:proc (make-process (table-sink-step result-atom
-                                                                         expected-batches
-                                                                         completion-fn))
-                                    :args {}})
+                                 {:proc (make-process (table-sink-step result-atom
+                                                                       (get n-inputs pid 0)
+                                                                       completion-fn))
+                                  :args {}}
                                  {:proc (make-process (sink-step result-atom
                                                                  sink-expected-count
                                                                  completion-fn))
@@ -1329,23 +1351,7 @@
                                (throw (ex-info (str "Unknown node type: " (:type node))
                                                {:node node})))))))
                 {}
-                (:nodes model))
-
-        ;; Each edge is a connection [[from :out] [to :in]]. No trigger conn is
-        ;; necessary, because both flow systems make the :trigger channels
-        ;; from the step descriptions. Fusion: an edge into a folded node is
-        ;; internal and is dropped, and an edge from the last node of a fused
-        ;; group leaves from the representative.
-         conns (into []
-                     (keep (fn [edge]
-                             (let [{:keys [from to]} edge]
-                               (cond
-                                 (contains? skipped-ids to) nil
-                                 (contains? last-to-rep from)
-                                 [[(get last-to-rep from) :out] [to :in]]
-                                 (contains? skipped-ids from) nil
-                                 :else [[from :out] [to :in]]))))
-                     (:edges model))]
+                (:nodes model))]
 
      {:config {:procs procs
                :conns conns}
@@ -1544,8 +1550,14 @@
                    results (loop []
                              (let [elapsed (- (System/currentTimeMillis) start-time)]
                                (cond
+                                 ;; A step that throws puts its error on
+                                 ;; error-chan before it reads the next message.
+                                 ;; Thus the error of a failed batch is in the
+                                 ;; chan when eos/eos completes the sink.
                                  @completed
-                                 @result-atom
+                                 (if-let [err (async/poll! error-chan)]
+                                   (throw (flow-error-ex err))
+                                   @result-atom)
 
                                ;; The error check: this clause throws or falls through.
                                  (let [err (async/poll! error-chan)]
@@ -1648,6 +1660,16 @@
                                               (let [elapsed (- (js/Date.now) start-time)
                                                     err (ca/poll! error-chan)]
                                                 (cond
+                                                ;; A step error goes to error-chan and the process
+                                                ;; loop continues. Without this poll, an op that
+                                                ;; throws gives a silent hang until the timeout.
+                                                ;; It comes before @completed, because eos/eos
+                                                ;; completes the sink after a failed batch too.
+                                                  (some? err)
+                                                  (do
+                                                    (flow/stop flow-obj)
+                                                    (reject (flow-error-ex err)))
+
                                                   @completed
                                                   (do
                                                     (flow/stop flow-obj)
@@ -1657,14 +1679,6 @@
                                                     (if return-flow?
                                                       (resolve {:results @result-atom :flow flow-obj})
                                                       (resolve @result-atom)))
-
-                                                ;; A step error goes to error-chan and the process
-                                                ;; loop continues. Without this poll, an op that
-                                                ;; throws gives a silent hang until the timeout.
-                                                  (some? err)
-                                                  (do
-                                                    (flow/stop flow-obj)
-                                                    (reject (flow-error-ex err)))
 
                                                   (> elapsed timeout-ms)
                                                   (reject (ex-info "Flow execution timeout"
