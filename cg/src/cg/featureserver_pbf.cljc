@@ -3,7 +3,11 @@
   "Decoder for the FeatureServer `f=pbf` query response (FeatureCollectionPBuffer).
    Gives the {:rows :source-crs} that cg.io/walk-dataset-jvm! returns."
   #?(:clj (:require [cg.feature :as feature]
-                    [cg.geo :as geo]))
+                    [cg.geo :as geo]
+                    [cg.run.eos :as eos]
+                    [cg.run.flow :as cg-flow]
+                    [cg.trace :as trace]
+                    [clojure.core.async :as async]))
   #?(:clj (:import (org.locationtech.jts.geom Coordinate GeometryFactory
                                               LinearRing Polygon)
                    (org.locationtech.jts.algorithm Orientation))))
@@ -386,83 +390,225 @@
            wkt  {:authority nil :code nil :projjson (geo/crs->projjson wkt)}
            :else nil)))
 
+     (defn scan-page
+       "Scan one `f=pbf` response: the header fields of its feature result and
+        the byte span of each feature. The scan reads no feature, so the fetch
+        gets the row count and the transfer-limit flag of a page at low cost."
+       [^bytes body]
+       (let [cur (long-array 1)
+             top-end (alength body)
+             ;; FeatureCollectionPBuffer.queryResult is field 2, and
+             ;; QueryResult.featureResult is field 1.
+             qr (loop [i 0]
+                  (if (>= i top-end)
+                    nil
+                    (let [i (read-varint! body i cur)
+                          key (aget cur 0)]
+                      (if (= 2 (field-number key))
+                        (let [i (read-varint! body i cur)] [i (+ i (aget cur 0))])
+                        (recur (skip-payload body i (wire-type key) cur))))))
+             [qs qe] qr
+             fr (loop [i (long qs)]
+                  (if (>= i (long qe))
+                    nil
+                    (let [i (read-varint! body i cur)
+                          key (aget cur 0)]
+                      (if (= 1 (field-number key))
+                        (let [i (read-varint! body i cur)] [i (+ i (aget cur 0))])
+                        (recur (skip-payload body i (wire-type key) cur))))))
+             [fs fe] fr]
+         (scan-feature-result body fs fe cur)))
+
+     (defn decode-scan
+       "Decode the features of `body` from its `scan` (see scan-page). Gives
+        {:rows :source-crs :exceeded-transfer-limit?}. See decode-page for
+        `opts`."
+       [^bytes body scan opts]
+       (let [cur (long-array 1)
+             {:keys [fields features transform spatial-reference oid-field has-z has-m
+                     geometry-type exceeded-transfer-limit?]} scan]
+         (when (or has-z has-m)
+           (throw (ex-info "cg.featureserver-pbf: hasZ and hasM change the coordinate stride"
+                           {:has-z has-z :has-m has-m})))
+         (let [order (mapv :name fields)
+               types (mapv :field-type fields)
+               crs (source-crs spatial-reference)
+               crs-str (if (:code crs) (str (:authority crs) ":" (:code crs)) (:projjson crs))
+               xf (or transform (double-array [1.0 1.0 0.0 0.0]))
+               fid-offset (long (or (:fid-offset opts) 0))
+               rows (into []
+                          (map-indexed (fn [idx [s e]]
+                                         (read-feature body s e cur xf geometry-type
+                                                       order types oid-field crs-str
+                                                       opts (+ fid-offset (long idx)))))
+                          features)]
+           {:rows rows
+            :source-crs crs
+            :exceeded-transfer-limit? (boolean exceeded-transfer-limit?)})))
+
      (defn decode-page
        "Decode one `f=pbf` response to {:rows :source-crs :exceeded-transfer-limit?}. Geometry is quantized.
         Options: :preserve-nulls? keeps nil (default 0 or \"\"), :raw-dates? keeps epoch ms, :fid-offset adds to :fid.
         Throws on a curve or a shape buffer; use f=json for that layer."
        ([^bytes body] (decode-page body {}))
        ([^bytes body opts]
-        (let [cur (long-array 1)
-              top-end (alength body)
-              ;; FeatureCollectionPBuffer.queryResult is field 2, and
-              ;; QueryResult.featureResult is field 1.
-              qr (loop [i 0]
-                   (if (>= i top-end)
-                     nil
-                     (let [i (read-varint! body i cur)
-                           key (aget cur 0)]
-                       (if (= 2 (field-number key))
-                         (let [i (read-varint! body i cur)] [i (+ i (aget cur 0))])
-                         (recur (skip-payload body i (wire-type key) cur))))))
-              [qs qe] qr
-              fr (loop [i (long qs)]
-                   (if (>= i (long qe))
-                     nil
-                     (let [i (read-varint! body i cur)
-                           key (aget cur 0)]
-                       (if (= 1 (field-number key))
-                         (let [i (read-varint! body i cur)] [i (+ i (aget cur 0))])
-                         (recur (skip-payload body i (wire-type key) cur))))))
-              [fs fe] fr
-              {:keys [fields features transform spatial-reference oid-field has-z has-m
-                      geometry-type exceeded-transfer-limit?]}
-              (scan-feature-result body fs fe cur)]
-          (when (or has-z has-m)
-            (throw (ex-info "cg.featureserver-pbf: hasZ and hasM change the coordinate stride"
-                            {:has-z has-z :has-m has-m})))
-          (let [order (mapv :name fields)
-                types (mapv :field-type fields)
-                crs (source-crs spatial-reference)
-                crs-str (if (:code crs) (str (:authority crs) ":" (:code crs)) (:projjson crs))
-                xf (or transform (double-array [1.0 1.0 0.0 0.0]))
-                fid-offset (long (or (:fid-offset opts) 0))
-                rows (into []
-                           (map-indexed (fn [idx [s e]]
-                                          (read-feature body s e cur xf geometry-type
-                                                        order types oid-field crs-str
-                                                        opts (+ fid-offset (long idx)))))
-                           features)]
-            {:rows rows
-             :source-crs crs
-             :exceeded-transfer-limit? (boolean exceeded-transfer-limit?)}))))
+        (decode-scan body (scan-page body) opts)))
 
      ;; A server that ignores resultOffset answers each request with page 1,
      ;; and the transfer-limit flag stays set. The ceiling prevents an
      ;; unbounded loop against the server.
      (def ^:private default-max-pages 10000)
 
+     (defn- fetch-one
+       "Fetch and scan the page at `offset`, with proc events for `pid`. Gives
+        {:offset :body :scan}."
+       [fetch-page pid offset]
+       (let [t0 (System/currentTimeMillis)]
+         (trace/emit! "proc-start" {:pid pid :in :offset})
+         (try
+           (let [body (fetch-page offset)
+                 page {:offset offset :body body :scan (scan-page body)}]
+             (trace/emit! "proc-complete"
+                          {:pid pid :ms (- (System/currentTimeMillis) t0) :out-count 1})
+             page)
+           (catch Throwable e
+             (trace/emit! "proc-error"
+                          {:pid pid :ms (- (System/currentTimeMillis) t0)
+                           :message (.getMessage e)})
+             (throw e)))))
+
      ;; Stop on a cleared exceededTransferLimit or on an empty page: a server can truncate
      ;; a result and not set the flag.
-     ;; Pages load one at a time, because parallel requests were slower on an ArcGIS
-     ;; server. A count or an id list cannot find a missing page, because the server
-     ;; applies resultRecordCount to them too.
+     ;; The fetch sends one request at a time, because parallel requests were slower
+     ;; on an ArcGIS server. It runs one page ahead of the parse. A count or an id
+     ;; list cannot find a missing page, because the server applies
+     ;; resultRecordCount to them too.
+     (defn- produce-pages!
+       "Put the pages on `ch` until the last page or a stop, then close `ch`. An
+        error goes on `ch` as {::error e}, because no proc sees an exception of
+        this thread."
+       [fetch-page max-pages stop? pid ch]
+       (try
+         (loop [offset 0 page 1]
+           (when-not @stop?
+             (when (> (long page) (long max-pages))
+               (throw (ex-info "cg.featureserver-pbf: page ceiling reached, the server may be ignoring resultOffset"
+                               {:max-pages max-pages :rows offset})))
+             (let [{:keys [scan] :as p} (fetch-one fetch-page pid offset)
+                   n (count (:features scan))]
+               ;; >!! gives false when a stop closed ch.
+               (when (and (async/>!! ch p)
+                          (:exceeded-transfer-limit? scan)
+                          (pos? n))
+                 (recur (+ (long offset) n) (inc (long page)))))))
+         (catch Throwable e
+           (async/>!! ch {::error e}))
+         (finally
+           (async/close! ch))))
+
+     (defn- stop-producer! [state]
+       (reset! (::stop? state) true)
+       (async/close! (::pages state)))
+
+     (defn- parse-step
+       "The step of the parse proc. Its in-port gets the pages of
+        produce-pages!. It sends the rows of each page on :out, then eos/eos."
+       [fetch-page max-pages decode-opts fetch-pid]
+       (fn
+         ([] {:outs {:out "The rows of each page"}
+              :workload :compute
+              ;; The default of 5000 ms is short for a large page on a slow
+              ;; machine.
+              :compute-timeout-ms 60000})
+         ([_args]
+          ;; No buffer: the producer fetches one page while the parse reads
+          ;; the page before it. flow/start calls this init on the thread of
+          ;; the caller, and async/thread gives the bindings of that thread,
+          ;; such as the auth of cg.io, to the producer.
+          (let [ch (async/chan)
+                stop? (atom false)]
+            (async/thread (produce-pages! fetch-page max-pages stop? fetch-pid ch))
+            {:clojure.core.async.flow/in-ports {:pages ch}
+             ::stop? stop?
+             ::pages ch}))
+         ([state transition]
+          (when (= transition :clojure.core.async.flow/stop)
+            (stop-producer! state))
+          state)
+         ([state _in msg]
+          (cond
+            (nil? msg) [state {:out [eos/eos]}]
+            (::error msg) (throw (::error msg))
+            :else
+            (let [{:keys [offset body scan]} msg]
+              (try
+                [state {:out [(decode-scan body scan (assoc decode-opts :fid-offset offset))]}]
+                (catch Throwable e
+                  ;; The flow reads more pages until run-flow sees the error.
+                  (stop-producer! state)
+                  (throw e))))))))
+
+     (defn- rows-sink-step
+       "The sink of the fetch: it joins the rows of the pages, and on eos/eos
+        it gives {:rows :source-crs :pages} to `result-atom`."
+       [result-atom completed progress-pid]
+       (fn
+         ([] {:ins {:in "The rows of each page"} :outs {}})
+         ([_args] {:rows [] :source-crs nil :pages 0})
+         ([state _transition] state)
+         ([state _in msg]
+          (if (eos/eos? msg)
+            (do (reset! result-atom (select-keys state [:rows :source-crs :pages]))
+                (reset! completed true)
+                [state {}])
+            (let [state' (-> state
+                             (update :rows into (:rows msg))
+                             (update :source-crs #(or % (:source-crs msg)))
+                             (update :pages inc))]
+              (trace/emit! "rows-progress" {:pid progress-pid :done (count (:rows state'))})
+              [state' {}])))))
+
+     (defn- step-exception
+       "The exception of the step in the flow error `e` of run-flow. A :compute
+        step puts its exception in an ExecutionException."
+       [e]
+       (let [c (when (= :flow-error (:type (ex-data e))) (ex-cause e))
+             c (if (instance? java.util.concurrent.ExecutionException c) (ex-cause c) c)]
+         (or c e)))
+
      (defn load-pages
        "Page through a layer and return {:rows :source-crs :pages}. `fetch-page` takes a row offset and
-        returns the f=pbf bytes of that page. Options: those of decode-page plus :max-pages.
-        Keep the page size at or under the server cap: 4000 requested gives 2000 rows with the flag set."
+        returns the f=pbf bytes of that page. Options: those of decode-page, :max-pages, and :name, the
+        name of the flow (default \"fetch\"). Keep the page size at or under the server cap: 4000
+        requested gives 2000 rows with the flag set.
+
+        A flow runs the fetch: a producer thread fetches one page ahead of the parse proc. The
+        producer gets the bindings of the caller. An error of a fetch or a parse comes to the caller
+        as the step threw it."
        ([fetch-page] (load-pages fetch-page {}))
        ([fetch-page opts]
-        (let [max-pages (long (or (:max-pages opts) default-max-pages))
-              decode-opts (dissoc opts :max-pages)]
-          (loop [offset 0 page 1 rows [] crs nil]
-            (when (> (long page) max-pages)
-              (throw (ex-info "cg.featureserver-pbf: page ceiling reached, the server may be ignoring resultOffset"
-                              {:max-pages max-pages :rows (count rows)})))
-            (let [{page-rows :rows page-crs :source-crs more? :exceeded-transfer-limit?}
-                  (decode-page (fetch-page offset)
-                               (assoc decode-opts :fid-offset offset))
-                  rows (into rows page-rows)
-                  crs (or crs page-crs)]
-              (if (and more? (pos? (count page-rows)))
-                (recur (+ (long offset) (count page-rows)) (inc (long page)) rows crs)
-                {:rows rows :source-crs crs :pages page}))))))))
+        (let [flow-name (or (:name opts) "fetch")
+              fetch-pid (cg-flow/pid flow-name :fetch)
+              parse-pid (cg-flow/pid flow-name :parse)
+              max-pages (long (or (:max-pages opts) default-max-pages))
+              decode-opts (dissoc opts :max-pages :name)
+              result (atom nil)
+              completed (atom false)
+              parse (parse-step fetch-page max-pages decode-opts fetch-pid)
+              procs {:parse {:proc (cg-flow/make-process
+                                    (cg-flow/instrument-flow-step parse-pid parse))
+                             :args {}}
+                     :rows {:proc (cg-flow/make-process
+                                   (rows-sink-step result completed parse-pid))
+                            :args {}}}]
+          (try
+            (cg-flow/run-flow {:config {:procs procs :conns [[[:parse :out] [:rows :in]]]}
+                               :result-atom result
+                               :completed completed}
+                              ;; The loop before the flow had no time limit,
+                              ;; and each request has its retries.
+                              {:name flow-name
+                               :pids [fetch-pid parse-pid]
+                               :timeout-ms Long/MAX_VALUE})
+            (catch clojure.lang.ExceptionInfo e
+              (throw (step-exception e)))))))))

@@ -9,8 +9,10 @@
    system property or the CG_TRACE_DIR environment variable names. The event
    stream itself stays on: see trace_test."
   (:require [clojure.test :refer [deftest is]]
+            [cg.featureserver-pbf :as pbf]
             [cg.trace :as trace]
-            [clojure.java.io :as io])
+            [clojure.java.io :as io]
+            [clojure.string :as str])
   (:import (java.nio.file Files)
            (java.nio.file.attribute FileAttribute)))
 
@@ -56,3 +58,39 @@
           (is (= (.getCanonicalPath dir)
                  (.getCanonicalPath (.toFile (.getParent ^java.nio.file.Path (:path session))))))
           (is (contains? (file-names dir) "latest.jsonl")))))))
+
+(defn- pbf-fixture ^bytes [nm]
+  (Files/readAllBytes (.toPath (io/file (io/resource (str "data/featureserver-pbf/" nm ".pbf"))))))
+
+(deftest a-page-fetch-writes-its-events-to-the-file
+  ;; A fetch of ensure-dataset runs outside run-model. Its flow opens the file.
+  (let [dir (.toFile (Files/createTempDirectory "cg-trace-file-test"
+                                                (make-array FileAttribute 0)))
+        page (pbf-fixture "point")]
+    (with-trace-dir-property (.getPath dir)
+      (fn []
+        (pbf/load-pages (fn [_] page) {:name "fetch-file-test"})
+        (Thread/sleep 200)
+        (let [f (first (filter #(str/starts-with? % "fetch-file-test-") (file-names dir)))
+              text (when f (slurp (io/file dir f)))]
+          (is (some? f) "the flow wrote a file with its name")
+          (is (str/includes? (str text) "fetch-file-test__fetch") "the fetch events")
+          (is (str/includes? (str text) "rows-progress") "the row count"))))))
+
+(deftest a-nested-flow-writes-to-the-open-file
+  ;; cg-vscode tails only the first file that a run names.
+  (let [dir (.toFile (Files/createTempDirectory "cg-trace-file-test"
+                                                (make-array FileAttribute 0)))
+        page (pbf-fixture "point")]
+    (with-trace-dir-property (.getPath dir)
+      (fn []
+        (trace/call-with-file-writer
+         "outer-test"
+         #(pbf/load-pages (fn [_] page) {:name "fetch-nested-test"}))
+        (Thread/sleep 200)
+        (let [names (file-names dir)
+              f (first (filter #(str/starts-with? % "outer-test-") names))]
+          (is (= #{"latest.jsonl"} (set (remove #(= f %) names)))
+              "the fetch opened no file of its own")
+          (is (str/includes? (slurp (io/file dir f)) "fetch-nested-test__fetch")
+              "the fetch events are in the outer file"))))))

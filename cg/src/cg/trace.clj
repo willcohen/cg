@@ -173,3 +173,17 @@
   (when tap-ch
     (untap-trace tap-ch)
     (async/close! tap-ch)))
+
+(defn call-with-file-writer
+  "Call `f` with one trace file open for `flow-name`, and give its value. Each
+   flow in `f` writes to this file, because a nested open-file-writer! opens no
+   file."
+  [flow-name f]
+  (let [session (open-file-writer! flow-name)]
+    (try
+      (f)
+      (finally
+        ;; Let the trace mult drain the events in flight before the file
+        ;; writer closes.
+        (Thread/sleep 50)
+        (close-file-writer! session)))))

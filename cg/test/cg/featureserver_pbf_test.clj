@@ -17,8 +17,10 @@
    vertex."
   (:require [clojure.test :refer [deftest is testing]]
             [clojure.java.io :as jio]
+            [clojure.core.async :as async]
             [cg.featureserver-pbf :as pbf]
-            [cg.io :as cio])
+            [cg.io :as cio]
+            [cg.trace :as trace])
   (:import (org.locationtech.jts.geom Geometry Coordinate)))
 
 (set! *warn-on-reflection* true)
@@ -174,6 +176,65 @@
     (is (thrown-with-msg? clojure.lang.ExceptionInfo #"page ceiling"
                           (pbf/load-pages fetch {:max-pages 3})))
     (is (= 3 (count @log)) "the ceiling counts pages read, not pages attempted")))
+
+;; A page with hasZ set, the transfer-limit flag set and one empty feature. The
+;; scan of the fetch side reads it, and the parse throws on hasZ.
+(def ^:private has-z-page-with-flag
+  (byte-array (map unchecked-byte [0x12 0x08 0x0A 0x06 0x48 0x01 0x50 0x01 0x7A 0x00])))
+
+(defn- collect-events
+  "Run f with a tap on the trace stream, then drain what it emitted."
+  [f]
+  (let [ch (async/chan 1024)]
+    (trace/tap-trace ch)
+    (try
+      (f)
+      (Thread/sleep 150)
+      (loop [acc []]
+        (if-let [e (async/poll! ch)] (recur (conj acc e)) acc))
+      (finally
+        (trace/untap-trace ch)))))
+
+(defn- events-of [events kind pid]
+  (filter #(and (= kind (:kind %)) (= pid (:pid %))) events))
+
+(deftest load-pages-runs-as-a-flow
+  (let [log (atom [])
+        pages [(fixture-bytes "polygon-donut") (fixture-bytes "point")]
+        events (collect-events
+                #(pbf/load-pages (recording-fetch pages log) {:name "fetch-test"}))]
+    (is (= ["fetch-test__fetch" "fetch-test__parse"]
+           (:pids (first (filter #(= "flow-start" (:kind %)) events))))
+        "flow-start names the fetch and the parse")
+    (is (= 2 (count (events-of events "proc-complete" "fetch-test__fetch")))
+        "one fetch event for each page")
+    (is (<= 2 (count (events-of events "proc-complete" "fetch-test__parse")))
+        "one parse event for each page")
+    (is (= 21 (:done (last (events-of events "rows-progress" "fetch-test__parse"))))
+        "the rows of both pages")
+    (is (some #(= "flow-complete" (:kind %)) events))))
+
+(deftest load-pages-throws-the-error-of-a-fetch
+  (let [boom (ex-info "boom" {:page 1})]
+    (is (identical? boom (try (pbf/load-pages (fn [_] (throw boom))) nil
+                              (catch Exception e e)))
+        "the caller gets the exception of the fetch, not a flow error")))
+
+(deftest load-pages-throws-the-error-of-a-parse
+  (let [e (try (pbf/load-pages (constantly has-z-page-with-flag)) nil
+               (catch Exception e e))]
+    (is (instance? clojure.lang.ExceptionInfo e))
+    (is (re-find #"hasZ and hasM" (ex-message e))
+        "the caller gets the exception of the decoder, not a flow error")))
+
+(deftest load-pages-stops-the-fetch-after-a-parse-error
+  ;; Each page sets the flag, so only the stop of the flow ends the fetch.
+  (let [log (atom [])]
+    (is (thrown? Exception (pbf/load-pages (recording-fetch [has-z-page-with-flag] log))))
+    (let [n (count @log)]
+      (Thread/sleep 300)
+      (is (= n (count @log)) "no fetch after the flow stopped")
+      (is (< n 5) "the fetch was at most a few pages ahead of the parse"))))
 
 (deftest dates-format-like-the-gdal-reader
   (let [formatted (decoded "dates")

@@ -254,6 +254,9 @@
              {:results results :flow flow-obj}
              results))
          (catch Throwable e
+           ;; Stop the procs, because a proc can own a thread that fetches
+           ;; into an in-port.
+           (try (flow/stop flow-obj) (catch Throwable _ nil))
            (trace/emit! "flow-error"
                         {:flow flow-name
                          :ms (- (System/currentTimeMillis) flow-t0)

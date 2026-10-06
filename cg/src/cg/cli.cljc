@@ -17,6 +17,7 @@
             [clojure.string :as str]
             [cg.util :as util]
             [cg.run :as run]
+            #?(:clj [cg.trace :as trace])
             #?(:clj [clojure.java.io :as jio])
             #?(:clj [clojure.pprint :as pprint])))
 
@@ -197,9 +198,15 @@
      (do (println "Error: File not found:" file) 1)
      #?(:clj
         (try
-          (let [{:keys [model result]}
-                (binding [run/*script-file* (.getName (jio/file file))]
-                  (run/run-file (util/read-file file) opts))]
+          ;; One trace file for the file: a fetch of the evaluation and the
+          ;; flow of the model write to it. cg-vscode tails only the first
+          ;; file that a run names.
+          (let [script (.getName (jio/file file))
+                {:keys [model result]}
+                (trace/call-with-file-writer
+                 script
+                 #(binding [run/*script-file* script]
+                    (run/run-file (util/read-file file) opts)))]
             (println "===" model "===")
             (print-result result)
             0)

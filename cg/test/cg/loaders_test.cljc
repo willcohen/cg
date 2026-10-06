@@ -23,6 +23,7 @@
                      ["../../src/cg/feature.mjs" :as feature]
                      ["../../src/cg/geo.mjs" :as geo]
                      ["../../src/cg/io.mjs" :as cio]
+                     ["../../src/cg/trace_js.mjs" :as trace]
                      ["node:fs" :as fs]
                      ["node:http" :as http]
                      ["node:path" :as node-path]
@@ -88,31 +89,32 @@
 
 #?(:cljs
    (defn- spin-geoservices-server!
-     "Resolve to a map with the keys :base-url, :requests and :close. The
-      requests come from the CPLHTTPFetch callback in the worker, through the
-      sync http-bridge. They do not come from js/fetch."
-     []
-     (let [requests (atom [])]
-       (js/Promise.
-        (fn [resolve-start]
-          (let [handle (fn [req res]
-                         (let [uri (.-url req)]
-                           (swap! requests conj {:uri uri :headers (.-headers req)})
-                           (.writeHead res 200 #js {"Content-Type" "application/json"})
-                           (.end res (fs/readFileSync
-                                      (node-path/join geoservices-dir
-                                                      (geoservices-fixture-for uri))))))
-                server (http/createServer handle)
-                started (fn []
-                          (resolve-start
-                           {:base-url (str "http://127.0.0.1:"
-                                           (.-port (.address server))
-                                           "/FeatureServer/0")
-                            :requests requests
-                            :close (fn close-server []
-                                     (js/Promise.
-                                      (fn [done] (.close server (fn [] (done nil)))))) }))]
-            (.listen server 0 "127.0.0.1" started)))))))
+     "Resolve to a map with the keys :base-url, :requests and :close.
+      `fixture-for` gives the fixture file for the URI of a request (default
+      geoservices-fixture-for)."
+     ([] (spin-geoservices-server! geoservices-fixture-for))
+     ([fixture-for]
+      (let [requests (atom [])]
+        (js/Promise.
+         (fn [resolve-start]
+           (let [handle (fn [req res]
+                          (let [uri (.-url req)]
+                            (swap! requests conj {:uri uri :headers (.-headers req)})
+                            (.writeHead res 200 #js {"Content-Type" "application/json"})
+                            (.end res (fs/readFileSync
+                                       (node-path/join geoservices-dir
+                                                       (fixture-for uri))))))
+                 server (http/createServer handle)
+                 started (fn []
+                           (resolve-start
+                            {:base-url (str "http://127.0.0.1:"
+                                            (.-port (.address server))
+                                            "/FeatureServer/0")
+                             :requests requests
+                             :close (fn close-server []
+                                      (js/Promise.
+                                       (fn [done] (.close server (fn [] (done nil))))))}))]
+             (.listen server 0 "127.0.0.1" started))))))))
 
 (defn- source-crs
   "The CRS descriptor that load-source returns. On the JVM it is a Clojure map
@@ -313,6 +315,41 @@
            (finally
              (await ((:close srv)))))))
 
+     (defn- events-of [events kind]
+       (filter #(= kind (:kind %)) events))
+
+     (defn ^:async run-paging-events! []
+       (await (setup!))
+       (let [srv (await (spin-geoservices-server!))
+             events (atom [])
+             listener (trace/add-trace-listener (fn [e] (swap! events conj e)))]
+         (try
+           (await (ds/load-gdal! (:base-url srv) nil))
+           (let [start (first (events-of @events "flow-start"))
+                 [fetch-pid parse-pid] (:pids start)
+                 of-pid (fn [kind pid] (filter #(= pid (:pid %)) (events-of @events kind)))]
+             (is (str/ends-with? (str fetch-pid) "__fetch") "flow-start names the fetch")
+             (is (str/ends-with? (str parse-pid) "__parse") "flow-start names the parse")
+             (is (= 2 (count (of-pid "proc-complete" fetch-pid))) "one fetch event for each page")
+             (is (= 3 (:done (last (of-pid "rows-progress" parse-pid)))) "the rows of both pages")
+             (is (seq (events-of @events "flow-complete")) "the flow completes"))
+           (finally
+             (trace/remove-trace-listener listener)
+             (await ((:close srv)))))))
+
+     (defn ^:async run-repeated-first-page! []
+       (await (setup!))
+       ;; A server that ignores resultOffset gives page 1 for each request.
+       (let [srv (await (spin-geoservices-server!
+                         (fn [uri] (if (str/includes? uri "/query") "page1.json" "layer.json"))))]
+         (try
+           (let [d (await (ds/load-gdal! (:base-url srv) nil))
+                 n (count (filter #(str/includes? (:uri %) "/query") @(:requests srv)))]
+             (is (= 2 (ds/row-count d)) "the repeated page adds no rows")
+             (is (< n 5) "the fetch stops after the repeated page"))
+           (finally
+             (await ((:close srv)))))))
+
      (defn ^:async run-source-crs! []
        (await (setup!))
        (check-source-crs! (await (cio/load-source tiny-gpkg-path))))
@@ -378,6 +415,16 @@
                                                :clip-extent [0 0 10 10]))
                 (check-unclipped! (ds/load-gdal! (clip-layer-url layer-url)))))
        :cljs (run-clip!))))
+
+#?(:cljs
+   (deftest the-page-fetch-runs-as-a-flow
+     (testing "the fetch of a layer emits the events of a flow"
+       (run-paging-events!))))
+
+#?(:cljs
+   (deftest a-repeated-first-page-stops-the-fetch
+     (testing "a server that repeats page 1 ends the fetch, as the GDAL driver does"
+       (run-repeated-first-page!))))
 
 #?(:cljs
    (deftest ensure-dataset-keeps-a-dataset-unless-keep-is-false

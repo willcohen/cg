@@ -16,6 +16,9 @@
             #?(:clj  [net.willcohen.gdal.network :as gdal-network])
             #?(:cljs ["gdal-wasm" :as gdal])
             #?(:cljs ["gdal-wasm/fndefs" :as gdal-fndefs])
+            #?(:cljs ["cljc-flow/core" :as ca])
+            #?(:cljs [cg.run.eos :as eos])
+            #?(:cljs [cg.run.flow :as cg-flow])
             #?(:cljs [cg.trace-js :as trace]))
   #?(:clj (:import (org.locationtech.jts.geom Geometry GeometryFactory LinearRing Polygon Polygonal)
                    (org.locationtech.jts.io WKTReader WKTWriter WKBReader WKBWriter)
@@ -700,7 +703,8 @@
                                              :result-offset offset))
                            opts))]
          (pbf/load-pages fetch-page
-                         (select-keys opts [:preserve-nulls? :raw-dates? :max-pages]))))
+                         (assoc (select-keys opts [:preserve-nulls? :raw-dates? :max-pages])
+                                :name (str "fetch-" (source-label layer-url))))))
 
      (defn- load-through-driver
        "Open an ESRIJSON: URL with GDAL, which owns its own paging loop."
@@ -921,12 +925,18 @@
                (aset out nm (await (gdal/ogr-fld-get-type fd)))
                (recur (inc i)))))))
 
+     ;; Two fetches at the same time must not stage a page under one name.
+     (defonce ^:private staged-pages #js {:n 0})
+
      (defn- ^:async read-page!
        "Parse one ESRI JSON page with GDAL: #js {:features :types :crs}, the
         last two only for `first?`. nil when a later page has no layer."
        [bytes first?]
-       (let [staged (await (gdal/stage-files! (js-obj "page.json" bytes) "/work/cg-fetch"))
-             path   (aget staged "page.json")
+       (let [n      (inc (aget staged-pages "n"))
+             _      (aset staged-pages "n" n)
+             nm     (str "page-" n ".json")
+             staged (await (gdal/stage-files! (js-obj nm bytes) "/work/cg-fetch"))
+             path   (aget staged nm)
              ds     (await (gdal/gdal-open-ex path gdal-fndefs/GDAL_OF_VECTOR nil nil nil))]
          (if (or (nil? ds) (= ds 0))
            (do (await (gdal/vsi-unlink path))
@@ -1171,11 +1181,10 @@
              #js {:fid fid :fields row :geom geom}))))
 
      (defn- esri-json-page
-       "#js {:features} of an ESRI JSON page of 2D polygons with plain fields,
-        or nil when GDAL must read the page."
-       [bytes box]
-       (let [j      (js/JSON.parse (.decode (js/TextDecoder.) bytes))
-             oid    (.-objectIdFieldName j)
+       "#js {:features} of the parsed ESRI JSON page `j` of 2D polygons with
+        plain fields, or nil when GDAL must read the page."
+       [j box]
+       (let [oid    (.-objectIdFieldName j)
              fields (or (.-fields j) #js [])
              names  (.map fields (fn [f] (.-name f)))
              feats  (or (.-features j) #js [])]
@@ -1208,58 +1217,197 @@
          (aset row "geometry" (or geom (when wkb (read-gdal-wkb wkb box))))
          row))
 
-     (defn- ^:async load-geoservices-pages
-       "Page the f=json query URL of a layer. `on-page`, when given, gets the
-        row count after each page. `box` clips the polygons, see clip-flat.
-        Resolves to #js {:rows :sourceCrs}."
-       [query-url on-page box]
-       (await (gdal/gdal-all-register))
-       (let [out #js []
-             st  #js {:types nil :crs nil :sequential false :lastFid -1 :firstFid nil}]
+     (defn- page-json
+       "The ESRI JSON object of a page, or nil when the page is not JSON."
+       [bytes]
+       (try (js/JSON.parse (.decode (js/TextDecoder.) bytes))
+            (catch :default _ nil)))
+
+     (defn- ^:async fetch-one!
+       "Fetch the page of `url`, with proc events for `pid`. Gives
+        #js {:bytes :json}."
+       [url pid]
+       (let [t0 (js/Date.now)]
+         (trace/emit! "proc-start" {:pid pid :in "offset"})
+         (try
+           (let [bytes (await (fetch-page-bytes url))
+                 page  #js {:bytes bytes :json (page-json bytes)}]
+             (trace/emit! "proc-complete" {:pid pid :ms (- (js/Date.now) t0) :out-count 1})
+             page)
+           (catch :default e
+             (trace/emit! "proc-error" {:pid pid :ms (- (js/Date.now) t0)
+                                        :message (or (.-message e) (str e))})
+             (throw e)))))
+
+     (defn- ^:async produce-pages!
+       "Put the pages of `query-url` on `ch` until the last page or a stop, then
+        close `ch`. An error goes on `ch` as #js {:error e}, because no proc
+        sees an exception of this loop. The producer parses each page to get
+        its row count and the transfer-limit flag, and the parse step uses that
+        parse."
+       [query-url stop pid ch]
+       (try
          (loop [offset 0 page-idx 0]
-           (let [url   (if (zero? page-idx) query-url (str query-url "&resultOffset=" offset))
-                 bytes (await (fetch-page-bytes url))
-                 label (str "parse page " (inc page-idx) " of " (source-label query-url))
-                 ;; The first page goes through GDAL for the field types and
-                 ;; the CRS of the layer.
-                 json  (when (pos? page-idx)
-                         (let [busy (trace/busy-start! "main" "main" label nil)
-                               p    (esri-json-page bytes box)]
-                           (trace/busy-end! busy)
-                           p))
-                 page  (or json
-                           ;; gdal-wasm sends each GDAL call to worker 0.
-                           (let [busy (trace/busy-start! 0 "gdal" label nil)
-                                 p    (try
-                                        (await (read-page! bytes (zero? page-idx)))
-                                        (catch :default e
-                                          (trace/busy-end! busy (ex-message e))
-                                          (throw e)))]
-                             (trace/busy-end! busy)
-                             p))
-                 feats (if page (.-features page) #js [])
-                 n     (.-length feats)
-                 fid0  (when (pos? n) (js/Number (.-fid (aget feats 0))))]
-             (when (zero? page-idx)
-               (set! (.-types st) (.-types page))
-               (set! (.-crs st) (.-crs page)))
-             ;; The driver numbers the rows in sequence when each page starts
-             ;; its fids at 0, and stops when a server repeats the first page.
-             (when (and (= 1 page-idx) (= 0 fid0) (= (.-lastFid st) (dec (.-length out))))
-               (set! (.-sequential st) true))
-             (if (and (= 1 page-idx) (some? fid0) (not= 0 fid0) (= fid0 (.-firstFid st)))
-               nil
-               (do
-                 (doseq [feat feats]
-                   (let [fid (if (.-sequential st) (.-length out) (js/Number (.-fid feat)))]
-                     (when (zero? (.-length out)) (set! (.-firstFid st) fid))
-                     (set! (.-lastFid st) fid)
-                     ;; A BigInt, as OGR_F_GetFID gives it.
-                     (.push out (feature->row! feat (.-types st) (js/BigInt fid) box))))
-                 (when on-page (on-page (.-length out)))
-                 (when (and (pos? n) (more-pages? bytes))
-                   (recur (+ offset n) (inc page-idx)))))))
-         #js {:rows out :sourceCrs (.-crs st)}))
+           (when-not (aget stop "stopped")
+             (let [url  (if (zero? page-idx) query-url (str query-url "&resultOffset=" offset))
+                   page (await (fetch-one! url pid))
+                   json (.-json page)
+                   n    (if json (.-length (or (.-features json) #js [])) 0)
+                   more (if json
+                          (true? (.-exceededTransferLimit json))
+                          (more-pages? (.-bytes page)))
+                   _    (aset page "pageIdx" page-idx)
+                   ;; put-promise gives false when a stop closed ch.
+                   put? (await (ca/put-promise ch page))]
+               (when (and put? more (pos? n))
+                 (recur (+ offset n) (inc page-idx))))))
+         (catch :default e
+           (await (ca/put-promise ch #js {:error e})))
+         (finally
+           (ca/close! ch))))
+
+     (defn- ^:async page-rows!
+       "The rows of the fetched `page`. `st` carries the field types, the CRS
+        and the fid state from page to page. Gives nil when the server repeated
+        the first page, as the GDAL driver does."
+       [st page box source-name]
+       (let [page-idx (.-pageIdx page)
+             label    (str "parse page " (inc page-idx) " of " source-name)
+             ;; The first page goes through GDAL for the field types and the
+             ;; CRS of the layer.
+             json     (when-let [j (when (pos? page-idx) (.-json page))]
+                        (let [busy (trace/busy-start! "main" "main" label nil)
+                              p    (esri-json-page j box)]
+                          (trace/busy-end! busy)
+                          p))
+             parsed   (or json
+                          ;; gdal-wasm sends each GDAL call to worker 0.
+                          (let [busy (trace/busy-start! 0 "gdal" label nil)
+                                p    (try
+                                       (await (read-page! (.-bytes page) (zero? page-idx)))
+                                       (catch :default e
+                                         (trace/busy-end! busy (ex-message e))
+                                         (throw e)))]
+                            (trace/busy-end! busy)
+                            p))
+             feats    (if parsed (.-features parsed) #js [])
+             n        (.-length feats)
+             fid0     (when (pos? n) (js/Number (.-fid (aget feats 0))))]
+         (when (zero? page-idx)
+           (set! (.-types st) (.-types parsed))
+           (set! (.-crs st) (.-crs parsed)))
+         ;; The driver numbers the rows in sequence when each page starts
+         ;; its fids at 0, and stops when a server repeats the first page.
+         (when (and (= 1 page-idx) (= 0 fid0) (= (.-lastFid st) (dec (.-nrows st))))
+           (set! (.-sequential st) true))
+         (when-not (and (= 1 page-idx) (some? fid0) (not= 0 fid0) (= fid0 (.-firstFid st)))
+           (let [out #js []]
+             (doseq [feat feats]
+               (let [fid (if (.-sequential st) (.-nrows st) (js/Number (.-fid feat)))]
+                 (when (zero? (.-nrows st)) (set! (.-firstFid st) fid))
+                 (set! (.-lastFid st) fid)
+                 (set! (.-nrows st) (inc (.-nrows st)))
+                 ;; A BigInt, as OGR_F_GetFID gives it.
+                 (.push out (feature->row! feat (.-types st) (js/BigInt fid) box))))
+             out))))
+
+     (defn- stop-producer! [state]
+       (aset (:stop state) "stopped" true)
+       (ca/close! (:pages state)))
+
+     (defn- page-parse-step
+       "The step of the parse proc. Its in-port gets the pages of
+        produce-pages!. It sends #js {:rows :crs} for each page on :out, then
+        eos/eos."
+       [query-url box fetch-pid]
+       (fn
+         ([] {:outs {:out "The rows of each page"}})
+         ([_args]
+          ;; No buffer: the producer fetches one page while the parse reads
+          ;; the page before it.
+          (let [ch   (ca/chan)
+                stop #js {:stopped false}]
+            (produce-pages! query-url stop fetch-pid ch)
+            {:clojure.core.async.flow/in-ports {:pages ch}
+             :pages ch
+             :stop stop
+             :st #js {:types nil :crs nil :sequential false
+                      :lastFid -1 :firstFid nil :nrows 0}}))
+         ([state transition]
+          (when (= transition :clojure.core.async.flow/stop)
+            (stop-producer! state))
+          state)
+         ([state _in page]
+          (cond
+            (nil? page) [state {:out [eos/eos]}]
+            (.-error page) (throw (.-error page))
+            :else
+            (-> (page-rows! (:st state) page box (source-label query-url))
+                (.then (fn [rows]
+                         (if rows
+                           [state {:out [#js {:rows rows :crs (.-crs (:st state))}]}]
+                           (do (stop-producer! state)
+                               [state {}]))))
+                (.catch (fn [e]
+                          ;; The flow reads more pages until run-flow sees
+                          ;; the error.
+                          (stop-producer! state)
+                          (throw e))))))))
+
+     (defn- rows-sink-step
+       "The sink of the fetch: it joins the rows of the pages, and on eos/eos
+        it gives #js {:rows :sourceCrs} to `result-atom`. `on-page`, when
+        given, gets the row count after each page."
+       [result-atom completed on-page progress-pid]
+       (fn
+         ([] {:ins {:in "The rows of each page"} :outs {}})
+         ([_args] {:rows #js [] :crs nil})
+         ([state _transition] state)
+         ([state _in msg]
+          (if (eos/eos? msg)
+            (do (reset! result-atom #js {:rows (:rows state) :sourceCrs (:crs state)})
+                (reset! completed true)
+                [state {}])
+            (let [rows (:rows state)]
+              (doseq [r (.-rows msg)] (.push rows r))
+              (when on-page (on-page (.-length rows)))
+              (trace/emit! "rows-progress" {:pid progress-pid :done (.-length rows)})
+              [(assoc state :crs (or (:crs state) (.-crs msg))) {}])))))
+
+     (defn- step-error
+       "The error of the step in the flow error `e` of run-flow."
+       [e]
+       (or (get-in (ex-data e) [:error :clojure.core.async.flow/ex]) e))
+
+     (defn- ^:async load-geoservices-pages
+       "Page the f=json query URL of a layer in the flow `flow-name`. Resolves
+        to #js {:rows :sourceCrs}. `on-page`, when given, gets the row count
+        after each page. `box` clips the polygons, see clip-flat. An error of a
+        fetch or a parse comes to the caller as the step threw it."
+       [query-url on-page box flow-name]
+       (await (gdal/gdal-all-register))
+       (let [fetch-pid (cg-flow/pid flow-name :fetch)
+             parse-pid (cg-flow/pid flow-name :parse)
+             result    (atom nil)
+             completed (atom false)
+             parse     (page-parse-step query-url box fetch-pid)
+             procs     {:parse {:proc (cg-flow/make-process
+                                       (cg-flow/instrument-flow-step parse-pid parse))
+                                :args {}}
+                        :rows {:proc (cg-flow/make-process
+                                      (rows-sink-step result completed on-page parse-pid))
+                               :args {}}}]
+         (try
+           (await (cg-flow/run-flow {:config {:procs procs :conns [[[:parse :out] [:rows :in]]]}
+                                     :result-atom result
+                                     :completed completed}
+                                    ;; The loop before the flow had no time
+                                    ;; limit, and each request has its retries.
+                                    {:name flow-name
+                                     :pids [fetch-pid parse-pid]
+                                     :timeout-ms js/Number.MAX_SAFE_INTEGER}))
+           (catch :default e
+             (throw (step-error e))))))
 
      (defn ^:async load-gdal-source
        "Open source with GDAL through the worker. source is a local path, an
@@ -1289,7 +1437,8 @@
            (await (load-geoservices-pages
                    (with-token (build-geoservices-query-url-cljs source opts))
                    (aget opts "onPage")
-                   (aget opts "clipExtent")))
+                   (aget opts "clipExtent")
+                   (str "fetch-" (source-label source))))
 
            :else
            (await (load-source source)))))))
