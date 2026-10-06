@@ -72,9 +72,10 @@
                   "src/cg/codegen.cljc"
                   "src/cg/introspect.cljc"
                   "src/cg/metadata.cljc"
-                  ;; run.mjs imports fusion, eos and trace_js.
+                  ;; run.mjs imports fusion, eos, flow and trace_js.
                   "src/cg/run/fusion.cljc"
                   "src/cg/run/eos.cljc"
+                  "src/cg/run/flow.cljc"
                   "src/cg/trace_js.cljs"
                   "src/cg/run.cljc"
                   "src/cg/pool.cljc"

@@ -14,7 +14,6 @@
             ;; Registers the reducers that resolve-reducer looks up.
             #?(:clj [cg.dataset.agg])
             [clojure.string :as str]
-            #?(:clj [clojure.core.async :as async])
             #?(:clj [clojure.core.async.flow :as flow])
             #?(:clj [sci.core :as sci])
             #?(:clj [net.willcohen.native.workload-pool :as wp])
@@ -22,9 +21,9 @@
             #?(:clj [cg.pool :as cg-pool-reg])
             [cg.run.fusion :as fusion]
             [cg.run.eos :as eos]
+            [cg.run.flow :as cg-flow]
             #?(:clj [clojure.tools.logging :as log])
             #?(:cljs ["cljc-flow/flow" :as flow])
-            #?(:cljs ["cljc-flow/core" :as ca])
             #?(:cljs ["ffi-wasm" :as wp])
             #?(:cljs ["proj-wasm" :as proj])
             #?(:cljs ["gdal-wasm" :as gdal])
@@ -958,9 +957,22 @@
   "The pid `<model>__<id>` of a node, which is the id convention of the
   canvas. The model name defaults to \"anon\"."
   [model node-id]
-  (str (or (:name model) "anon")
-       "__"
-       (if (keyword? node-id) (name node-id) (str node-id))))
+  (cg-flow/pid (or (:name model) "anon") node-id))
+
+(defn- source-proc-ids
+  "The ids of the procs of `flow-model` that get a trigger: each :source node
+  and each source operation. The JVM finds a source operation by the :type of
+  its op, and JS finds an operation with no incoming edge."
+  [flow-model]
+  (->> (:nodes flow-model)
+       (filter (fn [node]
+                 (case (:type node)
+                   :source true
+                   :operation
+                   #?(:clj (= :source (:type (feature/get-operation-info (:fn node))))
+                      :cljs (not (some #(= (:id node) (:to %)) (:edges flow-model))))
+                   false)))
+       (mapv :id)))
 
 #?(:clj
    (defn- preview-value
@@ -1022,86 +1034,6 @@
       {:failed-rows (count failed)
        :total-rows  (count errors)
        :first-error (str (first failed))})))
-
-#?(:clj
-   (defn instrument-flow-step
-     "Wrap the step fn `step-fn` to emit `proc-start`, `proc-complete` and
-     `proc-error` trace events with `pid` (`<model>__<node-id>`)."
-     [pid step-fn]
-     (fn instrumented
-       ([] (step-fn))
-       ([state] (step-fn state))
-       ([state arg] (step-fn state arg))
-       ([state in-id msg]
-        (let [t0 (System/currentTimeMillis)]
-          (trace/emit! "proc-start" {:pid pid :in in-id})
-          (try
-            (let [result (step-fn state in-id msg)
-                  t1 (System/currentTimeMillis)
-                  out (second result)
-                  out-count (when (map? out)
-                              (reduce + 0 (map count (vals out))))]
-              (trace/emit! "proc-complete"
-                           (cond-> {:pid pid :ms (- t1 t0)}
-                             out-count (assoc :out-count out-count)))
-              result)
-            (catch Throwable e
-              (let [t1 (System/currentTimeMillis)]
-                (trace/emit! "proc-error"
-                             {:pid pid :ms (- t1 t0)
-                              :message (.getMessage e)}))
-              (throw e))))))))
-
-#?(:cljs
-   (defn instrument-flow-step
-     "CLJS twin of the JVM instrument-flow-step, through cg.trace-js listeners.
-     For a Promise result (an async wasmts op), the event goes out when it settles."
-     [pid step-fn]
-     (fn instrumented
-       ([] (step-fn))
-       ([state] (step-fn state))
-       ([state arg] (step-fn state arg))
-       ([state in-id msg]
-        (let [t0 (js/Date.now)
-              complete! (fn [result]
-                          (let [out (second result)
-                                out-count (when (map? out)
-                                            (reduce + 0 (map count (vals out))))]
-                            (trace/emit! "proc-complete"
-                                         (cond-> {:pid pid :ms (- (js/Date.now) t0)}
-                                           out-count (assoc :out-count out-count)))))
-              error! (fn [e]
-                       (trace/emit! "proc-error"
-                                    {:pid pid :ms (- (js/Date.now) t0)
-                                     :message (or (.-message e) (str e))}))]
-          (trace/emit! "proc-start" {:pid pid :in in-id})
-          (trace/set-step-pid! pid)
-          (try
-            (let [result (step-fn state in-id msg)]
-              (if (and result (.-then result))
-                (.then result
-                       (fn [resolved] (complete! resolved) resolved)
-                       (fn [e] (error! e) (js/Promise.reject e)))
-                (do (complete! result) result)))
-            (catch :default e
-              (error! e)
-              (throw e))
-            (finally
-              (trace/set-step-pid! nil))))))))
-
-(defn- make-process
-  "flow/process for `step-fn`, with the :workload and :compute-timeout-ms of
-   its describe map as opts."
-  [step-fn]
-  ;; flow/process reads :compute-timeout-ms only from its opts (default 5000
-  ;; ms), and ignores the value in the describe map.
-  (let [desc (step-fn)
-        opts (cond-> {}
-               (:workload desc) (assoc :workload (:workload desc))
-               (:compute-timeout-ms desc) (assoc :compute-timeout-ms (:compute-timeout-ms desc)))]
-    (if (seq opts)
-      (flow/process step-fn opts)
-      (flow/process step-fn))))
 
 (defn model->flow
   "A flow config for a model: {:config {:procs :conns} :result-atom :completed
@@ -1285,13 +1217,13 @@
 
                       (contains? fused-steps pid)
                       (assoc acc pid
-                             {:proc #?(:clj  (make-process
+                             {:proc #?(:clj  (cg-flow/make-process
                                               (table-step
                                                pid
-                                               (instrument-flow-step
+                                               (cg-flow/instrument-flow-step
                                                 (wire-pid model pid)
                                                 (get fused-steps pid))))
-                                       :cljs (make-process
+                                       :cljs (cg-flow/make-process
                                               (table-step pid (get fused-steps pid))))
                               :args {}})
 
@@ -1305,9 +1237,9 @@
                                      (throw (ex-info "table-> mode requires dataset bindings"
                                                      {:source pid
                                                       :data-type (type ds)})))
-                                   {:proc (make-process (table-source-step ds (or batch-opts {})))
+                                   {:proc (cg-flow/make-process (table-source-step ds (or batch-opts {})))
                                     :args {}})
-                                 {:proc (make-process (source-step (get sources pid)))
+                                 {:proc (cg-flow/make-process (source-step (get sources pid)))
                                   :args {}})
 
                                :operation
@@ -1317,21 +1249,21 @@
                                             {:expected-count total-items}
                                             {})]
                                  (if has-incoming-edge?
-                                   {:proc (make-process
+                                   {:proc (cg-flow/make-process
                                            (table-step
                                             pid
-                                            (instrument-flow-step
+                                            (cg-flow/instrument-flow-step
                                              (wire-pid model pid)
                                              (operation->step node opts))))
                                     :args args}
                                 ;; No incoming edge: a source operation.
-                                   (let [step (instrument-flow-step
+                                   (let [step (cg-flow/instrument-flow-step
                                                (wire-pid model pid)
                                                (source-operation->step
                                                 (resolve-operation (:fn node))
                                                 (:params node)
                                                 (op-schema node)))]
-                                     {:proc (make-process
+                                     {:proc (cg-flow/make-process
                                              (if is-table-mode?
                                                (eos/end-with-eos step)
                                                step))
@@ -1339,11 +1271,11 @@
 
                                :sink
                                (if is-table-mode?
-                                 {:proc (make-process (table-sink-step result-atom
+                                 {:proc (cg-flow/make-process (table-sink-step result-atom
                                                                        (get n-inputs pid 0)
                                                                        completion-fn))
                                   :args {}}
-                                 {:proc (make-process (sink-step result-atom
+                                 {:proc (cg-flow/make-process (sink-step result-atom
                                                                  sink-expected-count
                                                                  completion-fn))
                                   :args {}})
@@ -1366,13 +1298,6 @@
   [model]
   (expand-groups model))
 
-(defn- create-pool-flow [config]
-  (flow/create-flow
-   #?(:clj (assoc config :compute-exec (cg-pool-reg/current-compute-exec))
-      :cljs (cond-> config
-              (cg-pool-reg/current-pool)
-              (assoc :compute-exec (cg-pool-reg/joint-compute-pool))))))
-
 (defn create-flow
   "The flow is not started."
   [model bindings]
@@ -1380,7 +1305,7 @@
   ;; a :workload :compute step such as transform-coords-step calls PROJ
   ;; through the per-thread Context of a pool worker.
   #?(:clj (ensure-cg-workers!))
-  (create-pool-flow (:config (model->flow model bindings))))
+  (cg-flow/create-pool-flow (:config (model->flow model bindings))))
 
 (defn validate-flow-config
   "Check the flow config of `model`: each connection names a defined proc,
@@ -1404,81 +1329,6 @@
                            :available-bindings (keys bindings)})))))
 
     nil))
-
-#?(:cljs
-   (defn- chan-queued
-     "The messages in the buffer of a cljc-flow channel. The blocked puts do
-      not count: their queue also holds the dead handlers of each alts."
-     [ch]
-     (let [buf  (when ch (.-buf ch))
-           ring (when buf (.-buf buf))]
-       (if (and ring (number? (.-length ring))) (.-length ring) 0))))
-
-#?(:cljs
-   (defn- queued [chans]
-     (reduce + 0 (map chan-queued (vals (or chans {}))))))
-
-#?(:cljs
-   (defn- snapshot-watch
-     "The flow-snapshot events of a flow: {:ping-all! :start! :stop!}. A proc
-      answers a ping only between two steps; with no fresh answer it is \"busy\"."
-     [flow-obj flow-model flow-name ids]
-     (let [seen    #js {}
-           at      #js {}
-           waiting #js {}
-           timers  #js {:tick nil :emit nil}
-           ping!   (fn [id]
-                     (when-not (aget waiting id)
-                       (aset waiting id true)
-                       (.then (flow/ping-proc flow-obj id :timeout-ms 250)
-                              (fn [reply]
-                                (aset waiting id false)
-                                (when reply
-                                  (aset seen id reply)
-                                  (aset at id (js/Date.now)))
-                                nil)
-                              (fn [_] (aset waiting id false) nil))))
-           proc    (fn [id]
-                     (let [reply (aget seen id)
-                           fresh? (and reply (< (- (js/Date.now) (aget at id)) 600))]
-                       {:pid (wire-pid flow-model id)
-                        :status (if fresh?
-                                  (get reply :clojure.core.async.flow/status)
-                                  "busy")
-                        :count (if reply (get reply :clojure.core.async.flow/count) 0)
-                        :in-queued (queued (when reply (get reply :clojure.core.async.flow/ins)))
-                        :out-queued (queued (when reply (get reply :clojure.core.async.flow/outs)))}))
-           emit!   (fn []
-                     (trace/emit! "flow-snapshot" {:flow flow-name :procs (mapv proc ids)}))
-           tick!   (fn []
-                     (doseq [id ids] (ping! id))
-                     (aset timers "emit" (js/setTimeout emit! 300)))]
-       {:ping-all! (fn [] (js/Promise.all (to-array (map ping! ids))))
-        :start!    (fn [] (aset timers "tick" (js/setInterval tick! 1000)))
-        :stop!     (fn []
-                     (js/clearInterval (aget timers "tick"))
-                     (js/clearTimeout (aget timers "emit")))})))
-
-(defn- flow-error-ex
-  "The ex-info for a report from the flow error channel, with the report as
-   ex-data and, on the JVM, the underlying exception as cause."
-  [err]
-  (let [pid (get err :clojure.core.async.flow/pid)
-        op  (get err :clojure.core.async.flow/op)
-        n   (get err :clojure.core.async.flow/count)
-        ex  (get err :clojure.core.async.flow/ex)
-        msg (str "Flow execution error"
-                 (when pid (str " in " pid))
-                 (when op (str " during " op))
-                 (when n (str " (message " n ")"))
-                 (when ex
-                   (str ": "
-                        #?(:clj (.getName (class ex))
-                           :cljs (or (.-name ex) "Error"))
-                        (when-let [m (ex-message ex)]
-                          (str " - " m)))))]
-    #?(:clj (ex-info msg {:type :flow-error :error err} ex)
-       :cljs (ex-info msg {:type :flow-error :error err}))))
 
 (defn run-model
   "Run `flow-model` with `bindings` (source :data-ref -> data) and give the sink
@@ -1514,182 +1364,17 @@
 
     ;; See create-flow: the compute executor must exist before model->flow.
     #?(:clj (ensure-cg-workers!))
-    (let [{:keys [config result-atom completed]} (model->flow flow-model bindings opts)
-          flow-obj (create-pool-flow config)]
-
-      #?(:clj
-         (let [flow-name (or (:name flow-model) "anon")
-               trace-session (trace/open-file-writer! flow-name)
-               flow-t0 (System/currentTimeMillis)
-               _ (trace/emit! "flow-start"
-                              {:flow flow-name
-                               :pids (mapv #(wire-pid flow-model (:id %))
-                                           (filter #(= :operation (:type %))
-                                                   (:nodes flow-model)))})]
-           (try
-             (let [timeout-ms (get opts :timeout-ms 60000)
-                   return-flow? (get opts :return-flow? false)
-
-                 ;; flow/start leaves the processes paused.
-                   {:keys [error-chan]} (flow/start flow-obj)
-                   _ (flow/resume flow-obj)
-
-                 ;; A trigger starts each source: a :source node, and an
-                 ;; :operation node whose op has :type :source.
-                   _ (doseq [node (:nodes flow-model)]
-                       (cond
-                         (= :source (:type node))
-                         (flow/inject flow-obj [(:id node) :trigger] [:start])
-
-                         (= :operation (:type node))
-                         (let [op-info (feature/get-operation-info (:fn node))]
-                           (when (= :source (:type op-info))
-                             (flow/inject flow-obj [(:id node) :trigger] [:start])))))
-
-                   start-time (System/currentTimeMillis)
-                   results (loop []
-                             (let [elapsed (- (System/currentTimeMillis) start-time)]
-                               (cond
-                                 ;; A step that throws puts its error on
-                                 ;; error-chan before it reads the next message.
-                                 ;; Thus the error of a failed batch is in the
-                                 ;; chan when eos/eos completes the sink.
-                                 @completed
-                                 (if-let [err (async/poll! error-chan)]
-                                   (throw (flow-error-ex err))
-                                   @result-atom)
-
-                               ;; The error check: this clause throws or falls through.
-                                 (let [err (async/poll! error-chan)]
-                                   (when err
-                                     (throw (flow-error-ex err))))
-                                 false
-
-                                 (> elapsed timeout-ms)
-                                 (throw (ex-info "Flow execution timeout"
-                                                 {:type :timeout
-                                                  :timeout-ms timeout-ms
-                                                  :elapsed-ms elapsed}))
-
-                                 :else
-                                 (do
-                                   (Thread/sleep 100)
-                                   (recur)))))]
-
-               (flow/stop flow-obj)
-
-               (trace/emit! "flow-complete"
-                            (cond-> (merge {:flow flow-name
-                                            :ms (- (System/currentTimeMillis) flow-t0)}
-                                           (row-errors results))
-                              (some? results)
-                              (assoc :results-preview (results-preview results))))
-
-               (if return-flow?
-                 {:results results :flow flow-obj}
-                 results))
-             (catch Throwable e
-               (trace/emit! "flow-error"
-                            {:flow flow-name
-                             :ms (- (System/currentTimeMillis) flow-t0)
-                             :message (.getMessage e)})
-               (throw e))
-             (finally
-               ;; Let the trace mult drain the events in flight before the file
-               ;; writer closes.
-               (Thread/sleep 50)
-               (trace/close-file-writer! trace-session))))
-
-         :cljs
-       ;; flow-start, flow-complete and flow-error mirror the JVM branch.
-       ;; resolve and reject wrap the raw settlers, because each exit path
-       ;; must emit its lifecycle event one time.
-         (js/Promise.
-          (fn [resolve* reject*]
-            (let [flow-name (or (:name flow-model) "anon")
-                  flow-t0 (js/Date.now)
-                  _ (trace/emit! "flow-start"
-                                 {:flow flow-name
-                                  :pids (mapv #(wire-pid flow-model (:id %))
-                                              (filter #(= :operation (:type %))
-                                                      (:nodes flow-model)))})
-                  ;; The procs of the config, because a group node of the
-                  ;; model has no proc of its own.
-                  watch (snapshot-watch flow-obj flow-model flow-name
-                                        (vec (keys (:procs config))))
-                  resolve (fn [v]
-                            ((:stop! watch))
-                            (trace/emit! "flow-complete"
-                                         (merge {:flow flow-name
-                                                 :ms (- (js/Date.now) flow-t0)}
-                                                (row-errors v)))
-                            (resolve* v))
-                  reject (fn [e]
-                           ((:stop! watch))
-                           (trace/emit! "flow-error"
-                                        {:flow flow-name
-                                         :ms (- (js/Date.now) flow-t0)
-                                         :message (or (and e (.-message e)) (str e))})
-                           (reject* e))
-                  timeout-ms (get opts :timeout-ms 60000)
-                  return-flow? (get opts :return-flow? false)
-                  {:keys [error-chan]} (flow/start flow-obj)]
-
-            ;; The first ping finds the channels of each proc while the procs
-            ;; are paused, because a proc in a step does not answer.
-            ;; flow/resume gives a Promise. Inject the triggers only after it
-            ;; resolves.
-              (-> ((:ping-all! watch))
-                  (.then (fn []
-                           ((:start! watch))
-                           (flow/resume flow-obj)))
-                  (.then (fn []
-                           (doseq [node (:nodes flow-model)]
-                             (cond
-                               (= :source (:type node))
-                               (flow/inject flow-obj [(:id node) :trigger] [:start])
-
-                             ;; An operation node with no incoming edge is a source operation.
-                               (= :operation (:type node))
-                               (let [has-incoming? (some #(= (:id node) (:to %)) (:edges flow-model))]
-                                 (when-not has-incoming?
-                                   (flow/inject flow-obj [(:id node) :trigger] [:start])))))
-
-                           (let [start-time (js/Date.now)
-                                 check-done (fn check-done []
-                                              (let [elapsed (- (js/Date.now) start-time)
-                                                    err (ca/poll! error-chan)]
-                                                (cond
-                                                ;; A step error goes to error-chan and the process
-                                                ;; loop continues. Without this poll, an op that
-                                                ;; throws gives a silent hang until the timeout.
-                                                ;; It comes before @completed, because eos/eos
-                                                ;; completes the sink after a failed batch too.
-                                                  (some? err)
-                                                  (do
-                                                    (flow/stop flow-obj)
-                                                    (reject (flow-error-ex err)))
-
-                                                  @completed
-                                                  (do
-                                                    (flow/stop flow-obj)
-                                                    ;; No clj->js here: a squint map or vector is a plain
-                                                    ;; JS object or array, and clj->js recurses into
-                                                    ;; WasmTS geometry proxies and throws.
-                                                    (if return-flow?
-                                                      (resolve {:results @result-atom :flow flow-obj})
-                                                      (resolve @result-atom)))
-
-                                                  (> elapsed timeout-ms)
-                                                  (reject (ex-info "Flow execution timeout"
-                                                                   {:type :timeout
-                                                                    :timeout-ms timeout-ms
-                                                                    :elapsed-ms elapsed}))
-
-                                                  :else
-                                                  (js/setTimeout check-done 100))))]
-                             (check-done))))
-                  (.catch reject)))))))))
+    (cg-flow/run-flow
+     (model->flow flow-model bindings opts)
+     (assoc (select-keys opts [:timeout-ms :return-flow?])
+            :name (:name flow-model)
+            :pids (mapv #(wire-pid flow-model (:id %))
+                        (filter #(= :operation (:type %)) (:nodes flow-model)))
+            :triggers (source-proc-ids flow-model)
+            :complete-data (fn [results]
+                             (merge (row-errors results)
+                                    #?(:clj (when (some? results)
+                                              {:results-preview (results-preview results)}))))))))
 
 ;; cg.dsl loads on first use, because a require of it here makes a cycle.
 #?(:clj (def ^:private cg-context-atom (atom nil)))

@@ -10,11 +10,11 @@
    carry that exception as the CAUSE — a bare \"Flow execution error\"
    hides which step died."
   (:require [clojure.test :refer [deftest is testing]]
-            [cg.run]))
+            [cg.run.flow]))
 
 (set! *warn-on-reflection* true)
 
-(def ^:private flow-error-ex #'cg.run/flow-error-ex)
+(def ^:private flow-error-ex #'cg.run.flow/flow-error-ex)
 
 (deftest message-names-proc-op-count-and-exception
   (let [inner (java.util.concurrent.TimeoutException.)
