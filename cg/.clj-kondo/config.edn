@@ -29,4 +29,8 @@
  ;; transform-crs is an operation group that expands to three steps, and
  ;; filter-by-column is a DSL alias of cg.dataset/filter.
  :linters {:unresolved-var {:exclude [cg.dataset/transform-crs
-                                      cg.dataset/filter-by-column]}}}
+                                      cg.dataset/filter-by-column]}
+           ;; A JVM namespace with interop must set *warn-on-reflection*,
+           ;; because a reflective call is slow and the flag shows each one at
+           ;; load time.
+           :warn-on-reflection {:level :warning}}}

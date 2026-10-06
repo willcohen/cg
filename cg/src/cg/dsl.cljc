@@ -42,6 +42,9 @@
 ;; not put cg.dsl in the cg.run ns form.
 
 #?(:clj
+   ;; copy-ns selects the public vars when cg.dsl compiles. In a REPL, .cg code
+   ;; can see a new public var of a copied namespace only after you reload
+   ;; cg.dsl and call run/reset-context!.
    (def cg-namespaces
      "The namespaces that a .cg file can require. SCI copies each one into
   the context. From cg.macros the context copies only item->, coll-> and

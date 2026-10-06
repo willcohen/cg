@@ -48,6 +48,8 @@
   (or
    (get @namespace-aliases ns-sym)
    #?(:clj
+      ;; *ns* does not hold the aliases of .cg code, because SCI keeps them. On the
+      ;; JVM, a rung head can use only an alias from the require of cg.dsl.
       (let [current-ns *ns*]
         (when (instance? clojure.lang.Namespace current-ns)
           (when-let [aliased-ns (get (ns-aliases current-ns) ns-sym)]
@@ -397,7 +399,9 @@
    (defn- model->create-call
      "The return value of a threading macro on :cljs: an object whose toString
       gives the call cg$model.get_staged_model(N). `args-js` is the JS array of
-      the rung args that lift-rung-args took out of the model."
+      the rung args that lift-rung-args took out of the model. The macro does
+      not return a syntax-quoted form, because squint cannot evaluate one at
+      run time (squint issue 822)."
      ([model-map] (model->create-call model-map nil))
      ([model-map args-js]
       (let [id (model/stage-model! model-map)

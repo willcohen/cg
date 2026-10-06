@@ -232,6 +232,9 @@
   "The fn `f` of the row op `op-name`, with a check that each result is a
    value and not a Model."
   [op-name f]
+  ;; A row op cannot return a Model, because a Model for each row is slow. On
+  ;; the JVM, 200 rows used 30.9 s with a Model body and 0.16 s with a value
+  ;; body.
   (fn [& args]
     (let [r (apply f args)]
       ;; model? reads only :nodes and :edges, and a row can have :edges.
@@ -1094,6 +1097,8 @@
   "flow/process for `step-fn`, with the :workload and :compute-timeout-ms of
    its describe map as opts."
   [step-fn]
+  ;; flow/process reads :compute-timeout-ms only from its opts (default 5000
+  ;; ms), and ignores the value in the describe map.
   (let [desc (step-fn)
         opts (cond-> {}
                (:workload desc) (assoc :workload (:workload desc))
@@ -1105,7 +1110,8 @@
 (defn model->flow
   "A flow config for a model: {:config {:procs :conns} :result-atom :completed
   :sources :is-table-mode?}. `opts`: :batch-size (max rows of a table-> batch,
-  default 64000) and :row-id-keys (the row keys that name a row, default [:id])."
+  default 64000 on the JVM and 1000 on JS) and :row-id-keys (the row keys that
+  name a row, default [:id])."
   ([model bindings] (model->flow model bindings {}))
   ([model bindings opts]
    (let [model (expand-groups model)
@@ -1852,6 +1858,9 @@
      #"\^:op\b"))
 
 #?(:cljs
+   ;; The op data comes from the parser, because squint does not keep the ^:op
+   ;; flag or the attr-map of a defn. The JVM lane reads the SCI var
+   ;; (var-op-decl).
    (defn- register-ops-of!
      "Register in `ns-name` each op that the .cg source `text` declares, before
       squint compiles `text`. Each registered fn finds its defn at call time."

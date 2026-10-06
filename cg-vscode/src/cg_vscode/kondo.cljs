@@ -5,7 +5,8 @@
 ;; SPDX-License-Identifier: Apache-2.0 WITH LLVM-exception
 
 (ns cg-vscode.kondo
-  "Runs clj-kondo on a .cg buffer into its own DiagnosticCollection."
+  "Runs clj-kondo on a .cg buffer into its own DiagnosticCollection, because
+   clojure-lsp reads only the file extensions in its uri->file-type."
   (:require ["vscode" :as vscode]
             ["node:child_process" :as cp]
             [cg-vscode.diagnostics :as diag]

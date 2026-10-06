@@ -231,6 +231,8 @@
 
 ;; Change analysis-version when a change to the analysis code makes the
 ;; cached rows wrong. A change to the rule data makes a new key without it.
+;; The key does not include boston-2026-thresholds, boston-2026-opts or the
+;; schemas. Change analysis-version after a change to one of them too.
 (def analysis-version "15")
 
 (defn cache-hash

@@ -17,6 +17,10 @@
 // probe answers that request with a parcel that it makes in memory, because
 // a probe must not depend on a public server.
 //
+// The basemap fonts from tiles.openstreetmap.us took 20 s at times on
+// 2026-09-30, and the map checks failed. Time that request before you trust a
+// map failure.
+//
 // Run: node cg-app/app/probes/demo-verify.cjs (after bb build:demo)
 const path = require('path');
 const http = require('http');

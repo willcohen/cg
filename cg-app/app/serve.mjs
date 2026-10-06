@@ -43,6 +43,8 @@ function resolve(url) {
 // Warn when dist/cg-app.mjs is older than one of its inputs. `node serve.mjs`
 // does not rebuild it, and a stale bundle reports false unresolved-op
 // diagnostics for built-in ops. `bb bundle:check` does the same check.
+// The check does not include cg-bundled-browser.mjs, the cg runtime that the
+// page and the probes load. After a change to cg core, run bb build:web-app.
 (async () => {
   try {
     const meta = JSON.parse(await readFile(join(APP, 'dist', 'cg-app.meta.json'), 'utf8'));

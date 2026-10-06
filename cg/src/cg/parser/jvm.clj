@@ -16,6 +16,9 @@
 
 (set! *warn-on-reflection* true)
 
+;; The JVM runs web-tree-sitter in GraalJS with the grammar wasm of the JS
+;; lane, because the two lanes then give the same tree with no native binary
+;; for each platform.
 (def ^:private grammar-wasm-resource
   "node_modules/@yogthos/tree-sitter-clojure/tree-sitter-clojure.wasm")
 

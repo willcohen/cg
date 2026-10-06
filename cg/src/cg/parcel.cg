@@ -13,6 +13,10 @@
             [cg.run :as run]
             [cg.util :as util]))
 
+;; Limits of the lot classifier: it finds no cul-de-sac, and rectangular? is its
+;; only shape test. A corner curve that is only partly street gives :mid-block,
+;; and the gap to the next parcel is too small for a street drawn to its center.
+
 (run/load-module "src/cg/layer.cg")
 (clojure.core/require '[cg.layer :as layer])
 
@@ -1311,6 +1315,9 @@
                                             (if (rear? e primary fronts) :rear :side)))
                                    candidates))]
     (case lot-type
+      ;; A lot with no street edge has no front. Because the rear test uses the
+      ;; front, each edge is a side and the rear setback stays :unknown. Do not
+      ;; add an imaginary rear here.
       :no-street-frontage (mapv #(assoc % :edge-type :side) edges-with-info)
       :interior           (mapv #(assoc % :edge-type :side) edges-with-info)
 

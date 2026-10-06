@@ -443,6 +443,9 @@
 
      ;; Stop on a cleared exceededTransferLimit or on an empty page: a server can truncate
      ;; a result and not set the flag.
+     ;; Pages load one at a time, because parallel requests were slower on an ArcGIS
+     ;; server. A count or an id list cannot find a missing page, because the server
+     ;; applies resultRecordCount to them too.
      (defn load-pages
        "Page through a layer and return {:rows :source-crs :pages}. `fetch-page` takes a row offset and
         returns the f=pbf bytes of that page. Options: those of decode-page plus :max-pages.
