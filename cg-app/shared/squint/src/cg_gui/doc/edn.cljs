@@ -179,15 +179,3 @@
                :else (str prefix (print-inline v)))))
          entries)]
     (str "^:cgproj\n" (str/join "\n" lines) "}")))
-
-(defn strip-keys
-  "Converts parsed-overlay maps to squint maps, recursively: removes the colon
-   of each keyword key."
-  [v]
-  (cond
-    (vector? v) (mapv strip-keys v)
-    (obj? v) (reduce (fn [acc [k vv]]
-                       (assoc acc (kw-name k) (strip-keys vv)))
-                     {}
-                     (js/Object.entries v))
-    :else v))

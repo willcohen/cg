@@ -18,14 +18,14 @@
 (def !calls (atom 0))
 
 (defn- mock-fetch!
-  "Install a fetch stub. It reads ok?-atom on each call, which lets a test flip it."
+  "It reads ok?-atom on each call, which lets a test flip it."
   [ok?-atom]
   (set! (.-fetch js/globalThis)
         (fn [url _opts]
           (swap! !calls inc)
           (swap! !urls conj (str url))
           (if @ok?-atom
-            (js/Promise.resolve #js {:ok true})
+            (js/Promise.resolve #js {:ok true :status 200})
             (js/Promise.reject (js/Error. "ECONNREFUSED"))))))
 
 (deftest ^:async probe-feeds-re-resolution-and-observes-down-transition
@@ -67,7 +67,6 @@
     (await (session/set-backend-url! "http://localhost:9999"))
     (is (= "http://localhost:9999" (rt/backend-url)))
     (is (= "http://localhost:9999" (:backend-url @state/app-state)))
-    (is (pos? (count @!urls)))
     (is (= 0 (.indexOf (str (last @!urls)) "http://localhost:9999")))
     ;; the test files that run later need the default
     (await (session/set-backend-url! nil))))
@@ -99,17 +98,9 @@
                                     (.endsWith (str url) (subs r (inc sp)))))))]
             (if hit
               (js/Promise.resolve
-               #js {:ok true
+               #js {:ok true :status 200
                     :json (fn [] (js/Promise.resolve (aget routes hit)))})
               (js/Promise.resolve #js {:ok false :status 500}))))))
-
-(deftest ^:async ensure-session-creates-once
-  (reset! session/!session-id nil)
-  (reset! !reqs [])
-  (mock-json-fetch! #js {"POST /api/session/create" #js {:session-id "s-1"}})
-  (is (= "s-1" (await (session/ensure-session!))))
-  (is (= "s-1" (await (session/ensure-session!))))
-  (is (= 1 (count @!reqs))))
 
 (deftest ^:async load-session-code-lands-vars-with-header
   (reset! session/!session-id "s-1")
@@ -159,7 +150,7 @@
     (session/stop-health-loop!)
     (js-delete js/globalThis "__CG_JS_ONLY__")
     (rt/init!)
-    (is (zero? @!calls) "a JS-only page never fetches the backend")))
+    (is (zero? @!calls))))
 
 (.then (js/Promise.resolve (t/run-tests))
        (fn [results]

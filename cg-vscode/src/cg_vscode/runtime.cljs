@@ -8,16 +8,24 @@
   (:require ["vscode" :as vscode]
             [cg-vscode.dev-shell :as dev-shell]
             [cg-vscode.extension.lifecycle :as lc]
-            [cg-vscode.runtime.jvm-client :as jvm]
+            [cg-vscode.runtime.jvm-client :as jvm-client]
+            ["../../../cg-app/shared/squint/src/cg_gui/run/jvm.mjs" :as jvm]
             ["../../../cg-app/shared/squint/src/cg_gui/run/lane.mjs" :as lane]))
 
-(def default-port jvm/default-port)
+(def default-port jvm-client/default-port)
 
 (defn- config-runtime []
   (.. vscode/workspace (getConfiguration "cg") (get "runtime" "jvm")))
 
-(defn- set-config-runtime! [value]
-  (.. vscode/workspace (getConfiguration "cg") (update "runtime" value)))
+(defn- set-config-runtime!
+  "Writes the runtime setting, which each run reads: to the workspace when a
+   folder is open, else to the user settings, because a window with no folder
+   has no workspace settings. Gives a Promise."
+  [value]
+  (.. vscode/workspace (getConfiguration "cg")
+      (update "runtime" value (if (seq (.-workspaceFolders vscode/workspace))
+                                vscode/ConfigurationTarget.Workspace
+                                vscode/ConfigurationTarget.Global))))
 
 (defn- backend-port-file
   "The path of the backend port file, cg-app/.cg-backend-port. `bb backend:dev`
@@ -46,17 +54,7 @@
     port))
 
 (defn- check-jvm-reachable [port]
-  (js/Promise.
-   (fn [resolve _reject]
-     (let [http (js/require "http")]
-       (-> (.request http
-            #js {:hostname "localhost" :port port :method "GET" :path "/api/health" :timeout 2000}
-            (fn [res]
-              (.resume res)
-              (resolve (= 200 (.-statusCode res)))))
-           (.on "error" (fn [_err] (resolve false)))
-           (.on "timeout" (fn [] (resolve false)))
-           (.end))))))
+  (jvm/health? (jvm-client/send-to port 2000)))
 
 (defonce !backend-proc (atom nil))
 
@@ -142,13 +140,6 @@
   []
   (= "jvm" (config-runtime)))
 
-(defn eval-jvm
-  "Evaluates `text` (.cg source) on the JVM REST backend. Returns a Promise of
-   {:result <body>} or {:error <msg>}."
-  [!state text filename]
-  (let [port (resolve-jvm-port !state)]
-    (jvm/eval-cg port text filename)))
-
 (defn resolve-map-target
   "Probes the backend, also for an explicit choice, and applies the choice.
    Returns a Promise of {:resolved 'jvm'|'js' :reachable bool :port n}."
@@ -192,91 +183,40 @@
    (to-array ["auto" "jvm" "js"])
    #js {:placeHolder "Select CG runtime"}))
 
+(defn- show-runtime!
+  "Shows the runtime on the status bar, and logs what it resolved to."
+  [!state resolved]
+  (update-status-bar! !state)
+  (.appendLine ^js (:runtime/output-channel @!state) (str "CG: runtime resolved to " resolved)))
+
 (defn init-runtime! [!state]
-  (let [^js channel (:runtime/output-channel @!state)]
-    (create-status-bar-item !state)
-    (-> (select-runtime !state)
-        (.then (fn [resolved]
-                 (update-status-bar! !state)
-                 (.appendLine channel (str "CG: runtime resolved to " resolved)))))))
+  (create-status-bar-item !state)
+  (.then (select-runtime !state) (fn [resolved] (show-runtime! !state resolved))))
 
-(defn- active-cg-document
-  "Return [doc text filename] for the current .cg editor, or nil if none."
-  []
-  (let [^js active-editor (.. vscode -window -activeTextEditor)]
-    (when (and active-editor
-               (-> active-editor .-document .-uri .-path (.endsWith ".cg")))
-      (let [^js doc (.-document active-editor)
-            text (.getText doc)
-            path-str (.-path (.-uri doc))
-            filename (last (.split path-str "/"))]
-        [doc text filename]))))
+(defn ^:async apply-runtime-choice!
+  "Saves the runtime `choice`, then shows it on the status bar. The status
+   bar changes only after the save, because a run reads the setting."
+  [!state choice]
+  (try
+    (await (set-config-runtime! choice))
+    (swap! !state assoc :runtime/choice choice)
+    (if (= choice "auto")
+      (show-runtime! !state (await (select-runtime !state)))
+      (do (swap! !state assoc :runtime/resolved choice)
+          (update-status-bar! !state)))
+    (catch :default e
+      (vscode/window.showErrorMessage (str "CG: the runtime setting was not saved: " (.-message e))))))
 
-(defn- post-jvm-vars-to-panel!
-  "Posts the JVM eval var list as cg/jvm-vars to the flow-editor panel of the
-   active document, if one is open."
-  [!state ^js doc filename vars]
-  (let [uri-str (str (.-uri doc))]
-    (when-let [^js panel (get-in @!state [:editor/panels uri-str])]
-      (.. panel -webview
-          (postMessage #js {:type "cg/jvm-vars"
-                            :file filename
-                            :vars vars})))))
-
-(defn run-eval-jvm!
-  "Runs the active .cg document on the JVM REST backend and prints the results
-   to the CG output channel."
+(defn ^:async probe-runtime!
+  "Probes the backend and shows the runtime on the status bar. Gives
+   {:choice :resolved :reachable :port}."
   [!state]
-  (let [^js channel (:runtime/output-channel @!state)]
-    (if-let [[doc text filename] (active-cg-document)]
-      (let [port (or (:runtime/jvm-port @!state) default-port)]
-        (.appendLine channel (str "CG: Eval (JVM) " filename " against localhost:" port))
-        (-> (eval-jvm !state text filename)
-            (.then (fn [{:keys [result error]}]
-                     (if error
-                       (.appendLine channel (str "CG: Eval (JVM) error: " error))
-                       (let [vars (:vars result)
-                             files (:files result)]
-                         (.appendLine channel
-                                      (str "CG: Eval (JVM) ok — "
-                                           (count files) " file(s), "
-                                           (count vars) " var(s)"))
-                         (doseq [v vars]
-                           (.appendLine channel
-                                        (str "  " (:qualified v)
-                                             " :: " (:type v)
-                                             (when-let [rc (:row-count v)]
-                                               (str " (" rc " rows)")))))
-                         (post-jvm-vars-to-panel! !state doc filename vars)))))))
-      (.appendLine channel "CG: Eval (JVM) — no active .cg document"))))
+  (let [r (await (resolve-map-target !state))]
+    (update-status-bar! !state)
+    (assoc r :choice (:runtime/choice @!state))))
 
 (defn register-runtime-commands! [!state]
   (lc/register-command! !state "cg.setRuntime"
                         (fn [state]
-                          (-> (pick-runtime)
-                              (.then (fn [choice]
-                                       (when choice
-                                         (set-config-runtime! choice)
-                                         (swap! state assoc :runtime/choice choice)
-                                         (if (= choice "auto")
-                                           (-> (select-runtime state)
-                                               (.then (fn [resolved]
-                                                        (update-status-bar! state)
-                                                        (let [^js ch (:runtime/output-channel @state)]
-                                                          (.appendLine ch (str "CG: runtime resolved to " resolved))))))
-                                           (do
-                                             (swap! state assoc :runtime/resolved choice)
-                                             (update-status-bar! state)))))))))
-
-  (lc/register-command! !state "cg.refreshRuntime"
-                        (fn [state]
-                          (let [^js channel (:runtime/output-channel @state)]
-                            (.appendLine channel "CG: Refreshing runtime...")
-                            (-> (select-runtime state)
-                                (.then (fn [resolved]
-                                         (update-status-bar! state)
-                                         (.appendLine channel (str "CG: runtime resolved to " resolved))))))))
-
-  (lc/register-command! !state "cg.evalJvm"
-                        (fn [state]
-                          (run-eval-jvm! state))))
+                          (.then (pick-runtime)
+                                 (fn [choice] (when choice (apply-runtime-choice! state choice)))))))

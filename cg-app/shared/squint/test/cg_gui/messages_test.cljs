@@ -50,9 +50,6 @@
     :fields ["line"]}
    {:type "cg/theme-kind" :channel "canvas" :from "host" :to "view"
     :fields ["mode"]}
-   {:type "cg/jvm-vars" :channel "canvas" :from "host" :to "view"
-    :fields ["file" "vars"]
-    :unhandled "The canvas has no row-count display for binding nodes yet."}
 
    {:type "cg/run" :channel "map" :from "host" :to "view"
     :fields ["text" "flow" "model?" "file?"]}

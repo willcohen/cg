@@ -5,10 +5,82 @@
 ;; SPDX-License-Identifier: Apache-2.0 WITH LLVM-exception
 
 (ns cg-gui.doc.overlay
-  "The write half of the ^:cgproj overlay codec. A key that exists keeps its
-   form, and a first drag adds its key as the React Flow node id."
+  "The ^:cgproj overlay codec of both hosts. The read half places the cards of
+   a parsed flow by their React Flow node ids. The write half keeps the form of
+   a key that exists, and a first drag adds its key as the node id."
   (:require [clojure.string :as str]
             [cg-gui.doc.edn :as edn]))
+
+(defn overlay-positions
+  "{node-id [x y]} from the overlay of the parsed `flow`, with no entry for a
+   node that has no :pos. {} when the file has no overlay."
+  [flow]
+  (if-let [o (aget flow "overlay")]
+    (reduce (fn [acc [id-k props]]
+              (if-let [pos (edn/kget props "pos")]
+                (assoc acc (edn/kw-name id-k) (vec pos))
+                acc))
+            {}
+            (js/Object.entries (or (edn/kget (edn/read-overlay (aget o "raw")) "nodes") {})))
+    {}))
+
+(defn- unq
+  "The last `/` segment of a qualified name, as the canvas makes node ids."
+  [qn]
+  (last (str/split (str qn) #"/")))
+
+(defn- thread-step-id
+  "The node id of step `i` of a thread: `<model>__<unq-fn>-<i+1>`."
+  [model i op]
+  (str model "__" (unq (:qualified-name op)) "-" (inc i)))
+
+(defn- body-node-id
+  "The node id of a body-graph node of an op: `<op>-body__<raw>`."
+  [op bn]
+  (str (:name op) "-body__" (edn/kw-name (str (:id bn)))))
+
+(defn- binding-node-ids [b]
+  (case (:body-shape b)
+    :function_call   [(str "binding-" (:name b))]
+    :threading_macro (map-indexed (fn [i op] (thread-step-id (or (:name b) "anon") i op))
+                                   (:ops b))
+    []))
+
+(defn overlay-node-ids
+  "The node ids whose position merge-positions reads. A host writes no other
+   position, because nothing reads it."
+  [flow]
+  (set (concat (mapcat binding-node-ids (:bindings flow))
+               (mapcat (fn [op] (map (fn [bn] (body-node-id op bn)) (:nodes (:body-graph op))))
+                       (:operations flow)))))
+
+(defn- placed
+  "`node` with :visual {:pos p} when `positions` has `id`."
+  [node positions id]
+  (if-let [p (get positions id)]
+    (assoc node :visual {:pos p})
+    node))
+
+(defn- placed-binding [b positions]
+  (case (:body-shape b)
+    :function_call (placed b positions (str "binding-" (:name b)))
+    :threading_macro (update b :ops
+                              #(vec (map (fn [op id] (placed op positions id)) % (binding-node-ids b))))
+    b))
+
+(defn- placed-op [op positions]
+  (if-let [bg (:body-graph op)]
+    (assoc op :body-graph
+           (update bg :nodes (fn [bns] (mapv (fn [bn] (placed bn positions (body-node-id op bn))) bns))))
+    op))
+
+(defn merge-positions
+  "`flow` with :visual {:pos [x y]} on each binding, thread step and op body
+   node that `positions` ({node-id [x y]}) places."
+  [flow positions]
+  (-> flow
+      (update :bindings (fn [bs] (mapv (fn [b] (placed-binding b positions)) (or bs []))))
+      (update :operations (fn [ops] (if (seq ops) (mapv (fn [op] (placed-op op positions)) ops) ops)))))
 
 (defn- splice-overlay
   "Replace the overlay region of `text` with `rendered`, using the

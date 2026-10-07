@@ -18,6 +18,7 @@
             ["../../../../shared/squint/src/cg_gui/run/js.mjs" :as run-js]
             ["../../../../shared/squint/src/cg_gui/run/lane.mjs" :as lane]
             ["../../../../shared/squint/src/cg_gui/doc/literal.mjs" :as literal]
+            ["../../../../shared/squint/src/cg_gui/doc/overlay.mjs" :as overlay]
             [cg-app.ui.session :as session]
             [cg-app.ui.execution :as execution]
             [cg-app.ui.settings :as settings]
@@ -67,37 +68,28 @@
 (defonce ^:private !canvas-mounted (atom false))
 
 (defn ^:async mount-canvas-once!
-  "Imports the shared canvas and mounts it into #root, one time. Call it after
-   the Shell commits, because the Shell renders #root."
+  "Call it after the Shell commits, because the Shell renders #root."
   []
   (when-not @!canvas-mounted
     (reset! !canvas-mounted true)
     (let [canvas (await (js* "import(~{})" "cg-app/canvas"))]
       ((aget canvas "mount") "root"))))
 
-(defn- post!
-  "Posts `msg` on the window bus. The canvas listens for window 'message'."
-  [msg]
-  (.postMessage js/window msg "*"))
-
-(defn post-flow!
-  "Merges the positions into the loaded flow and posts cg/flow. Then tells the
-   canvas which model Run runs (cg/run-model)."
-  []
+(defn post-flow! []
   (let [{:keys [flow run-model load-n]} @state/app-state]
     (when flow
-      (post! #js {:type "cg/flow"
-                  :flow (js/Object.assign
-                         (extract/merge-positions-into-flow flow (state/positions))
-                         #js {:loadId load-n})})
-      (post! #js {:type "cg/run-model"
-                  :model (or run-model (run-js/model-binding-name flow))}))))
+      (execution/bus-post! #js {:type "cg/flow"
+                                :flow (js/Object.assign
+                                       (overlay/merge-positions flow (state/positions))
+                                       #js {:loadId load-n})})
+      (execution/bus-post! #js {:type "cg/run-model"
+                                :model (or run-model (run-js/model-binding-name flow))}))))
 
 (defn- select-model!
   "Makes `model-name` the model that Run runs."
   [model-name]
   (state/set-run-model! model-name)
-  (post! #js {:type "cg/run-model" :model model-name}))
+  (execution/bus-post! #js {:type "cg/run-model" :model model-name}))
 
 (defn- ModelMenu [^js props]
   (let [names (run-js/model-names (.-flow props))]
@@ -117,27 +109,22 @@
   (try (.replaceState js/history nil "" (open-url/page-href (.-href js/location) url))
        (catch :default _ nil)))
 
-(defn ^:async process-text!
-  "Loads a .cg file: decodes the overlay, parses, follows the loaded modules,
-   stores the flow and posts it."
-  [filename text]
+(defn ^:async process-text! [filename text]
   (set-page-url! nil)
   (try
-    (let [file-pos (try
-                     (let [mod (await (loader/load-cg-module!))]
-                       (state/set-module-status! "loaded")
-                       (loader/overlay-positions (loader/metadata-mod mod) text))
-                     (catch :default e
-                       (state/set-module-status! "error")
-                       (js/console.warn "cg module codec unavailable; rendering without overlay positions:" e)
-                       #js {}))
+    (let [_ (try
+              (await (loader/load-cg-module!))
+              (state/set-module-status! "loaded")
+              (catch :default e
+                (state/set-module-status! "error")
+                (js/console.warn "cg module unavailable:" e)))
           ;; :opaque-blocks makes a form that the parser cannot model show as
           ;; a read-only card.
           flow0 (await (extract/extract-flow text {:grammar-wasm (grammar-wasm-url)
                                                    :opaque-blocks true}))
           flow (await (extract/follow-loaded-modules! flow0 {:grammar-wasm (grammar-wasm-url)}))
           diags (or (aget flow "diagnostics") #js [])]
-      (state/merge-positions! file-pos)
+      (state/merge-positions! (overlay/overlay-positions flow0))
       (state/set-loaded-flow! filename text flow)
       (status/reset-run!)
       (when (pos? (.-length diags))
@@ -145,7 +132,7 @@
       (post-flow!)
       ;; A session sync failure must not stop the load.
       (when (true? (:backend-available @state/app-state))
-        (-> (session/sync-file! text filename)
+        (-> (session/load-session-code! text filename)
             (.catch (fn [e] (js/console.warn "session sync failed:" e))))))
     (catch :default e
       (state/set-load-error! (or (.-message e) (str e))))))
@@ -168,8 +155,8 @@
 (defonce ^:private !edit-n (atom 0))
 
 (defn ^:async edit-text!
-  "Stores, parses and posts the new text of the loaded file. Text that does
-   not parse keeps the last flow, and the canvas stays as it was."
+  "Text that does not parse keeps the last flow, and the canvas stays as it
+   was."
   [text]
   (swap! !edit-n inc)
   (let [n @!edit-n
@@ -181,7 +168,7 @@
       (when flow
         (post-flow!)
         (when (true? (:backend-available @state/app-state))
-          (-> (session/sync-file! text (:name loaded-file))
+          (-> (session/load-session-code! text (:name loaded-file))
               (.catch (fn [e] (js/console.warn "session sync failed:" e)))))))))
 
 (defonce ^:private !last-edit (atom nil))
@@ -255,9 +242,7 @@
           (finally
             (state/set-opening! nil)))))))
 
-(defn- UrlBar
-  "The text box for the URL of a .cg file."
-  [^js props]
+(defn- UrlBar [^js props]
   (let [bar (.-bar props)
         opening (.-opening props)
         [typed set-typed] (useState (or (:url bar) ""))]
@@ -290,9 +275,7 @@
             [:option {:value "" :disabled true} "Examples"]
             (.map names (fn [n] #jsx [:option {:key n :value n} n]))])))
 
-(defn- EmptyCanvas
-  "The first step on an empty canvas: an example, else a .cg file."
-  [^js props]
+(defn- EmptyCanvas [^js props]
   (let [example (state/starter-example (.-examples props))]
     (if-let [opening (.-opening props)]
       #jsx [:div {:className "cg-empty" :data-testid "empty-canvas"}
@@ -320,9 +303,7 @@
               (process-text! (.-name file) (.. e -target -result))))
       (.readAsText reader file))))
 
-(defn- apply-theme-attrs!
-  "Sets data-carbon-theme and data-theme together."
-  [theme]
+(defn- apply-theme-attrs! [theme]
   (let [root (.-documentElement js/document)]
     (.setAttribute root "data-carbon-theme" theme)
     (.setAttribute root "data-theme" (state/theme-mode theme))))
@@ -355,8 +336,7 @@
 (def ^:private status-panel-delay-ms 800)
 
 (defn- show-status-of-long-run!
-  "Opens the Status panel when the run still runs after status-panel-delay-ms.
-   A short run keeps the room for its result."
+  "A short run keeps the room for its result."
   [bp]
   (js/setTimeout
    (fn []
@@ -365,8 +345,7 @@
    status-panel-delay-ms))
 
 (defn- reveal-outputs!
-  "Opens each hidden panel that holds output of the run that ended. A phone
-   shows one panel, and there the reader picks it in the status bar."
+  "A phone shows one panel, and there the reader picks it in the status bar."
   [bp]
   (when-not (viewport/phone? bp)
     (let [outs (hidden-outputs @state/app-state)]
@@ -422,10 +401,7 @@
                                :rightLabel (panel-label right)
                                :onChange (.-onChange props)}])))
 
-(defn- one-panel!
-  "Leaves one panel visible: Flow when it is visible, else the first visible
-   one."
-  []
+(defn- one-panel! []
   (let [shown (shown-keys (state/panels))]
     (when (not= 1 (.-length shown))
       (state/select-panel! (if (or (zero? (.-length shown)) (.includes shown "flow"))
@@ -472,7 +448,7 @@
     (useEffect
      (fn []
        (apply-theme-attrs! theme)
-       (post! #js {:type "cg/theme-kind" :mode (state/theme-mode theme)})
+       (execution/bus-post! #js {:type "cg/theme-kind" :mode (state/theme-mode theme)})
        js/undefined)
      #js [theme])
     ;; After the commit, one time: #root now exists in the DOM.
@@ -626,16 +602,14 @@
       (= t "cg/new")
       (do (state/clear-loaded!)
           (status/reset-run!)
-          (post! #js {:type "cg/flow" :flow #js {:loadId (:load-n @state/app-state)}}))
+          (execution/bus-post! #js {:type "cg/flow" :flow #js {:loadId (:load-n @state/app-state)}}))
       ;; From the native shell (File > Save). save! posts cg/file-save-request
       ;; back, because the web side owns the overlay codec.
       (= t "cg/save") (save-file!)
       (= t "cg/open-defop") (js/console.log "cg/open-defop: the app shell has no editor to open an op in")
       :else nil)))
 
-(defn- inject-icon-sprite!
-  "Fetches the icon sprite into the page. Ignores a failure."
-  []
+(defn- inject-icon-sprite! []
   (when-not (.getElementById js/document "cg-icon-sprite")
     (-> (js/fetch "css/cg-brand/icons.svg")
         (.then (fn [^js r] (when (.-ok r) (.text r))))

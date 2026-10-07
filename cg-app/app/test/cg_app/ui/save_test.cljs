@@ -9,8 +9,13 @@
    metadata module. Also the shape of the cg/file-save-request message."
   (:require [cljs.test :as t :refer [deftest is]]
             ["../../../../../cg/src/cg/metadata.mjs" :as md]
-            ["../../../src/cg_app/ui/loader.mjs" :as loader]
             ["../../../src/cg_app/ui/save.mjs" :as save]))
+
+(defn- decoded-pos
+  "The [x y] of the node `id` in the overlay of `text`, as the cg metadata
+   module reads it."
+  [text id]
+  (some-> (md/split_code_and_metadata text) (aget "metadata") (aget "nodes") (aget id) (aget "pos")))
 
 (def code "(def buffered\n  (table-> parcels\n           (geo/buffer 10)))")
 
@@ -24,18 +29,15 @@
 
 (deftest saved-text-roundtrips-through-decode
   (let [txt (save/cg-text text-with-overlay flow-with-overlay
-                          {"buffer-1" #js [111 222]})
-        ps  (loader/overlay-positions md txt)]
+                          {"buffer-1" #js [111 222]})]
     (is (.includes txt "(geo/buffer 10)"))
-    (is (= 111 (aget (aget ps "buffer-1") 0)))
-    (is (= 222 (aget (aget ps "buffer-1") 1)))))
+    (is (= [111 222] (vec (decoded-pos txt "buffer-1"))))))
 
 (deftest saved-text-appends-overlay-when-absent
   (let [txt (save/cg-text (str code "\n") #js {:overlay nil}
-                          {"buffered__buffer-1" #js [10 20]})
-        ps  (loader/overlay-positions md txt)]
+                          {"buffered__buffer-1" #js [10 20]})]
     (is (.includes txt "(geo/buffer 10)"))
-    (is (= 10 (aget (aget ps "buffered__buffer-1") 0)))))
+    (is (= [10 20] (vec (decoded-pos txt "buffered__buffer-1"))))))
 
 (deftest save-request-shape
   (let [req (save/save-request "x.cg" "(def x 1)\n" #js {:overlay nil}

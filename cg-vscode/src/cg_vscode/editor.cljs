@@ -22,8 +22,7 @@
 (def ^:private debounce-ms 250)
 
 (defn- read-brand-text
-  "Reads a text asset (for example icons.svg) from dist/webview/cg-brand/ of
-   the extension. Returns nil when the file is missing."
+  "Returns nil when the file is missing."
   [extension-uri filename]
   (let [^js uri (vscode/Uri.joinPath extension-uri "dist" "webview" "cg-brand" filename)
         path (.-fsPath uri)]
@@ -43,16 +42,6 @@
     :mode       (canvas-html/theme-kind->mode (.-kind vscode/window.activeColorTheme))
     :sprite     (read-brand-text extension-uri "icons.svg")}))
 
-(defn- send-cg-flow-to-webview!
-  "Posts the parsed CgFlow to the webview as {:type \"cg/flow\" :flow <js>}.
-   The ^:cgproj overlay positions go in as :visual {:pos [x y]}."
-  [^js panel cg-flow]
-  (let [merged (extract/merge-overlay-into-cg-flow
-                cg-flow (extract/decoded-overlay cg-flow))]
-    (.. panel -webview
-        (postMessage #js {:type "cg/flow"
-                          :flow merged}))))
-
 (defn- run-model-for
   "The model that Run runs for the document `uri-str`: the canvas pick while
    the flow defines it, else nil. nil runs the last threading-macro binding."
@@ -62,8 +51,7 @@
       pick)))
 
 (defn- post-run-model!
-  "Tells the canvas which model Run runs. Forgets a pick that the flow does not
-   define."
+  "Forgets a pick that the flow does not define."
   [!state ^js panel uri-str cg-flow]
   (let [pick (run-model-for !state uri-str cg-flow)]
     (when-not pick
@@ -76,26 +64,24 @@
 ;; throws.
 (defonce ^:private closed-panels (js/WeakSet.))
 
-(defn- post-flow-to-panel!
-  "Posts the flow and the run model to the canvas, and records which node ids
-   of this flow can keep a dragged position."
-  [!state ^js panel uri-str cg-flow]
+(defn- post-flow-to-panel! [!state ^js panel uri-str cg-flow]
   (when-not (.has closed-panels panel)
-    (swap! !state assoc-in [:editor/overlay-ids uri-str] (extract/overlay-node-ids cg-flow))
-    (send-cg-flow-to-webview! panel cg-flow)
+    (swap! !state assoc-in [:editor/overlay-ids uri-str] (overlay/overlay-node-ids cg-flow))
+    (.. panel -webview
+        (postMessage #js {:type "cg/flow"
+                          :flow (overlay/merge-positions cg-flow
+                                                         (overlay/overlay-positions cg-flow))}))
     (post-run-model! !state panel uri-str cg-flow)))
 
 (defn- extract-and-fan-out!
-  "Parses `document` and its modules, then sets the diagnostics and posts the
-   flow to `panel`. A second check clears the unresolved marks on module ops."
+  "A second check clears the unresolved marks on module ops."
   ([!state document] (extract-and-fan-out! !state nil document))
   ([!state ^js panel ^js document]
    (let [text (.getText document)
          ^js coll (:editor/diagnostic-collection @!state)
          uri (.-uri document)
          ^js channel (:runtime/output-channel @!state)]
-     (when-let [^js kcoll (:editor/kondo-collection @!state)]
-       (kondo/lint-document! kcoll document))
+     (kondo/lint-document! (:editor/kondo-collection @!state) document)
      (-> (extract/extract-models text)
          (.then (fn [cg-flow]
                   (-> (modules/follow-loaded-modules! document cg-flow)
@@ -107,23 +93,20 @@
                                  cg-flow)))
                       ;; A module that does not parse must not stop the main flow.
                       (.catch (fn [err]
-                                (when channel
-                                  (.appendLine channel
-                                               (str "CG: load-module follow failed "
-                                                    (.-message err))))
+                                (.appendLine channel
+                                             (str "CG: load-module follow failed "
+                                                  (.-message err)))
                                 cg-flow)))))
          (.then (fn [flow]
-                  (when coll
-                    (diag/set-diagnostics! coll uri flow))
+                  (diag/set-diagnostics! coll uri flow)
                   (when panel
                     (post-flow-to-panel! !state panel (str uri) flow))))
          (.catch (fn [err]
-                   (when channel
+                   (.appendLine channel
+                                (str "CG: parser error " (.-message err)))
+                   (when-let [stack (.-stack err)]
                      (.appendLine channel
-                                  (str "CG: parser error " (.-message err)))
-                     (when-let [stack (.-stack err)]
-                       (.appendLine channel
-                                    (str "CG: parser stack\n" stack))))))))))
+                                  (str "CG: parser stack\n" stack)))))))))
 
 (defn- apply-position-edit! [^js document positions]
   (let [text (.getText document)]
@@ -131,22 +114,19 @@
         (.then (fn [cg-flow]
                  (let [updated (overlay/update-visual-metadata text cg-flow positions)]
                    (when (not= text updated)
-                     (let [edit (vscode/WorkspaceEdit.)
-                           uri (.-uri document)
-                           ^js doc document
-                           full-range (vscode/Range. (vscode/Position. 0 0)
-                                                     (.positionAt doc (.-length text)))]
-                       (.replace edit uri full-range updated)
+                     (let [edit (vscode/WorkspaceEdit.)]
+                       (.replace edit (.-uri document)
+                                 (vscode/Range. (vscode/Position. 0 0)
+                                                (.positionAt document (.-length text)))
+                                 updated)
                        (vscode/workspace.applyEdit edit)))))))))
 
 (defn- apply-literal-edit!
-  "Replaces the span of one literal with its new source text. Returns false
-   when the span no longer holds the old literal."
+  "Returns false when the span no longer holds the old literal."
   [^js document ^js payload]
   (let [loc (.-location payload)
-        r (vscode/Range.
-           (vscode/Position. (dec (aget loc "start-line")) (dec (aget loc "start-column")))
-           (vscode/Position. (dec (aget loc "end-line")) (dec (aget loc "end-column"))))]
+        r (vscode/Range. (dec (aget loc "start-line")) (dec (aget loc "start-column"))
+                         (dec (aget loc "end-line")) (dec (aget loc "end-column")))]
     (if (= (.-was payload) (.getText document r))
       (let [edit (vscode/WorkspaceEdit.)]
         (.replace edit (.-uri document) r (.-text payload))
@@ -231,40 +211,33 @@
                                 ;; Reuse a visible editor of the target. Else
                                 ;; each click opens a new pane, because Beside
                                 ;; is relative to the active editor, the canvas.
-                                (when-let [^js loc (.-location msg)]
-                                  (let [sl (.-startLine loc)
-                                        sc (.-startColumn loc)
-                                        el (.-endLine loc)
-                                        ec (.-endColumn loc)
-                                        r (vscode/Range.
-                                           (vscode/Position. (dec sl) (dec sc))
-                                           (vscode/Position. (dec el) (dec ec)))
-                                        path (.-path msg)
-                                        target-uri (if (and (string? path) (not= "" path))
-                                                     (vscode/Uri.file path)
-                                                     (.-uri document))
-                                        target-uri-str (str target-uri)
-                                        existing-editor
-                                        (some (fn [^js ed]
-                                                (when (= target-uri-str
-                                                         (str (.. ed -document -uri)))
-                                                  ed))
-                                              (or vscode/window.visibleTextEditors
-                                                  #js []))
-                                        reuse-column (some-> existing-editor .-viewColumn)
-                                        opts #js {:selection r
-                                                  :preserveFocus false
-                                                  :viewColumn (or reuse-column
-                                                                  vscode/ViewColumn.Beside)}
-                                        open-doc-promise
-                                        (if (and (string? path) (not= "" path))
-                                          (vscode/workspace.openTextDocument target-uri)
-                                          (js/Promise.resolve document))]
-                                    (-> open-doc-promise
-                                        (.then (fn [^js doc]
-                                                 (vscode/window.showTextDocument doc opts))
-                                               (fn [_] nil))
-                                        (.then (fn [_] nil) (fn [_] nil)))))
+                                (let [^js loc (.-location msg)
+                                      r (vscode/Range. (dec (.-startLine loc)) (dec (.-startColumn loc))
+                                                       (dec (.-endLine loc)) (dec (.-endColumn loc)))
+                                      path (.-path msg)
+                                      other-file? (and (string? path) (not= "" path))
+                                      target-uri (if other-file?
+                                                   (vscode/Uri.file path)
+                                                   (.-uri document))
+                                      target-uri-str (str target-uri)
+                                      existing-editor
+                                      (some (fn [^js ed]
+                                              (when (= target-uri-str
+                                                       (str (.. ed -document -uri)))
+                                                ed))
+                                            vscode/window.visibleTextEditors)
+                                      reuse-column (some-> existing-editor .-viewColumn)
+                                      opts #js {:selection r
+                                                :viewColumn (or reuse-column
+                                                                vscode/ViewColumn.Beside)}
+                                      open-doc-promise
+                                      (if other-file?
+                                        (vscode/workspace.openTextDocument target-uri)
+                                        (js/Promise.resolve document))]
+                                  (-> open-doc-promise
+                                      (.then (fn [^js doc]
+                                               (vscode/window.showTextDocument doc opts)))
+                                      (.then (fn [_] nil) (fn [_] nil))))
 
                                 nil)))
       (swap! !state update :extension/disposables conj
@@ -289,8 +262,8 @@
                         #js {:supportsMultipleEditorsPerDocument true})))
 
 (defn- register-document-listeners!
-  "Workspace open and close listeners. They set and clear the diagnostics of
-   each .cg document, also when the custom flow editor is not open."
+  "Sets and clears the diagnostics of each .cg document, also when the custom
+   flow editor is not open."
   [!state]
   (lc/push-disposable! !state
                        (.onDidOpenTextDocument vscode/workspace
@@ -301,10 +274,8 @@
                        (.onDidCloseTextDocument vscode/workspace
                                                 (fn [^js doc]
                                                   (when (cg-doc/cg-uri? (.-uri doc))
-                                                    (when-let [^js coll (:editor/diagnostic-collection @!state)]
-                                                      (diag/clear-diagnostics! coll (.-uri doc)))
-                                                    (when-let [^js kcoll (:editor/kondo-collection @!state)]
-                                                      (diag/clear-diagnostics! kcoll (.-uri doc))))))))
+                                                    (diag/clear-diagnostics! (:editor/diagnostic-collection @!state) (.-uri doc))
+                                                    (diag/clear-diagnostics! (:editor/kondo-collection @!state) (.-uri doc)))))))
 
 (defn- auto-split! [!state ^js text-editor]
   (when text-editor
@@ -325,17 +296,11 @@
                (swap! !state update :editor/flow-editor-uris disj uri-str))))))))
 
 (defn setup-split-view! [!state]
-  (when-let [active (.-activeTextEditor vscode/window)]
-    (auto-split! !state active))
+  (auto-split! !state (.-activeTextEditor vscode/window))
   (lc/push-disposable! !state
-                       (.onDidChangeActiveTextEditor vscode/window
-                                                     (fn [^js text-editor]
-                                                       (auto-split! !state text-editor)))))
+                       (.onDidChangeActiveTextEditor vscode/window (partial auto-split! !state))))
 
-(defn- register-theme-listener!
-  "Posts cg/theme-kind to each open flow-editor panel when the VS Code color
-   theme changes."
-  [!state]
+(defn- register-theme-listener! [!state]
   (lc/push-disposable! !state
                        (.onDidChangeActiveColorTheme vscode/window
                                                      (fn [^js color-theme]
@@ -362,8 +327,8 @@
                                 :line (inc (.. editor -selection -active -line))}))))))))
 
 (defn- reveal-in-canvas!
-  "The `CG: Reveal in Canvas` command. A hidden panel is revealed first and the
-   message waits 300 ms, because the webview builds again on reveal."
+  "A hidden panel is revealed first and the message waits 300 ms, because the
+   webview builds again on reveal."
   [!state]
   (when-let [^js editor (.-activeTextEditor vscode/window)]
     (let [uri-str (.toString (.. editor -document -uri))

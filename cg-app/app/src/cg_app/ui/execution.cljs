@@ -10,6 +10,7 @@
   (:require [cg-app.ui.state :as state]
             [cg-app.ui.runtime :as rt]
             [cg-app.ui.session :as session]
+            ["../../../../shared/squint/src/cg_gui/run/jvm.mjs" :as jvm]
             [cg-app.ui.loader :as loader]
             ["../../../../shared/squint/src/cg_gui/run/js.mjs" :as run-js]
             ["../../../../shared/squint/src/cg_gui/run/lane.mjs" :as lane]))
@@ -18,9 +19,9 @@
   (swap! state/app-state assoc :exec m)
   m)
 
-(defn- bus-post!
-  "Posts `msg` on the window bus of the canvas. Reads window from globalThis,
-   because a bare js/window throws ReferenceError in the node test runner."
+(defn bus-post!
+  "Reads window from globalThis, because a bare js/window throws
+   ReferenceError in the node test runner."
   [msg]
   (when-let [w (aget js/globalThis "window")]
     (.postMessage w msg "*")))
@@ -36,8 +37,7 @@
       (try (rt-fn r nil) (catch :default _ nil)))))
 
 (defn- add-map-layer!
-  "Adds the layers of a run to the map-layer table, keyed by layer name.
-   run-js/run-result->layers converts each dataset of a JS run to GeoJSON. A
+  "run-js/run-result->layers converts each dataset of a JS run to GeoJSON. A
    JVM run gives GeoJSON already, and `mod` is nil."
   [mod r]
   (doseq [l (run-js/run-result->layers mod r)]
@@ -46,18 +46,17 @@
 
 (defn route-result!
   "Sends a JS backend result to the map, the results panel or the badge, by
-   its shape. \"rows\" goes nowhere, because the app has no dataset grid."
+   its shape. A \"collection\" goes nowhere, because the app has no dataset
+   grid."
   [mod r]
   (let [results (aget r "results")]
     (case (run-js/result-shape results)
-      "layer"    (add-map-layer! mod r)
-      "report"   (when-let [t (normalize-report mod results)]
-                   (state/set-report-result! t))
-      "dataset"  (add-map-layer! mod r)
-      "geometry" (add-map-layer! mod r)
-      "scalar"   (state/set-scalar-result!
-                  #js {:text (run-js/scalar-text results)
-                       :name (or (aget r "name") "result")})
+      ("layer" "dataset" "geometry") (add-map-layer! mod r)
+      "report" (when-let [t (normalize-report mod results)]
+                 (state/set-report-result! t))
+      "scalar" (state/set-scalar-result!
+                #js {:text (run-js/scalar-text results)
+                     :name (or (aget r "name") "result")})
       nil)))
 
 (defn stream-trace!
@@ -95,15 +94,6 @@
                  (bus-post! #js {:type "cg/run-error" :message msg})
                  (finish! reject (js/Error. msg)))))))))
 
-(defn ^:async fetch-module-text
-  "The text of the .cg module at `path`, from loader/module-url. The path
-   resolves against the cg root, as the JVM does."
-  [path]
-  (let [resp (await (js/fetch (loader/module-url path)))]
-    (when-not (.-ok resp)
-      (throw (js/Error. (str "load-module " path ": HTTP " (.-status resp)))))
-    (await (.text resp))))
-
 (defn- worker-urls
   "The files that the worker pool loads, or nil when the page does not map
    them."
@@ -115,51 +105,23 @@
                 "proj-db" (loader/asset-url "gdal-wasm/proj.db")}
            (catch :default _ nil)))))
 
-(defn- start-request [req sid]
-  (js/fetch (str (rt/backend-url) "/api/execution/start")
-            #js {:method "POST"
-                 :headers #js {"Content-Type" "application/json" "X-Session-Id" sid}
-                 :body (js/JSON.stringify req)}))
-
-(defn ^:async start-in-session!
-  "Starts the run `req` in the session of the app, so that its datasets stay
-   there. A session that expired gives 404, and the run starts in a new one."
-  [req]
-  (let [resp (await (start-request req (await (session/ensure-session!))))]
-    (if (= 404 (.-status resp))
-      (do (reset! session/!session-id nil)
-          (await (start-request req (await (session/ensure-session!)))))
-      resp)))
-
-(defn ^:async fetch-result
-  "The result of the execution `id`: #js {:count :message :name :results :layers}."
-  [id]
-  (let [resp (await (js/fetch (str (rt/backend-url) "/api/execution/" id "/result")))]
-    (when-not (.-ok resp)
-      (throw (js/Error. (str "execution result: HTTP " (.-status resp)))))
-    (aget (await (.json resp)) "result")))
-
 (defn ^:async execute-jvm!
-  "Runs the flow in the session of the app on the JVM, streams the trace to
-   the canvas and adds the layers of the result to the map. Returns the
-   result, or throws on a 409 or a backend or stream error."
+  "Runs the flow in the session of the app on the JVM, so that its datasets
+   stay there, streams the trace to the canvas and adds the layers of the
+   result to the map. Returns the result, or throws on a 409 or a backend or
+   stream error."
   [text flow model-name file-name]
   (let [mname (or model-name (run-js/model-binding-name flow))
         req #js {:code text}
         _ (when mname (aset req "opts" #js {:name mname :model mname}))
         _ (when file-name (aset req "filename" file-name))
-        resp (await (start-in-session! req))
-        body (try (await (.json resp)) (catch :default _ #js {}))]
-    (when-not (.-ok resp)
-      (throw (js/Error.
-              (if (= 409 (.-status resp))
-                (str (or (aget body "error") "another execution is already streaming")
-                     " (live execution: " (aget body "live-execution-id") ")")
-                (or (aget body "error") (str "HTTP " (.-status resp)))))))
-    (let [id (aget body "execution-id")]
+        started (await (session/in-session (fn [sid] (jvm/start-execution session/send sid req))))]
+    (when-let [e (:error started)]
+      (throw (js/Error. e)))
+    (let [id (:id started)]
       (bus-post! #js {:type "cg/run-started" :execution-id id})
       (await (stream-trace! id))
-      (let [r (await (fetch-result id))]
+      (let [r (await (jvm/execution-result session/send id))]
         (add-map-layer! nil r)
         r))))
 
@@ -192,7 +154,7 @@
                               r (await (run-js/run-js! mod text flow
                                                        {:post bus-post!
                                                         :urls (worker-urls)
-                                                        :read-module fetch-module-text
+                                                        :read-module loader/fetch-module-text
                                                         :model (:run-model st)
                                                         :file (:name (:loaded-file st))}))]
                           (route-result! mod r)

@@ -32,6 +32,17 @@
     (is (false? (:refused r)))
     (is (= "js" (:runtime r)))))
 
+(deftest runtime-report-names-the-choice-and-both-runtimes
+  (is (= (str "CG: runtime js. The JS runtime is ready in the CG Map tab."
+              " The JVM backend is up on port 5000.")
+         (lane/runtime-report "js" "js" "ready" true 5000)))
+  (is (= (str "CG: runtime jvm. The JS runtime is starting in the CG Map tab."
+              " The JVM backend is not running; a JVM run starts it.")
+         (lane/runtime-report "jvm" "jvm" "starting" false 5000)))
+  (is (= (str "CG: runtime auto, which resolves to js. The JS runtime starts with the"
+              " CG Map tab, and a JS run opens it. The JVM backend is not running.")
+         (lane/runtime-report "auto" "js" "closed" false 5000))))
+
 (deftest chip-text-names-an-explicit-choice-and-the-auto-resolution
   (is (= "CG: jvm" (lane/chip-text "jvm" "js")))
   (is (= "CG: js" (lane/chip-text "js" "js")))

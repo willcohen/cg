@@ -8,7 +8,8 @@
   "The health loop and the backend session routes. The loop probes while the
    backend is up too, because it must see the backend go down."
   (:require [cg-app.ui.state :as state]
-            [cg-app.ui.runtime :as rt]))
+            [cg-app.ui.runtime :as rt]
+            ["../../../../shared/squint/src/cg_gui/run/jvm.mjs" :as jvm]))
 
 (def default-interval-ms 30000)
 (def probe-timeout-ms 2000)
@@ -25,6 +26,22 @@
   (try (js/AbortSignal.timeout probe-timeout-ms)
        (catch :default _ js/undefined)))
 
+(defn- send-with
+  "The transport of the JVM client: fetch to the backend url, with a JSON
+   body and the fetch options `extra`."
+  [extra]
+  (fn ^:async send [method path headers body]
+    (let [opts (js/Object.assign #js {:method method
+                                      :headers (js/Object.assign #js {"Content-Type" "application/json"}
+                                                                 headers)}
+                                 extra)]
+      (when body (aset opts "body" (js/JSON.stringify body)))
+      (let [resp (await (js/fetch (str (rt/backend-url) path) opts))]
+        #js {:status (.-status resp)
+             :body (try (await (.json resp)) (catch :default _ nil))}))))
+
+(def send (send-with nil))
+
 (defn sync-to-state! []
   (swap! state/app-state assoc
          :runtime-choice (rt/current-choice)
@@ -34,15 +51,10 @@
 (defn ^:async check-backend!
   "Probe <backend-url>/api/health. Resolves to a boolean; never rejects."
   []
-  (try
-    (let [resp (await (js/fetch (str (rt/backend-url) "/api/health")
-                                #js {:method "GET" :signal (probe-signal)}))]
-      (.-ok resp))
-    (catch :default _ false)))
+  (await (jvm/health? (send-with #js {:signal (probe-signal)}))))
 
 (defn ^:async probe-now!
-  "One probe; feed the result to runtime re-resolution and the store.
-   Returns the boolean."
+  "Resolves to the result of check-backend!."
   []
   (let [ok (await (check-backend!))]
     (rt/re-resolve! ok)
@@ -67,8 +79,8 @@
   @!loop-id)
 
 (defn ^:async set-runtime!
-  "Sets the runtime choice. `auto` probes immediately. An explicit choice
-   resolves against the last known availability."
+  "`auto` probes immediately. An explicit choice resolves against the last
+   known availability."
   [choice]
   (if (= choice "auto")
     (let [ok (await (check-backend!))]
@@ -108,39 +120,22 @@
 
 (defonce !session-id (atom nil))
 
-(defn ^:async api-fetch
-  "A JSON fetch of <backend-url>/api<path>. Sends X-Session-Id when a session
-   exists. Throws on a non-ok response."
-  [method path body]
-  (let [headers #js {"Content-Type" "application/json"}]
-    (when @!session-id
-      (aset headers "X-Session-Id" @!session-id))
-    (let [opts #js {:method method :headers headers}]
-      (when body
-        (aset opts "body" (js/JSON.stringify body)))
-      (let [resp (await (js/fetch (str (rt/backend-url) "/api" path) opts))]
-        (if (.-ok resp)
-          (await (.json resp))
-          (throw (js/Error. (str "HTTP " (.-status resp)))))))))
-
-(defn ^:async ensure-session!
-  "Create a backend session on first call; later calls reuse it."
-  []
-  (when (nil? @!session-id)
-    (let [resp (await (api-fetch "POST" "/session/create" nil))]
-      (reset! !session-id (aget resp "session-id"))))
-  @!session-id)
+(defn ^:async in-session
+  "(f sid) with the session of the app, in a new session when it expired."
+  [f]
+  (await (jvm/with-session send !session-id f)))
 
 (defn ^:async load-session-code!
-  "POSTs the loaded .cg text for dataset introspection and stores the vars for
-   the sidebar. A failure warns and keeps the previous vars."
+  "Loads the .cg text in the session for dataset introspection and stores the
+   vars for the sidebar. A failure warns and keeps the previous vars."
   [code filename]
   (state/set-session-loading! true)
   (try
-    (let [resp (await (api-fetch "POST" "/session/load"
-                                 #js {:code code :filename filename}))]
-      (state/set-session-vars! (aget resp "vars"))
-      (aget resp "vars"))
+    (let [r (await (in-session (fn [sid] (jvm/load-session send sid code filename))))]
+      (if-let [e (:error r)]
+        (js/console.warn "session load failed:" e)
+        (do (state/set-session-vars! (:ok r))
+            (:ok r))))
     (catch :default e
       (js/console.warn "session load failed:" e)
       nil)
@@ -149,12 +144,7 @@
 
 (defn ^:async fetch-var-data!
   "The GeoJSON FeatureCollection of a session dataset var (EPSG:4326, at most
-   5000 rows)."
+   5000 rows). Throws on an error."
   [var-name]
-  (await (api-fetch "POST" (str "/data/" var-name) #js {:limit 5000})))
-
-(defn ^:async sync-file!
-  "File-load hook: ensure a session, then load the code for introspection."
-  [code filename]
-  (await (ensure-session!))
-  (await (load-session-code! code filename)))
+  (let [r (await (in-session (fn [sid] (jvm/fetch-dataset send sid var-name {:limit 5000}))))]
+    (or (:fc r) (throw (js/Error. (:error r))))))

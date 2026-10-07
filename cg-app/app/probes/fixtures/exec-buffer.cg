@@ -19,4 +19,4 @@
           (geo/buffer 5)))
 
 ^:cgproj
-{:nodes {:buffer-1 {:pos [300 200]}}}
+{:nodes {:buffered__buffer-1 {:pos [300 200]}}}

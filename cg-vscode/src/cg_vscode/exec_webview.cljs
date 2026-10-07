@@ -19,7 +19,8 @@
             [cg-vscode.run-relay :as relay]
             [cg-vscode.run-status :as run-status]
             [cg-vscode.runtime :as runtime]
-            [cg-vscode.runtime.jvm-client :as jvm]
+            [cg-vscode.runtime.jvm-client :as jvm-client]
+            ["../../../cg-app/shared/squint/src/cg_gui/run/jvm.mjs" :as jvm]
             [cg-vscode.doc :as doc]
             [cg-vscode.repl.js-repl :as js-repl]))
 
@@ -74,16 +75,15 @@
    "CG map: runtime is set to jvm but the CG backend is unreachable. Start it with `bb backend:dev`.")
   (post-status! panel "jvm runtime selected, backend unreachable"))
 
-(defn- ensure-map-session!
-  "The JVM session id of the tab, created when there is none. Promise<sid>."
-  [port]
-  (if-let [sid @!map-session]
-    (js/Promise.resolve sid)
-    (-> (jvm/create-session port)
-        (.then (fn [sid] (reset! !map-session sid) sid)))))
+(defn ^:async with-tab-session!
+  "(f send sid) with the JVM session of the tab on `port`, made when there is
+   none, and again with a new session when `f` gives {:expired true}."
+  [port f]
+  (let [send (jvm-client/send-to port nil)]
+    (await (jvm/with-session send !map-session (fn [sid] (f send sid))))))
 
 (defn- render-jvm-result!
-  "Posts cg/layers for the result of run->layers, or shows its :error."
+  "Posts cg/layers for the layers of the dataset vars, or shows the :error."
   [^js panel result]
   (let [layers (:layers result)]
     (cond
@@ -104,15 +104,6 @@
     (when (and layers (pos? (.-length layers)))
       (reset! !last-vars (.map layers (fn [^js l] (aget l "var")))))))
 
-(defn ^:async load-in-session!
-  "run->layers in the session of the tab. An expired session is dropped, and
-   the result is {:expired true}."
-  [port text filename]
-  (let [sid (await (ensure-map-session! port))
-        r (await (jvm/run->layers port sid text filename {:limit jvm/default-row-limit}))]
-    (when (:expired r) (reset! !map-session nil))
-    r))
-
 (defn ^:async run-jvm-feed!
   "Loads the .cg in the JVM session of the tab, again in a new session when
    the session expired, and draws its dataset vars (Show Datasets)."
@@ -121,8 +112,10 @@
   ;; session/load has no response timeout, and a first load can take minutes.
   (post-status! panel "loading session (a first-run full analysis takes minutes)")
   (try
-    (let [r (await (load-in-session! port text filename))
-          r (if (:expired r) (await (load-in-session! port text filename)) r)]
+    (let [r (await (with-tab-session! port
+                     (fn [send sid]
+                       (jvm-client/load-layers send sid text filename
+                                               {:limit jvm-client/default-row-limit}))))]
       (remember-fetched-vars! r)
       (render-jvm-result! panel r))
     (catch :default e
@@ -139,7 +132,8 @@
       (swap! !refetch-gen inc)
       (let [gen @!refetch-gen]
         (try
-          (let [r (await (jvm/refetch-layers port sid vars {:bbox bbox :limit jvm/default-row-limit}))]
+          (let [r (await (jvm-client/fetch-layers (jvm-client/send-to port nil) sid vars
+                                                  {:bbox bbox :limit jvm-client/default-row-limit}))]
             (cond
               (:expired r) (reset! !map-session nil)
               (= gen @!refetch-gen) (render-jvm-result! panel r)))
@@ -171,16 +165,6 @@
         (run-status/post! !state (str uri)
                           #js {:type "cg/run-error"
                                :message (str "the parser failed: " (.-message e))})))))
-
-(defn ^:async with-tab-session!
-  "(f session-id) with the JVM session of the tab, again with a new session
-   when `f` gives {:expired true}."
-  [port f]
-  (let [r (await (f (await (ensure-map-session! port))))]
-    (if (:expired r)
-      (do (reset! !map-session nil)
-          (await (f (await (ensure-map-session! port)))))
-      r)))
 
 (defn- jvm-run-request
   "The execution request of the document `cg-uri`, with the model that its
@@ -225,7 +209,7 @@
     (try
       (let [req (jvm-run-request !state uri (.getText document))
             on-event (fn [evt] (post #js {:type "cg/trace-event" :event evt}))
-            r (await (with-tab-session! port (fn [sid] (jvm/run-in-session port sid req on-event))))]
+            r (await (with-tab-session! port (fn [_ sid] (jvm-client/run-in-session port sid req on-event))))]
         (if-let [res (:result r)]
           (end-jvm-run! panel post file res)
           (fail! (:error r))))
@@ -433,6 +417,19 @@
            (fn [^js document] (run !state (canvas-tab! !state) document)))
     (vscode/window.showInformationMessage (str label ": no .cg in view"))))
 
+(defn ^:async jvm-port!
+  "The port of the JVM backend, which it starts when it is down, or nil after
+   an error message that names the command `label`."
+  [!state ^js panel label]
+  (when panel (post-status! panel "connecting to the JVM backend (a first boot takes 1 to 3 min)"))
+  (let [{:keys [reachable port]} (await (runtime/ensure-backend! !state (:runtime/output-channel @!state)))]
+    (if reachable
+      port
+      (do (vscode/window.showErrorMessage
+           (str label " needs the JVM backend, and it did not start. See the CG output."))
+          (when panel (post-status! panel "the JVM backend did not start"))
+          nil))))
+
 (defn- show-datasets!
   "The command handler: loads the .cg in view in the JVM session of the tab and
    draws its dataset vars, with the viewport refetch. It runs no model."
@@ -440,15 +437,19 @@
   (let [panel (reveal-tab! !state)]
     (with-active-cg!
      panel
-     (fn [^js document]
-       (.then (runtime/ensure-backend! !state (:runtime/output-channel @!state))
-              (fn [{:keys [reachable port]}]
-                (if reachable
-                  (run-jvm-feed! panel port (.getText document)
-                                 (path/basename (.. document -uri -fsPath)))
-                  (do (vscode/window.showErrorMessage
-                       "CG: Show Datasets needs the JVM backend, and it did not start. See the CG output.")
-                      (post-status! panel "the JVM backend did not start")))))))))
+     (fn ^:async show [^js document]
+       (when-let [port (await (jvm-port! !state panel "CG: Show Datasets"))]
+         (await (run-jvm-feed! panel port (.getText document)
+                               (path/basename (.. document -uri -fsPath)))))))))
+
+(defn ^:async run-jvm-now!
+  "Runs `document` on the JVM with the tab `panel`, whatever the runtime
+   choice, as CG: Eval (JS) runs it on JS."
+  [!state ^js panel ^js document]
+  (if-let [port (await (jvm-port! !state panel "CG: Eval (JVM)"))]
+    (await (run-jvm! !state panel document port))
+    (run-status/post! !state (str (.-uri document))
+                      #js {:type "cg/run-error" :message "the JVM backend did not start"})))
 
 (defn ^:async connect-calva!
   "Connects Calva to the nREPL on `repl-port` with the connect sequence
@@ -467,14 +468,11 @@
   "The command handler: starts the nREPL of the JVM session of the CG Map
    tab, where the JVM runs keep their datasets, and connects to it."
   [!state & _]
-  (let [{:keys [reachable port]} (await (runtime/ensure-backend! !state (:runtime/output-channel @!state)))]
-    (if-not reachable
-      (vscode/window.showErrorMessage
-       "CG: Connect REPL needs the JVM backend, and it did not start. See the CG output.")
-      (let [r (await (with-tab-session! port (fn [sid] (jvm/start-repl port sid))))]
-        (if-let [repl-port (:port r)]
-          (await (connect-calva! repl-port "Generic"))
-          (vscode/window.showErrorMessage (str "CG: Connect REPL failed: " (:error r))))))))
+  (when-let [port (await (jvm-port! !state @!panel "CG: Connect REPL (JVM)"))]
+    (let [r (await (with-tab-session! port (fn [send sid] (jvm/start-repl send sid))))]
+      (if-let [repl-port (:port r)]
+        (await (connect-calva! repl-port "Generic"))
+        (vscode/window.showErrorMessage (str "CG: Connect REPL failed: " (:error r)))))))
 
 (defn ^:async ensure-js-repl!
   "The nREPL server of the JS REPL, started one time."
@@ -497,12 +495,31 @@
     (reset! !js-repl nil)
     (.then p js-repl/stop-server!)))
 
+(defn- js-state
+  "ready, starting or closed: the JS runtime, which is in the CG Map tab."
+  []
+  (cond
+    (and @!panel @!ready) "ready"
+    @!panel "starting"
+    :else "closed"))
+
+(defn ^:async refresh-runtime!
+  "The command handler: probes the backend, and tells the state of both
+   runtimes."
+  [!state & _]
+  (let [{:keys [choice resolved reachable port]} (await (runtime/probe-runtime! !state))]
+    (vscode/window.showInformationMessage
+     (lane/runtime-report choice resolved (js-state) reachable port))))
+
 (defn register-run-commands!
-  "`CG: Eval (JS)`, `CG: Run`, `CG: Show Datasets (JVM)` and the two `CG:
-   Connect REPL` commands. The JS backend is the CG Map tab, because only a
-   webview loads wasmts the way the web app does."
+  "The two `CG: Eval` commands, `CG: Run`, `CG: Refresh Runtime`, `CG: Show
+   Datasets (JVM)` and the two `CG: Connect REPL` commands. The JS backend is
+   the CG Map tab, because only a webview loads wasmts the way the web app
+   does."
   [!state]
   (lc/register-command! !state "cg.evalJs" (fn [state] (run-active! state run-js! "CG: Eval (JS)")))
+  (lc/register-command! !state "cg.evalJvm" (fn [state] (run-active! state run-jvm-now! "CG: Eval (JVM)")))
+  (lc/register-command! !state "cg.refreshRuntime" refresh-runtime!)
   (lc/register-command! !state "cg.runEval" (fn [state] (run-active! state run-in-tab! "CG: Run")))
   (lc/register-command! !state "cg.showDatasets" show-datasets!)
   (lc/register-command! !state "cg.connectRepl" connect-repl!)
