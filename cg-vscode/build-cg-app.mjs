@@ -19,7 +19,9 @@ import { fileURLToPath } from 'node:url';
 const here = dirname(fileURLToPath(import.meta.url));
 const repo = resolve(here, '..');
 const cgApp = resolve(repo, 'cg-app');
-const inDevShell = Boolean(process.env.IN_NIX_SHELL || process.env.DIRENV_DIR);
+// win32 has no login shell or direnv.
+const inDevShell = Boolean(process.platform === 'win32'
+  || process.env.IN_NIX_SHELL || process.env.DIRENV_DIR);
 
 const quote = (s) => `'${s.replaceAll("'", "'\\''")}'`;
 

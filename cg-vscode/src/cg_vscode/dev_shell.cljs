@@ -6,16 +6,18 @@
 
 (ns cg-vscode.dev-shell
   "Runs a command in the dev shell, because VS Code can start without it and
-   then gives `bb run` a Java that is not GraalVM. No vscode dependency.")
+   then gives `clj -M:backend` a Java that is not GraalVM. No vscode
+   dependency.")
 
 (defn- sh-quote [s]
   (str "'" (.replaceAll (str s) "'" "'\\''") "'"))
 
 (defn spawn-args
   "#js [program args] that run `argv` through a login shell and `direnv exec`
-   in `dir`. In the dev shell already, `argv` runs as it is."
-  [env dir argv]
-  (if (or (aget env "IN_NIX_SHELL") (aget env "DIRENV_DIR"))
+   in `dir`. In the dev shell or on win32, `argv` runs as it is."
+  [platform env dir argv]
+  (if (or (= "win32" platform)
+          (aget env "IN_NIX_SHELL") (aget env "DIRENV_DIR"))
     #js [(first argv) (into-array (rest argv))]
     #js [(or (aget env "SHELL") "/bin/zsh")
          #js ["-lc" (str "exec direnv exec " (sh-quote dir) " "

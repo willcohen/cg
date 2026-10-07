@@ -55,7 +55,19 @@ To run `boston.cg` in a browser, use a desktop browser, because one district nee
 
 If you use direnv, make a file `.envrc` that contains the line `use flake`. Then run `direnv allow`. Git ignores `.envrc`.
 
-Without Nix, install the same tools. JDK 21 rejects a JVM option that the tasks use. On a JDK that is not GraalVM, PROJ and the parser run about 6 times slower. Node.js 24 has a defect that stops the process when a worker pool closes.
+Without Nix, install the same tools. JDK 21 rejects a JVM option that the tasks use. On a JDK other than GraalVM CE 25, the parser runs about 6 times slower. So do PROJ and GDAL on a platform without their native library, such as GDAL on Windows. Node.js 24 has a defect that stops the process when a worker pool closes.
+
+### Windows
+
+The procedures also run on Windows in Git Bash, without WSL or Nix. Install the tools with Scoop:
+
+```powershell
+scoop bucket add extras
+scoop bucket add scoop-clojure https://github.com/littleli/scoop-clojure
+scoop install nodejs babashka clj-kondo clj-deps
+```
+
+Use `nodejs`, not `nodejs-lts` (Node.js 24). `npm install` needs Python. Scoop has no GraalVM CE of the `org.graalvm.*` version in `cg/deps.edn`. Download that release from [graalvm-ce-builds](https://github.com/graalvm/graalvm-ce-builds/releases) and set `JAVA_HOME` to it.
 
 ## Procedures
 
@@ -93,6 +105,12 @@ The task compiles cg with squint. Then it runs the file in Node.js.
 ```bash
 (cd cg && bb test && bb test:cljs && bb lint)
 (cd cg-app && bb test)
+```
+
+In a new clone, copy the clj-kondo hooks of the dependencies before `bb lint`:
+
+```bash
+(cd cg && clj-kondo --lint "$(clojure -Spath)" --copy-configs --skip-lint)
 ```
 
 In `cg/`, `bb test` uses the JVM, `bb test:cljs` uses squint and Node.js, and `bb lint` uses clj-kondo. In `cg-app/`, `bb test` runs the backend tests and the app tests. The app tests import the cg modules that `bb test:cljs` compiles.

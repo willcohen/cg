@@ -8,10 +8,6 @@
   "One-time wasmts setup for the dual-runtime .cljc test suites. cljs side
    only.
 
-   The setup has four steps. Read the wasm binary. Patch globalThis.fetch
-   to serve it. Import wasmts.js, which installs globalThis.wasmts. Then
-   wait for the init to complete.
-
    wasmts must start before any cg module that builds a geometry. wasmts fills
    globalThis.wasmts on import, but it initializes asynchronously. A geometry
    call that runs too early fails, because globalThis.wasmts.geom is not
@@ -20,7 +16,8 @@
 
    JVM callers do not use this ns, because JTS is on the classpath."
   #?(:cljs (:require ["node:fs" :as fs]
-                     ["node:path" :as node-path])))
+                     ["node:path" :as node-path]
+                     ["node:url" :as node-url])))
 
 #?(:clj (set! *warn-on-reflection* true))
 
@@ -40,24 +37,22 @@
    (defn wasmts-assets
      "The loader URL and the .wasm bytes, with the keys cg.run/init-cg-workers!
       uses. A worker is a separate JS context. It cannot see the main-thread
-      fetch shim below. Because of this, it needs the bytes."
+      fetch shim below. Because of this, it needs the bytes. The URL is a
+      file: URL, because Node reads C: as a scheme."
      []
-     {:wasmts-js-url      wasmts-js-path
+     {:wasmts-js-url      (.-href (node-url/pathToFileURL wasmts-js-path))
       :wasmts-wasm-binary (fs/readFileSync wasmts-wasm-path)}))
 
 #?(:cljs
    (defn ^:async init-wasmts!
      "Install globalThis.wasmts (single-threaded, main-thread). Idempotent:
-      a second call returns the already-loaded module. Paths resolve against
-      process.cwd(), so run test suites from the repo root."
+      a second call returns the already-loaded module."
      []
      (if (and (.-wasmts js/globalThis) (.. js/globalThis -wasmts -geom))
        js/globalThis.wasmts
-       (let [wasm-js    wasmts-js-path
-             wasm-path  wasmts-wasm-path
-             wasm-bin   (fs/readFileSync wasm-path)
+       (let [wasm-bin   (fs/readFileSync wasmts-wasm-path)
              orig-fetch (.-fetch js/globalThis)]
-         (set! (.-__filename js/globalThis) wasm-js)
+         (set! (.-__filename js/globalThis) wasmts-js-path)
          (set! (.-fetch js/globalThis)
                (fn [url]
                  (if (and url

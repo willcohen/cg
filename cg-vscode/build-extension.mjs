@@ -7,9 +7,8 @@
 // Compile the cg-vscode sources with squint and bundle the extension host
 // with esbuild. The output is CJS, because the VS Code extension host loads
 // only CommonJS (microsoft/vscode#135450).
-import { readdirSync } from 'node:fs';
-import { execFileSync } from 'node:child_process';
 import * as esbuild from 'esbuild';
+import { cljFiles, squintCompiler } from '../cg-app/shared/squint-cli.mjs';
 
 const minify = process.argv.includes('--minify');
 
@@ -17,19 +16,11 @@ const minify = process.argv.includes('--minify');
 // in place to .mjs. The canvas namespaces are JSX and stay in cg-app's
 // bundle:canvas.
 const shared = '../cg-app/shared/squint';
-const sharedFiles = readdirSync(`${shared}/src`, { recursive: true })
-  .filter((f) => /\.(cljs|cljc)$/.test(f) && !f.startsWith('cg_gui/canvas/'))
-  .map((f) => `src/${f}`)
-  .sort();
-execFileSync('npx', ['squint', 'compile', ...sharedFiles, '--extension', '.mjs', '--output-dir', 'src'],
-  { cwd: shared, stdio: 'inherit' });
+const squint = squintCompiler(import.meta.url);
+const sharedFiles = cljFiles(`${shared}/src`).filter((f) => !f.startsWith('cg_gui/canvas/'));
+squint([...sharedFiles.map((f) => `src/${f}`), '--extension', '.mjs', '--output-dir', 'src'], shared);
 
-const srcFiles = readdirSync('src', { recursive: true })
-  .filter((f) => /\.(cljs|cljc)$/.test(f))
-  .map((f) => `src/${f}`)
-  .sort();
-
-execFileSync('npx', ['squint', 'compile', ...srcFiles], { stdio: 'inherit' });
+squint(cljFiles('src').map((f) => `src/${f}`));
 
 await esbuild.build({
   entryPoints: ['src/cg_vscode/extension.mjs'],

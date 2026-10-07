@@ -185,7 +185,7 @@
   (let [^js channel (:runtime/output-channel @!state)
         file-path (.. document -uri -fsPath)
         cwd       (modules/bb-root-for-document document)
-        [prog args] (dev-shell/spawn-args js/process.env cwd
+        [prog args] (dev-shell/spawn-args js/process.platform js/process.env cwd
                                           (if model
                                             ["bb" "run" file-path "--model" model]
                                             ["bb" "run" file-path]))

@@ -6,6 +6,7 @@
 
 (ns cg-vscode.runtime
   (:require ["vscode" :as vscode]
+            [cg-vscode.dev-shell :as dev-shell]
             [cg-vscode.extension.lifecycle :as lc]
             [cg-vscode.runtime.jvm-client :as jvm]
             ["../../../cg-app/shared/squint/src/cg_gui/run/lane.mjs" :as lane]))
@@ -57,9 +58,6 @@
            (.on "timeout" (fn [] (resolve false)))
            (.end))))))
 
-;; The backend spawns through a login shell, because a host started from the
-;; Finder or Dock has no nix, direnv or clj on PATH.
-
 (defonce !backend-proc (atom nil))
 
 ;; A cold GraalVM boot can take about 3 minutes. A warm boot takes 10 to 30 s.
@@ -72,18 +70,20 @@
         path (js/require "path")]
     (.resolve path (.. ctx -extensionUri -fsPath) "..")))
 
+(def ^:private win32? (= "win32" js/process.platform))
+
 (defn- spawn-backend!
-  "Spawns `clj -M:backend --port-file <cg-app/.cg-backend-port>` detached,
-   through a login shell (for PATH), and stores the process in !backend-proc."
+  "Spawns `clj -M:backend --port-file <cg-app/.cg-backend-port>` in the dev
+   shell, and stores the process in !backend-proc."
   [!state ^js channel]
   (let [cp (js/require "child_process")
         path (js/require "path")
         repo (repo-root !state)
-        cg-app (.join path repo "cg-app")
-        pf (backend-port-file !state)
-        shell (or (aget (.-env js/process) "SHELL") "/bin/zsh")
-        inner (str "cd '" cg-app "' && exec direnv exec '" repo "' clj -M:backend --port-file '" pf "'")
-        ^js proc (.spawn cp shell #js ["-lc" inner] #js {:detached true :stdio "ignore"})]
+        [prog args] (dev-shell/spawn-args js/process.platform js/process.env repo
+                                          ["clj" "-M:backend" "--port-file" (backend-port-file !state)])
+        ;; detached gives a process group to kill. win32 has none.
+        ^js proc (.spawn cp prog args #js {:cwd (.join path repo "cg-app") :detached (not win32?)
+                                           :windowsHide true :stdio "ignore"})]
     (reset! !backend-proc proc)
     (.on proc "error" (fn [^js e]
                         (when channel (.appendLine channel (str "CG: backend spawn failed — " (.-message e))))
@@ -95,11 +95,14 @@
     proc))
 
 (defn stop-backend!
-  "Kills the spawned backend and its process group (shell, direnv, clj, JVM).
-   Does nothing when the extension did not spawn one."
+  "Kills the spawned backend and its children (shell, direnv, clj, JVM). Does
+   nothing when the extension did not spawn one."
   []
   (when-let [^js proc @!backend-proc]
-    (try (js/process.kill (* -1 (.-pid proc)) "SIGTERM")
+    (try (if win32?
+           (.spawnSync (js/require "child_process") "taskkill"
+                       #js ["/pid" (str (.-pid proc)) "/t" "/f"] #js {:windowsHide true})
+           (js/process.kill (* -1 (.-pid proc)) "SIGTERM"))
          (catch :default _
            (try (.kill proc "SIGTERM") (catch :default _ nil))))
     (reset! !backend-proc nil)))

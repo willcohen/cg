@@ -39,7 +39,7 @@
   (async/mult trace-chan))
 
 (defn tap-trace
-  "Attach `ch` as a consumer of the trace stream. The caller owns `ch`."
+  "The caller owns `ch`."
   [ch]
   (async/tap trace-mult ch)
   ch)
@@ -124,8 +124,8 @@
       (Files/deleteIfExists latest)
       (Files/createSymbolicLink latest rel (make-array FileAttribute 0))
       (catch java.nio.file.FileAlreadyExistsException _ nil)
-      (catch UnsupportedOperationException _
-        ;; A filesystem with no symlink support: copy the file.
+      (catch Exception _
+        ;; No symlink support, or no privilege on win32: copy the file.
         (Files/copy ^Path target ^Path latest
                     ^"[Ljava.nio.file.CopyOption;"
                     (into-array java.nio.file.CopyOption
@@ -133,9 +133,7 @@
 
 (defrecord FileWriterSession [^BufferedWriter writer tap-ch path])
 
-(defonce ^:private active-writer-count
-  ;; The count of open file writers. See open-file-writer! for a nested call.
-  (atom 0))
+(defonce ^:private active-writer-count (atom 0))
 
 ;; A nested flow gets no second file: the outer tap already gets its events.
 (defn open-file-writer!

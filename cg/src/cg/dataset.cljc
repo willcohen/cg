@@ -416,7 +416,8 @@
       layer URLs, sanitized URL/path tail otherwise."
      [url]
      (if-let [[_ svc n] (re-find #"/([^/]+)/(?:FeatureServer|MapServer)/(\d+)/?$" url)]
-       (str svc "-" n)
+       ;; A colon, as in host:port, names an NTFS stream.
+       (str (cstr/replace svc #"[^A-Za-z0-9._-]+" "_") "-" n)
        (let [s (cstr/replace url #"[^A-Za-z0-9._-]+" "_")]
          (subs s (max 0 (- (count s) 60)))))))
 
@@ -2091,7 +2092,7 @@
             driver   (get opts :driver "GPKG")
             epsg     (get opts :epsg 4326)
             layer    (or (:layer opts)
-                         (let [b (last (cstr/split path #"/"))
+                         (let [b (last (cstr/split path #"[/\\]"))
                                i (.lastIndexOf ^String b ".")]
                            (if (pos? i) (subs b 0 i) b)))
             has-geom (boolean (some #(= % geom-col) (ds/column-names dataset)))
