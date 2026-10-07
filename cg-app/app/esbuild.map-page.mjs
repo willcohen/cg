@@ -4,16 +4,12 @@
 // See LICENSE for license information.
 // SPDX-License-Identifier: Apache-2.0 WITH LLVM-exception
 
-// Bundle cg-gui.map.core into a browser ESM file for the cg-vscode execution
-// webview. The cg-app bundle has its own copy. maplibre-gl and squint-cljs stay
-// external, because the importmap of the webview serves them.
+// Bundle cg-gui.map.page for the cg-vscode CG Map webview. maplibre-gl and
+// squint-cljs stay external, because the importmap of the webview serves them.
 import * as esbuild from 'esbuild';
-import { mkdirSync } from 'fs';
-
-mkdirSync('../shared/ui/public', { recursive: true });
 
 await esbuild.build({
-  entryPoints: ['../shared/squint/src/cg_gui/map/core.mjs'],
+  entryPoints: ['../shared/squint/src/cg_gui/map/page.mjs'],
   bundle: true,
   format: 'esm',
   platform: 'browser',
@@ -21,10 +17,7 @@ await esbuild.build({
   // squint emits top-level await, which needs es2022.
   target: ['es2022'],
   sourcemap: true,
-  minify: false,
   minifyWhitespace: true,
   define: { 'process.env.NODE_ENV': '"production"' },
-  outfile: '../shared/ui/public/cg-map.mjs',
+  outfile: '../shared/ui/public/cg-map-page.mjs',
 });
-
-console.log('Built shared/ui/public/cg-map.mjs');

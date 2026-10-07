@@ -120,7 +120,7 @@
     (.then (rc/execute-js! (recording-cg-module calls) module-code one-model-flow nil)
            (fn [_]
              (is (= (str "run " module-code " m") (aget calls 0))
-                 "a host with no reader (the cg-vscode webview) runs at once")))))
+                 "a host with no reader runs at once")))))
 
 (deftest execute-js-runs-the-last-model-by-default
   (let [calls #js []]
@@ -148,6 +148,50 @@
              (is (= "run (x) first" (aget calls 0)))
              (is (= "first" (aget r "name")))
              (is (= 1 (aget r "count")))))))
+
+(deftest the-pool-fits-the-device
+  (is (= 1 (rc/pool-size #js {:userAgent "Mozilla/5.0 (iPhone)" :hardwareConcurrency 6})))
+  (is (= 1 (rc/pool-size #js {:userAgent "Macintosh" :maxTouchPoints 5 :hardwareConcurrency 8}))
+      "an iPadOS tab names itself Macintosh")
+  (is (= 4 (rc/pool-size #js {:userAgent "Macintosh" :maxTouchPoints 0 :hardwareConcurrency 10})))
+  (is (= 2 (rc/pool-size #js {:userAgent "Windows" :hardwareConcurrency 2})))
+  (is (= 2 (rc/pool-size nil))))
+
+(defn- traced-cg-module
+  "A cg module whose run_file sends one trace event, then gives `result`, or
+   fails with `error`."
+  [result error]
+  (let [listeners #js []]
+    #js {:metadata #js {:split_code_and_metadata (fn [text] #js {:code text})}
+         :run #js {:run_file (fn [_ _]
+                               (.forEach listeners (fn [f] (f #js {:kind "proc-start" :pid "m__x-1"})))
+                               (if error
+                                 (js/Promise.reject error)
+                                 (js/Promise.resolve #js {:result result})))}
+         :trace_js #js {:add_trace_listener (fn [f] (.push listeners f) f)
+                        :remove_trace_listener (fn [_] nil)}}))
+
+(defn- post-types [posts] (vec (.map posts (fn [m] (aget m "type")))))
+
+(deftest run-js-posts-the-start-and-the-trace
+  (aset js/globalThis "wasmts" #js {:geom #js {}})
+  (let [posts #js []]
+    (.then (rc/run-js! (traced-cg-module #js [1 2] nil) "(x)" one-model-flow
+                       {:post (fn [m] (.push posts m))})
+           (fn [r]
+             (is (= 2 (aget r "count")))
+             (is (= ["cg/run-started" "cg/trace-event"] (post-types posts)))))))
+
+(deftest run-js-posts-a-failure-and-throws-it
+  (aset js/globalThis "wasmts" #js {:geom #js {}})
+  (let [posts #js []]
+    (.then (rc/run-js! (traced-cg-module nil (js/Error. "boom")) "(x)" one-model-flow
+                       {:post (fn [m] (.push posts m))})
+           (fn [_] (is false "the run throws"))
+           (fn [e]
+             (is (= "boom" (.-message e)))
+             (is (= "cg/run-error" (last (post-types posts))))
+             (is (= "boom" (aget (last posts) "message")))))))
 
 (deftest scalar-text-reads-as-the-value
   (is (= "42" (rc/scalar-text 42)))

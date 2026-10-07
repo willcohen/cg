@@ -18,8 +18,7 @@
   (min max-pane-width (max min-pane-width w)))
 
 (defn- start-resize!
-  "Starts a splitter drag that saves the width on pointerup. The listeners are on
-   window, because a fast drag leaves the thin rail."
+  "The listeners are on window, because a fast drag leaves the thin rail."
   [^js e w0 set-width]
   (.preventDefault e)
   (let [x0      (.-clientX e)

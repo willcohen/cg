@@ -32,8 +32,11 @@
 cg-app/shared/ui/public/vendor/
 # Written by `bb importmap:write` from cg-app/importmap.mjs.
 cg-app/shared/ui/public/importmap.json
-# Built by cg-app tasks: build:cg, bundle:map-core, bundle:run-core, css:build
+# Built by cg-app tasks: build:cg, bundle:map-page, css:build
 cg-app/shared/ui/public/cg-bundled-*.mjs*
+cg-app/shared/ui/public/cg-map-page.mjs*
+# Outputs of the deleted bundle:map-core and bundle:run-core. Old checkouts
+# still hold them.
 cg-app/shared/ui/public/cg-map.mjs*
 cg-app/shared/ui/public/cg-run.mjs*
 cg-app/shared/ui/public/css/styles.css*

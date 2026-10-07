@@ -196,13 +196,13 @@
                     :else (default-facts props))
          :fields  (field-rows props)}))
 
-(defn- el [tag class-name text]
+(defn el [tag class-name text]
   (let [e (js/document.createElement tag)]
     (when class-name (set! (.-className e) class-name))
     (when (some? text) (set! (.-textContent e) text))
     e))
 
-(defn- append! [parent children]
+(defn append! [parent children]
   (.forEach children (fn [c] (when c (.appendChild parent c))))
   parent)
 

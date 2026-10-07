@@ -4,9 +4,9 @@
 // See LICENSE for license information.
 // SPDX-License-Identifier: Apache-2.0 WITH LLVM-exception
 
-// Runs `bb build:vscode` in ../cg-app: the cg bundles, the canvas, and the map
-// and run cores that the webviews load. These files are not in git, and a
-// copy older than the shared code breaks the webviews at run time.
+// Runs `bb build:vscode` in ../cg-app: the cg bundles, the canvas and the map
+// page that the webviews load. These files are not in git, and a copy older
+// than the shared code breaks the webviews at run time.
 //
 // F5 starts this from the environment of VS Code, which can lack the dev
 // shell and the PATH of a login shell. Outside the dev shell the command runs

@@ -24,8 +24,8 @@
     (is (identical? evt (aget trace "event")))))
 
 (deftest a-run-with-a-layer-ends-with-a-line-and-a-success
-  (let [msgs (relay/canvas-messages #js {:type "cg/run-result" :ok true :count 2
-                                         :mapped true :layer "drawn"} file)]
+  (let [msgs (relay/canvas-messages #js {:type "cg/run-ended" :outcome "success" :count 2
+                                         :layer "drawn"} file)]
     (is (= ["cg/run-output" "cg/run-ended"] (types msgs)))
     (is (= "ran on the JS backend: 2 results, map layer cgdata-drawn in the CG Map tab\n"
            (aget (first msgs) "text")))
@@ -33,18 +33,17 @@
     (is (= 2 (aget (second msgs) "count")))))
 
 (deftest a-run-with-no-layer-ends-with-a-success
-  (let [msgs (relay/canvas-messages #js {:type "cg/run-result" :ok true :count 1 :mapped false} file)]
+  (let [msgs (relay/canvas-messages #js {:type "cg/run-ended" :outcome "success" :count 1} file)]
     (is (= ["cg/run-output" "cg/run-ended"] (types msgs)))
     (is (= "ran on the JS backend: 1 result, no map layer\n" (aget (first msgs) "text")))))
 
 (deftest a-failed-run-gives-the-message-of-the-error
-  (let [[m] (relay/canvas-messages #js {:type "cg/run-error" :error "boom"} file)]
+  (let [[m] (relay/canvas-messages #js {:type "cg/run-error" :message "boom"} file)]
     (is (= "cg/run-error" (aget m "type")))
     (is (= "boom" (aget m "message")))))
 
 (deftest the-other-map-messages-give-nothing
-  (doseq [t ["cg/ready" "cg/map-ready" "cg/layers-rendered" "cg/viewport-settled" "cg/map-error"
-             "cg/csp-violation"]]
+  (doseq [t ["cg/ready" "cg/viewport-settled" "cg/map-error"]]
     (is (= [] (relay/canvas-messages #js {:type t} file)) t)))
 
 (.then (js/Promise.resolve (t/run-tests))

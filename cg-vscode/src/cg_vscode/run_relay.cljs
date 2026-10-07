@@ -20,19 +20,9 @@
   "The messages for the canvas that a message `msg` of the map webview gives,
    as a vector. `file` is the path of the .cg of the run."
   [msg file]
-  (let [t (aget msg "type")]
-    (cond
-      (= t "cg/run-started")
-      [#js {:type "cg/run-started" :file file}]
-
-      (= t "cg/trace-event")
-      [#js {:type "cg/trace-event" :event (aget msg "event")}]
-
-      (= t "cg/run-result")
-      [#js {:type "cg/run-output" :stream "stdout" :text (result-line msg)}
-       #js {:type "cg/run-ended" :outcome "success" :count (aget msg "count")}]
-
-      (= t "cg/run-error")
-      [#js {:type "cg/run-error" :message (aget msg "error")}]
-
-      :else [])))
+  (case (aget msg "type")
+    "cg/run-started" [#js {:type "cg/run-started" :file file}]
+    "cg/trace-event" [msg]
+    "cg/run-ended"   [#js {:type "cg/run-output" :stream "stdout" :text (result-line msg)} msg]
+    "cg/run-error"   [msg]
+    []))

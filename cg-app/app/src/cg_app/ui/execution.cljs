@@ -102,11 +102,6 @@
       (throw (js/Error. (str "load-module " path ": HTTP " (.-status resp)))))
     (await (.text resp))))
 
-(def max-workers
-  "Each worker holds its own WasmTS, PROJ and GDAL heap. More workers
-   cost memory that a browser tab does not have."
-  4)
-
 (defn- worker-urls
   "The files that the worker pool loads, or nil when the page does not map
    them."
@@ -117,43 +112,6 @@
       (try #js {"wasmts-js" (.-src tag)
                 "proj-db" (loader/asset-url "gdal-wasm/proj.db")}
            (catch :default _ nil)))))
-
-(defonce !workers (atom nil))
-
-(defn- post-stage!
-  "Posts a stage trace event on the bus, in the shape that cg emits."
-  [label state]
-  (bus-post! #js {:type "cg/trace-event"
-                  :event #js {:kind "stage" :label label :state state
-                              :ts (js/Date.now)}}))
-
-(defn- ios?
-  "True on an iPhone or an iPad. An iPadOS Safari tab names itself Macintosh."
-  []
-  (let [nav (aget js/globalThis "navigator")
-        ua (or (aget nav "userAgent") "")]
-    (or (.test #"iPhone|iPad|iPod" ua)
-        (and (.includes ua "Macintosh") (> (or (aget nav "maxTouchPoints") 0) 1)))))
-
-(defn ^:async ensure-workers!
-  "Starts the worker pool on the first run. A failure is only a console
-   warning, because the files that need no pool still run."
-  [mod]
-  (when (nil? @!workers)
-    (let [urls (worker-urls)
-          cores (or (aget (aget js/globalThis "navigator") "hardwareConcurrency") 2)]
-      (when urls (post-stage! "start worker pool" "start"))
-      (reset! !workers
-              (if urls
-                ;; Each worker holds its own wasm heaps (about 210 MB), and iOS Safari
-                ;; reloads a tab above about 1.5 GB.
-                (try (await (run-js/ensure-workers! mod urls (if (ios?) 1 (min max-workers cores))))
-                     (catch :default e
-                       (js/console.warn "cg worker pool did not start:" e)
-                       false))
-                false))
-      (when urls (post-stage! "start worker pool" "done"))))
-  @!workers)
 
 (defn ^:async execute-jvm!
   "Runs the flow on the JVM and streams the trace to the canvas. Returns
@@ -202,28 +160,17 @@
             (try
               (let [r (if (= "jvm" lane)
                         (await (execute-jvm! text flow (:run-model st)))
-                        (let [mod (await (loader/load-cg-module!))]
-                          (await (run-js/ensure-wasmts! nil))
-                          (await (run-js/ensure-arquero! mod))
-                          (bus-post! #js {:type "cg/run-started"})
-                          (try
-                            (await (ensure-workers! mod))
-                            (let [r (await (run-js/execute-js!
-                                            mod text flow
-                                            (fn [evt]
-                                              (bus-post! #js {:type "cg/trace-event" :event evt}))
-                                            fetch-module-text
-                                            (:run-model st)
-                                            (:name (:loaded-file st))))]
-                              (route-result! mod r)
-                              (bus-post! #js {:type "cg/run-ended"
-                                              :outcome "success"
-                                              :count (aget r "count")})
-                              r)
-                            (catch :default e
-                              (bus-post! #js {:type "cg/run-error"
-                                              :message (or (.-message e) (str e))})
-                              (throw e)))))]
+                        (let [mod (await (loader/load-cg-module!))
+                              r (await (run-js/run-js! mod text flow
+                                                       {:post bus-post!
+                                                        :urls (worker-urls)
+                                                        :read-module fetch-module-text
+                                                        :model (:run-model st)
+                                                        :file (:name (:loaded-file st))}))]
+                          (route-result! mod r)
+                          (bus-post! #js {:type "cg/run-ended" :outcome "success"
+                                          :count (aget r "count")})
+                          r))]
                 (set-exec! {:status "ok" :runtime lane :count (aget r "count")
                             :message (or (aget r "message") (str (aget r "count") " result(s)"))}))
               (catch :default e

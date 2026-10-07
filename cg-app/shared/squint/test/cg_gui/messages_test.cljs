@@ -62,20 +62,14 @@
     :fields ["id" "path" "text?" "error?"]}
 
    {:type "cg/ready" :channel "map" :from "view" :to "host"}
-   {:type "cg/run-started" :channel "map" :from "view" :to "host" :fields ["model?"]}
+   {:type "cg/run-started" :channel "map" :from "view" :to "host"}
    {:type "cg/read-module" :channel "map" :from "view" :to "host" :fields ["id" "path"]}
-   {:type "cg/map-ready" :channel "map" :from "view" :to "host"
-    :fields ["online" "layer" "count"]}
-   {:type "cg/run-result" :channel "map" :from "view" :to "host"
-    :fields ["ok" "count" "mapped" "layer?"]}
-   {:type "cg/run-error" :channel "map" :from "view" :to "host" :fields ["error"]}
-   {:type "cg/layers-rendered" :channel "map" :from "view" :to "host"
-    :fields ["count" "vars"]}
+   {:type "cg/run-ended" :channel "map" :from "view" :to "host"
+    :fields ["outcome" "count" "layer?"]}
+   {:type "cg/run-error" :channel "map" :from "view" :to "host" :fields ["message"]}
    {:type "cg/viewport-settled" :channel "map" :from "view" :to "host"
     :fields ["bbox"]}
    {:type "cg/map-error" :channel "map" :from "view" :to "host" :fields ["error"]}
-   {:type "cg/csp-violation" :channel "map" :from "view" :to "host"
-    :fields ["directive" "blocked"]}
    {:type "cg/trace-event" :channel "map" :from "view" :to "host"
     :fields ["event"]}
 
@@ -109,9 +103,11 @@
             "cg-vscode/src/cg_vscode/run_relay.cljs"]}
    {:name "web shell" :channel "canvas" :role "host"
     :files ["cg-app/app/src/cg_app/ui/app.cljs"
-            "cg-app/app/src/cg_app/ui/execution.cljs"]}
+            "cg-app/app/src/cg_app/ui/execution.cljs"
+            "cg-app/shared/squint/src/cg_gui/run/js.cljs"]}
    {:name "map webview" :channel "map" :role "view"
-    :files ["cg-vscode/src/cg_vscode/exec_html.cljs"]}
+    :files ["cg-app/shared/squint/src/cg_gui/map/page.cljs"
+            "cg-app/shared/squint/src/cg_gui/run/js.cljs"]}
    {:name "map host" :channel "map" :role "host"
     :files ["cg-vscode/src/cg_vscode/exec_webview.cljs"
             "cg-vscode/src/cg_vscode/run_relay.cljs"]}
@@ -119,16 +115,15 @@
     :files ["cg-app/app/src/cg_app/ui/app.cljs"
             "cg-app/app/src/cg_app/ui/save.cljs"]}])
 
-;; The map webview script is JavaScript inside a squint string. Each
-;; direction has a squint pattern and a JavaScript pattern.
 (def ^:private sent-patterns
-  [":type +\"(cg/[a-z-]+)\""
-   "type: *'(cg/[a-z-]+)'"])
+  [":type +\"(cg/[a-z-]+)\""])
 
+;; A cond test, and a case or condp branch with its body on the next line or
+;; on the same line.
 (def ^:private received-patterns
   ["\\(= +t +\"(cg/[a-z-]+)\"\\)"
    "^ *\"(cg/[a-z-]+)\" *$"
-   "m\\.type *=== *'(cg/[a-z-]+)'"])
+   "^ *\"(cg/[a-z-]+)\" +[^ ]"])
 
 (def ^:private sent-edit-patterns [":editType +\"([A-Za-z]+)\""])
 

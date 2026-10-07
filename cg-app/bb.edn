@@ -127,15 +127,10 @@
    :depends [squint:app]
    :task (shell {:dir "app"} "node" "esbuild.app.mjs")}
 
-  bundle:map-core
-  {:doc "Bundle cg-gui.map.core into shared/ui/public/cg-map.mjs for the cg-vscode webview"
+  bundle:map-page
+  {:doc "Bundle cg-gui.map.page into shared/ui/public/cg-map-page.mjs for the cg-vscode CG Map tab"
    :depends [squint:app]
-   :task (shell {:dir "app"} "node" "esbuild.map-core.mjs")}
-
-  bundle:run-core
-  {:doc "Bundle cg-gui.run.js into shared/ui/public/cg-run.mjs for the cg-vscode webview"
-   :depends [squint:app]
-   :task (shell {:dir "app"} "node" "esbuild.run-core.mjs")}
+   :task (shell {:dir "app"} "node" "esbuild.map-page.mjs")}
 
   build:web-app
   {:doc "Rebuild the cg bundle, the canvas and the app shell for the web app.
@@ -144,8 +139,8 @@
    :task (println "✓ web app artifacts rebuilt: cg bundle + canvas + app shell")}
 
   build:vscode
-  {:doc "Build what cg-vscode reads from cg-app: cg, the canvas, and the map and run cores"
-   :depends [build:cg bundle:canvas bundle:map-core bundle:run-core importmap:write]
+  {:doc "Build what cg-vscode reads from cg-app: cg, the canvas and the map page"
+   :depends [build:cg bundle:canvas bundle:map-page importmap:write]
    :task (println "✓ cg-vscode assets rebuilt")}
 
   build:app-static

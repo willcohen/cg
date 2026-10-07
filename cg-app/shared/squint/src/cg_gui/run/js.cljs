@@ -55,6 +55,46 @@
       true)
     false))
 
+(defn- ios?
+  "True on an iPhone or an iPad. An iPadOS Safari tab names itself Macintosh."
+  [nav]
+  (let [ua (or (some-> nav (aget "userAgent")) "")]
+    (or (.test #"iPhone|iPad|iPod" ua)
+        (and (.includes ua "Macintosh") (> (or (some-> nav (aget "maxTouchPoints")) 0) 1)))))
+
+(defn pool-size
+  "The worker count for the navigator `nav`. Each worker holds its own WasmTS,
+   PROJ and GDAL heap (about 210 MB), and iOS Safari reloads a tab above
+   about 1.5 GB."
+  [nav]
+  (if (ios? nav)
+    1
+    (min 4 (or (some-> nav (aget "hardwareConcurrency")) 2))))
+
+(defonce ^:private !pool (atom nil))
+
+(defn- post-pool-stage! [post state]
+  (post #js {:type "cg/trace-event"
+             :event #js {:kind "stage" :label "start worker pool" :state state
+                         :ts (js/Date.now)}}))
+
+(defn ^:async ensure-pool!
+  "Starts the worker pool on the first run, or never when `urls` is nil. A
+   failure is only a console warning, because a file that needs no pool
+   still runs."
+  [mod urls post]
+  (when (nil? @!pool)
+    (when urls (post-pool-stage! post "start"))
+    (reset! !pool
+            (if urls
+              (try (await (ensure-workers! mod urls (pool-size (aget js/globalThis "navigator"))))
+                   (catch :default e
+                     (js/console.warn "cg worker pool did not start:" e)
+                     false))
+              false))
+    (when urls (post-pool-stage! post "done")))
+  @!pool)
+
 (defn model-names
   "Names of the threading-macro bindings of the parsed flow, in source order:
    the models that Run can run."
@@ -121,6 +161,23 @@
                :layers (aget out "layers")})
         (finally
           (when (and remove-listener listener) (remove-listener listener)))))))
+
+(defn ^:async run-js!
+  "Runs `text` with execute-js! and gives its result. Posts cg/run-started,
+   each cg/trace-event and, on a failure, cg/run-error with `post`. opts:
+   :post, :urls (of ensure-workers!), :read-module, :model and :file."
+  [mod text flow {:keys [post urls read-module model file]}]
+  (await (ensure-wasmts! nil))
+  (await (ensure-arquero! mod))
+  (post #js {:type "cg/run-started"})
+  (try
+    (await (ensure-pool! mod urls post))
+    (await (execute-js! mod text flow
+                        (fn [evt] (post #js {:type "cg/trace-event" :event evt}))
+                        read-module model file))
+    (catch :default e
+      (post #js {:type "cg/run-error" :message (or (.-message e) (str e))})
+      (throw e))))
 
 (defn report-shaped?
   "True when a run result looks like report data: a summarize tallies vector, a
