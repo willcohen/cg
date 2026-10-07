@@ -14,6 +14,7 @@
             [cg.metadata :as metadata]
             [cg.feature :as feature]
             [cg.trace :as trace]
+            [sci.core :as sci]
             [sci.lang]
             [charred.api :as charred]
             [clojure.core.async :as async]
@@ -38,8 +39,9 @@
 
 (def ^:private builtin-ns-prefixes
   "Prefixes of the namespaces whose vars are not user vars: the library
-   namespaces in the SCI context, and the Clojure, SCI and nREPL namespaces."
-  (into ["clojure." "sci." "nrepl."]
+   namespaces in the SCI context, the Clojure, SCI and nREPL namespaces, and
+   cg.session, which holds the results of the last run."
+  (into ["clojure." "sci." "nrepl." "cg.session"]
         (map str (keys dsl/cg-namespaces))))
 
 (def ^:private session-ttl-ms
@@ -166,6 +168,26 @@
              (sequential? val) "collection"
              :else (.getName (class val)))}))
 
+(defn- dataset-crs-str
+  "The CRS of `dataset` as a string, EPSG:4326 when it has none."
+  [dataset]
+  (let [crs (get-dataset-crs dataset)]
+    (cond
+      (string? crs) crs
+      (map? crs) (get-in crs [:properties :name])
+      :else "EPSG:4326")))
+
+(defn- dataset-in-4326
+  "`dataset` with each geometry in EPSG:4326, from the CRS `crs-str`."
+  [dataset crs-str]
+  (if (crs-4326? crs-str)
+    dataset
+    (ds/->dataset (mapv (fn [row]
+                          (if-let [geom (:geometry row)]
+                            (assoc row :geometry (geo/transform-geom geom crs-str "EPSG:4326"))
+                            row))
+                        (ds/rows dataset :as-maps)))))
+
 (defn- builtin-ns? [ns-str]
   (some #(.startsWith ^String ns-str %) builtin-ns-prefixes))
 
@@ -243,6 +265,66 @@
     (some? results) 1
     :else 0))
 
+(defn- done-message [n]
+  (str "Executed successfully, produced " n " result(s)"))
+
+(defn- layer-sink
+  "The map-layer result in `r`, which the JVM collects in a vector, or nil."
+  [r]
+  (let [sink? (fn [x] (and (map? x) (:layer x)))]
+    (cond
+      (sink? r) r
+      (and (vector? r) (= 1 (count r)) (sink? (first r))) (first r))))
+
+(defn- wire-result
+  "A run result as JSON data for the map: a map-layer result as it is, a
+   dataset as a plain map-layer in EPSG:4326, else nil, because JSON cannot
+   hold a JTS geometry."
+  [model r]
+  (cond
+    (layer-sink r) r
+    (ds/dataset? r) (ds/map-layer (dataset-in-4326 r (dataset-crs-str r)) {:name model})
+    :else nil))
+
+(defn- kept-value
+  "The value that a session keeps of a run result: the dataset that went into
+   map-layer, else the result."
+  [r]
+  (or (some-> (layer-sink r) meta :dataset) r))
+
+(defn- keep-results!
+  "Interns cg.session/results in `ctx`: model name -> kept-value, for the
+   model of the run and each map-layer model that did not fail."
+  [ctx {:keys [model result layers]}]
+  (sci/intern ctx (sci/create-ns 'cg.session) 'results
+              (into {model (kept-value result)}
+                    (keep (fn [l] (when-not (contains? l :error)
+                                    [(:model l) (kept-value (:result l))])))
+                    layers)))
+
+(defn- run-in-session
+  "run-file of the code of `body` in the context of the session `sess`, with
+   the map-layer models. Keeps the results in the session, and gives
+   {:count :message :name :results :layers}, the shape that the map hosts read."
+  [sess body]
+  (let [ctx (:sci-ctx sess)
+        filename (:filename body)
+        opts (cond-> (assoc (walk/keywordize-keys (or (:opts body) {})) :map-layers true)
+               filename (assoc :file filename))
+        out (binding [run/*cg-context* ctx
+                      run/*session-file* (some-> filename (str/split #"/") last)]
+              (run/run-file (:code (metadata/split-code-and-metadata (:code body))) opts))
+        n (result-count (:result out))]
+    (keep-results! ctx out)
+    {:count n
+     :message (done-message n)
+     :name (:model out)
+     :results (wire-result (:model out) (:result out))
+     :layers (mapv (fn [l] (if (contains? l :error)
+                             l
+                             {:model (:model l) :result (wire-result (:model l) (:result l))}))
+                   (:layers out))}))
+
 (defn- run-request
   "Runs the model of a request body and returns the results. `code` runs
    through cg.run/run-file with no overlay. A `flow-graph` runs as it is."
@@ -269,7 +351,7 @@
       {:status 200
        :body {:status "success"
               :count n
-              :message (str "Executed successfully, produced " n " result(s)")}})
+              :message (done-message n)}})
     (catch Exception e
       (log/error e "Failed to execute CG code")
       {:status 500
@@ -309,19 +391,25 @@
     (async/put! chan (merge {:kind "execution-ended" :execution-id id} sentinel))
     (async/close! chan)))
 
+(defn- execution-summary
+  "The result of an execution: a session run with code, or a run of the
+   request with {:count :message} only."
+  [body sess]
+  (if (and sess (:code body))
+    (run-in-session sess body)
+    (let [n (result-count (run-request body))]
+      {:count n :message (done-message n)})))
+
 (defn- run-execution!
   "Body of the execution future: run the request's model, then finish."
-  [id body]
+  [id body sess]
   (try
-    (let [_ (log/info "Async execution" id "starting")
-          results (run-request body)
-          n (result-count results)]
-      (log/info "Async execution" id "complete," n "results")
+    (log/info "Async execution" id "starting")
+    (let [summary (execution-summary body sess)]
+      (log/info "Async execution" id "complete," (:count summary) "results")
       (finish-execution! id
-                         {:status :complete
-                          :result {:count n
-                                   :message (str "Executed successfully, produced " n " result(s)")}}
-                         {:outcome "success" :count n}))
+                         {:status :complete :result summary}
+                         {:outcome "success" :count (:count summary)}))
     (catch Throwable e
       (log/error e "Async execution failed" id)
       (finish-execution! id
@@ -332,11 +420,14 @@
 
 (defn execution-start
   "POST /api/execution/start: runs the request in a future and returns
-   {:execution-id id}. Only one execution streams at a time; a second gets 409."
+   {:execution-id id}. With X-Session-Id, the run is in that session (see
+   run-in-session), and an unknown session gets 404. Only one execution
+   streams at a time; a second gets 409."
   [request]
   (try
     (prune-executions!)
     (let [body (:body request)
+          sess (when (get-session-id request) (get-session! request))
           id (str (java.util.UUID/randomUUID))
           ;; The mult waits for each tap. A full fixed buffer with no reader
           ;; blocks the global trace stream for the whole process. A dropped
@@ -355,12 +446,12 @@
              :body {:error "Another execution is already streaming; trace events are global, so executions serialize"
                     :live-execution-id (:id (live-execution new))}})
         (do (trace/tap-trace ch)
-            (future (run-execution! id body))
+            (future (run-execution! id body sess))
             {:status 200
              :body {:execution-id id}})))
     (catch Exception e
       (log/error e "Failed to start async execution")
-      {:status 500
+      {:status (or (:status (ex-data e)) 500)
        :body {:error (.getMessage e)
               :type (-> e class .getName)}})))
 
@@ -549,13 +640,8 @@
         (throw (ex-info (str "Var not found: " var-name) {:var var-name})))
       (when-not (ds/dataset? val)
         (throw (ex-info (str "Var is not a dataset: " var-name) {:var var-name})))
-      (let [crs (get-dataset-crs val)
-            crs-str (cond
-                      (string? crs) crs
-                      (map? crs) (get-in crs [:properties :name])
-                      :else "EPSG:4326")
-            is-4326? (crs-4326? crs-str)
-            needs-reproject? (not is-4326?)
+      (let [crs-str (dataset-crs-str val)
+            needs-reproject? (not (crs-4326? crs-str))
             filtered (if (and bbox (= 4 (count bbox)))
                        (let [[x1 y1 x2 y2] bbox
                              bbox-poly-4326 (feature/polygon
@@ -572,19 +658,7 @@
             limited (if (> (ds/row-count filtered) limit)
                       (ds/head filtered limit)
                       filtered)
-            served (if (and needs-reproject? crs-str)
-                     (do
-                       (log/info "Reprojecting" var-name "from" crs-str "to EPSG:4326"
-                                 "(" (ds/row-count limited) "rows)")
-                       (let [rows (ds/rows limited :as-maps)
-                             reprojected (mapv (fn [row]
-                                                 (if-let [geom (:geometry row)]
-                                                   (assoc row :geometry
-                                                          (geo/transform-geom geom crs-str "EPSG:4326"))
-                                                   row))
-                                               rows)]
-                         (ds/->dataset reprojected)))
-                     limited)
+            served (dataset-in-4326 limited crs-str)
             geojson-str (ds/dataset->geojson-string served)
             fc (charred/read-json geojson-str :key-fn keyword)]
         ;; :total-rows is the row count after the bbox filter and before the

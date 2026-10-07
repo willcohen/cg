@@ -14,7 +14,7 @@
 (def default-port jvm/default-port)
 
 (defn- config-runtime []
-  (.. vscode/workspace (getConfiguration "cg") (get "runtime" "auto")))
+  (.. vscode/workspace (getConfiguration "cg") (get "runtime" "jvm")))
 
 (defn- set-config-runtime! [value]
   (.. vscode/workspace (getConfiguration "cg") (update "runtime" value)))
@@ -137,10 +137,10 @@
                                    "CG: JVM backend did not become ready (is `direnv`/`clj` on PATH?)")))
           {:reachable ok :port port :spawned true})))))
 
-(defn wants-jvm?
-  "True when the runtime choice allows the JVM backend (jvm or auto, not js)."
+(defn jvm-choice?
+  "True when the runtime choice is jvm, not auto or js."
   []
-  (not= "js" (config-runtime)))
+  (= "jvm" (config-runtime)))
 
 (defn eval-jvm
   "Evaluates `text` (.cg source) on the JVM REST backend. Returns a Promise of
@@ -179,7 +179,7 @@
 
 (defn- create-status-bar-item [!state]
   (let [^js bar (vscode/window.createStatusBarItem vscode/StatusBarAlignment.Right 100)]
-    (set! (.-text bar) "CG: auto")
+    (set! (.-text bar) "CG: jvm")
     (set! (.-tooltip bar) "Click to set CG runtime")
     (set! (.-command bar) "cg.setRuntime")
     (.show bar)

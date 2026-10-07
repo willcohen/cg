@@ -9,6 +9,7 @@
    browser). A jvm choice with no backend is refused, with no js fallback."
   (:require [cg-app.ui.state :as state]
             [cg-app.ui.runtime :as rt]
+            [cg-app.ui.session :as session]
             [cg-app.ui.loader :as loader]
             ["../../../../shared/squint/src/cg_gui/run/js.mjs" :as run-js]
             ["../../../../shared/squint/src/cg_gui/run/lane.mjs" :as lane]))
@@ -35,8 +36,9 @@
       (try (rt-fn r nil) (catch :default _ nil)))))
 
 (defn- add-map-layer!
-  "Adds the layers of a JS backend run to the map-layer table, keyed by layer
-   name. run-js/run-result->layers converts each dataset to GeoJSON."
+  "Adds the layers of a run to the map-layer table, keyed by layer name.
+   run-js/run-result->layers converts each dataset of a JS run to GeoJSON. A
+   JVM run gives GeoJSON already, and `mod` is nil."
   [mod r]
   (doseq [l (run-js/run-result->layers mod r)]
     (state/add-map-layer! (aget l "var") (aget l "color") (aget l "crs")
@@ -113,17 +115,40 @@
                 "proj-db" (loader/asset-url "gdal-wasm/proj.db")}
            (catch :default _ nil)))))
 
+(defn- start-request [req sid]
+  (js/fetch (str (rt/backend-url) "/api/execution/start")
+            #js {:method "POST"
+                 :headers #js {"Content-Type" "application/json" "X-Session-Id" sid}
+                 :body (js/JSON.stringify req)}))
+
+(defn ^:async start-in-session!
+  "Starts the run `req` in the session of the app, so that its datasets stay
+   there. A session that expired gives 404, and the run starts in a new one."
+  [req]
+  (let [resp (await (start-request req (await (session/ensure-session!))))]
+    (if (= 404 (.-status resp))
+      (do (reset! session/!session-id nil)
+          (await (start-request req (await (session/ensure-session!)))))
+      resp)))
+
+(defn ^:async fetch-result
+  "The result of the execution `id`: #js {:count :message :name :results :layers}."
+  [id]
+  (let [resp (await (js/fetch (str (rt/backend-url) "/api/execution/" id "/result")))]
+    (when-not (.-ok resp)
+      (throw (js/Error. (str "execution result: HTTP " (.-status resp)))))
+    (aget (await (.json resp)) "result")))
+
 (defn ^:async execute-jvm!
-  "Runs the flow on the JVM and streams the trace to the canvas. Returns
-   #js {:count n}, or throws on a 409 or a backend or stream error."
-  [text flow model-name]
+  "Runs the flow in the session of the app on the JVM, streams the trace to
+   the canvas and adds the layers of the result to the map. Returns the
+   result, or throws on a 409 or a backend or stream error."
+  [text flow model-name file-name]
   (let [mname (or model-name (run-js/model-binding-name flow))
         req #js {:code text}
         _ (when mname (aset req "opts" #js {:name mname :model mname}))
-        resp (await (js/fetch (str (rt/backend-url) "/api/execution/start")
-                              #js {:method "POST"
-                                   :headers #js {"Content-Type" "application/json"}
-                                   :body (js/JSON.stringify req)}))
+        _ (when file-name (aset req "filename" file-name))
+        resp (await (start-in-session! req))
         body (try (await (.json resp)) (catch :default _ #js {}))]
     (when-not (.-ok resp)
       (throw (js/Error.
@@ -133,7 +158,10 @@
                 (or (aget body "error") (str "HTTP " (.-status resp)))))))
     (let [id (aget body "execution-id")]
       (bus-post! #js {:type "cg/run-started" :execution-id id})
-      (await (stream-trace! id)))))
+      (await (stream-trace! id))
+      (let [r (await (fetch-result id))]
+        (add-map-layer! nil r)
+        r))))
 
 (defn ^:async execute!
   "Runs the loaded flow on the backend that lane/execute-route picks. A jvm
@@ -159,7 +187,7 @@
             (state/clear-run-results!)
             (try
               (let [r (if (= "jvm" lane)
-                        (await (execute-jvm! text flow (:run-model st)))
+                        (await (execute-jvm! text flow (:run-model st) (:name (:loaded-file st))))
                         (let [mod (await (loader/load-cg-module!))
                               r (await (run-js/run-js! mod text flow
                                                        {:post bus-post!
@@ -172,7 +200,7 @@
                                           :count (aget r "count")})
                           r))]
                 (set-exec! {:status "ok" :runtime lane :count (aget r "count")
-                            :message (or (aget r "message") (str (aget r "count") " result(s)"))}))
+                            :message (str (aget r "count") " result(s)")}))
               (catch :default e
                 (set-exec! {:status "error" :runtime lane
                             :message (or (.-message e) (str e))})))))))))

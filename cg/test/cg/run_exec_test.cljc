@@ -7,12 +7,12 @@
 ;; cg.run/run-model on both runtimes. The models are literal data, and a cljs
 ;; body is a named ^:async fn whose Promise the deftest returns.
 (ns cg.run-exec-test
-  #?(:clj (:require [clojure.test :refer [deftest is testing]]
+  #?(:clj (:require [clojure.test :refer [deftest is]]
                     [cg.run :as run]
                     [cg.model :as model]
                     [cg.geo :as geo]
                     [cg.feature :as feature])
-     :cljs (:require [cljs.test :refer [deftest is testing]]
+     :cljs (:require [cljs.test :refer [deftest is]]
                      ["../../src/cg/run.mjs" :as run]
                      ["../../src/cg/geo.mjs" :as geo]
                      ["../../src/cg/feature.mjs" :as feature]
@@ -97,18 +97,17 @@
     (is (= "rings" (:var (if (map? res) res (first res)))))))
 
 (defn- check-one-point! [result]
-  (is (= 1 (count result)) "Should produce one point")
+  (is (= 1 (count result)))
   (let [point (nth result 0)]
-    (is (some? point) "Point should exist")
-    (is (feature/is-geometry? point) "Should be a geometry")
-    (is (= "Point" (geo/geometry-type point)) "Should be a Point")))
+    (is (feature/is-geometry? point))
+    (is (= "Point" (geo/geometry-type point)))))
 
 (defn- check-one-buffer! [result]
-  (is (= 1 (count result)) "Should produce one buffered point")
+  (is (= 1 (count result)))
   (let [buffered (nth result 0)]
-    (is (feature/is-geometry? buffered) "Buffered point should be a geometry")
-    (is (= "Polygon" (geo/geometry-type buffered)) "A buffered point is a polygon")
-    (is (> (double (geo/area buffered)) 0) "Buffer should have positive area")))
+    (is (feature/is-geometry? buffered))
+    (is (= "Polygon" (geo/geometry-type buffered)))
+    (is (> (double (geo/area buffered)) 0))))
 
 #?(:cljs
    (do
@@ -123,8 +122,8 @@
        (let [result (await (run/run-model buffer-binding-model
                                           {:data [(feature/point 0 0)]}
                                           {:timeout-ms 5000}))]
-         (is (= 1 (count result)) "Should produce one result")
-         (is (feature/is-geometry? (nth result 0)) "the result is a geometry")))
+         (is (= 1 (count result)))
+         (is (feature/is-geometry? (nth result 0)))))
 
      (defn ^:async run-file-last! []
        (let [r (await (run/run-file two-models))]
@@ -144,29 +143,25 @@
        (let [e (try (await (run/run-file two-models {:model "pts"}))
                     nil
                     (catch :default e e))]
-         (is (some? e) "a binding that is not a model fails")
          (is (re-find #"buffered.*centers" (str (.-message e)))
              "the message names the models of the file")))))
 
 (deftest test-source-operation-point
-  (testing "Source operation that creates geometry (point)"
-    #?(:clj (check-one-point! (run/run-model point-model {} {:timeout-ms 5000}))
-       :cljs (run-point!))))
+  #?(:clj (check-one-point! (run/run-model point-model {} {:timeout-ms 5000}))
+     :cljs (run-point!)))
 
 (deftest test-source-plus-transform
-  (testing "Source operation + buffer transform"
-    #?(:clj (check-one-buffer!
-             (run/run-model point-buffer-model {} {:timeout-ms 5000}))
-       :cljs (run-point-buffer!))))
+  #?(:clj (check-one-buffer!
+           (run/run-model point-buffer-model {} {:timeout-ms 5000}))
+     :cljs (run-point-buffer!)))
 
 (deftest test-simple-flow-with-bindings
-  (testing "Simple flow with data binding"
-    #?(:clj (let [result (run/run-model buffer-binding-model
-                                        {:data [(feature/point 0 0)]}
-                                        {:timeout-ms 5000})]
-              (is (= 1 (count result)) "Should produce one result")
-              (is (feature/is-geometry? (nth result 0)) "the result is a geometry"))
-       :cljs (run-bindings!))))
+  #?(:clj (let [result (run/run-model buffer-binding-model
+                                      {:data [(feature/point 0 0)]}
+                                      {:timeout-ms 5000})]
+            (is (= 1 (count result)))
+            (is (feature/is-geometry? (nth result 0))))
+     :cljs (run-bindings!)))
 
 (deftest run-file-runs-the-last-model
   #?(:clj (let [r (run/run-file two-models)]
@@ -188,22 +183,31 @@
 (deftest run-file-rejects-a-binding-that-is-not-a-model
   #?(:clj (let [e (try (run/run-file two-models {:model "pts"}) nil
                        (catch clojure.lang.ExceptionInfo e e))]
-            (is (some? e) "a binding that is not a model fails")
             (is (re-find #"buffered.*centers" (str (ex-message e)))
                 "the message names the models of the file"))
      :cljs (run-file-not-a-model!)))
 
 #?(:clj
+   (deftest run-file-runs-in-the-bound-context
+     (let [ctx ((requiring-resolve 'cg.dsl/create-cg-context))
+           code "(require '[cg.feature :as f])
+(require '[cg.geo :as geo])
+(require '[cg.macros :refer [item->]])
+(def bound-ctx-pts [(f/point 0 0)])
+(def bound-ctx-model (item-> :bound-ctx-pts (geo/buffer 1)))"]
+       (is (= "bound-ctx-model" (:model (binding [run/*cg-context* ctx] (run/run-file code)))))
+       (is (some? (run/eval-cg* ctx "bound-ctx-pts")) "the defs go to the bound context")
+       (is (nil? (try (run/eval-cg "bound-ctx-pts") (catch Exception _ nil)))
+           "the default context does not get them"))))
+
+#?(:clj
    (deftest test-eval-and-run-model
-     (testing "Load model from file and execute"
-       ;; JVM only: reading a .cg file needs SCI and a filesystem.
-       (let [my-model (run/eval-cg-file "test/fixtures/model-inspection.cg")]
-         (is (model/model? my-model) "Should load a valid model")
-         (testing "Execute model with test data"
-           (let [test-geoms [(feature/point 0 0) (feature/point 1 1)]
-                 result (run/run-model my-model {:parcels test-geoms} {})]
-             (is (some? result) "Should return results")
-             (is (coll? result) "Results should be a collection")))))))
+     ;; JVM only: reading a .cg file needs SCI and a filesystem.
+     (let [my-model (run/eval-cg-file "test/fixtures/model-inspection.cg")]
+       (is (model/model? my-model))
+       (let [test-geoms [(feature/point 0 0) (feature/point 1 1)]
+             result (run/run-model my-model {:parcels test-geoms} {})]
+         (is (coll? result))))))
 
 #?(:cljs (-> (init_wasmts_BANG_)
              (.then (fn [_] (ds/init-arquero!)))

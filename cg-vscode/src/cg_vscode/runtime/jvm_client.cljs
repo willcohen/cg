@@ -189,3 +189,82 @@
   [port session-id vars {:keys [bbox limit]}]
   (await (fetch-layers-for port session-id vars
                            {:bbox bbox :limit limit} #js [] #js [])))
+
+(defn- frame-event [frame]
+  (when (.startsWith frame "data: ")
+    (try (js/JSON.parse (.slice frame 6)) (catch :default _ nil))))
+
+(defn sse-events
+  "[events tail]: the events of the complete `data:` frames of `buf`, and the
+   rest of `buf`, which a later chunk completes. A frame that does not parse
+   gives no event."
+  [buf]
+  (let [frames (.split buf "\n\n")
+        tail (.pop frames)]
+    #js [(.filter (.map frames frame-event) some?) tail]))
+
+(defn stream-trace
+  "Reads the SSE trace of the execution `id` over node:http, because the undici
+   fetch stops a body that sends nothing for 300 s. Calls (on-event evt) for
+   each event. Resolves to the execution-ended event, and rejects when the
+   stream ends before it."
+  [port id on-event]
+  (js/Promise.
+   (fn [resolve reject]
+     (let [!buf (atom "")
+           !ended (atom false)
+           take! (fn [evt]
+                   (if (= "execution-ended" (aget evt "kind"))
+                     (do (reset! !ended true) (resolve evt))
+                     (on-event evt)))
+           req (http/get #js {:host "localhost" :port port
+                              :path (str "/api/execution/" id "/trace")}
+                         (fn [^js res]
+                           (.setEncoding res "utf8")
+                           (.on res "data"
+                                (fn [chunk]
+                                  (let [[events tail] (sse-events (str @!buf chunk))]
+                                    (reset! !buf tail)
+                                    (.forEach events take!))))
+                           (.on res "end"
+                                (fn []
+                                  (when-not @!ended
+                                    (reject (js/Error. "the trace stream ended before the execution (backend gone?)")))))))]
+       (.on req "error" reject)))))
+
+(defn ^:async start-execution
+  "Starts the run `req` in the session `session-id`. Returns {:id},
+   {:expired true} on 404, or {:error <msg>}, such as a 409 when another run
+   streams."
+  [port session-id req]
+  (let [res (await (js/fetch (str (jvm-base-url port) "/api/execution/start")
+                             #js {:method "POST"
+                                  :headers #js {"Content-Type" "application/json"
+                                                "X-Session-Id" session-id}
+                                  :body (js/JSON.stringify req)}))
+        b (await (.catch (.json res) (fn [_] #js {})))]
+    (cond
+      (.-ok res) {:id (aget b "execution-id")}
+      (= 404 (.-status res)) {:expired true}
+      :else {:error (or (aget b "error") (str "execution/start HTTP " (.-status res)))})))
+
+(defn ^:async execution-result
+  "The result of the execution `id`: #js {:count :message :name :results :layers}."
+  [port id]
+  (let [res (await (js/fetch (str (jvm-base-url port) "/api/execution/" id "/result")))]
+    (when-not (.-ok res)
+      (throw (js/Error. (str "execution/result HTTP " (.-status res)))))
+    (aget (await (.json res)) "result")))
+
+(defn ^:async run-in-session
+  "Runs `req` ({:code :filename :opts}) in the session `session-id`, and calls
+   (on-event evt) for each trace event. Returns {:result}, {:expired true} or
+   {:error <msg>}."
+  [port session-id req on-event]
+  (let [started (await (start-execution port session-id req))]
+    (if-let [id (:id started)]
+      (let [end (await (stream-trace port id on-event))]
+        (if (= "success" (aget end "outcome"))
+          {:result (await (execution-result port id))}
+          {:error (or (aget end "message") "the execution failed")}))
+      started)))

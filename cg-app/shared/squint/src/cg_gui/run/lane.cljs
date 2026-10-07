@@ -5,8 +5,8 @@
 ;; SPDX-License-Identifier: Apache-2.0 WITH LLVM-exception
 
 (ns cg-gui.run.lane
-  "Pure backend decisions: the runtime choice, a refused web Run and the
-   route of a map run. It has no host code, because node tests load it.")
+  "Pure backend decisions: the runtime choice and the route of a Run, in both
+   hosts. It has no host code, because node tests load it.")
 
 (defn resolve-runtime
   "An explicit choice passes through. auto follows backend reachability."
@@ -35,18 +35,3 @@
        :runtime "jvm"
        :reason "JVM runtime selected but the backend is unreachable"}
       {:refused false :runtime resolved})))
-
-(defn flow-needs-jvm?
-  "True when the parsed flow has :loaded-modules. The caller then routes the
-   run to the JVM backend. File I/O is not detected."
-  [flow]
-  (boolean (seq (:loaded-modules flow))))
-
-(defn route-map-run
-  "The route of a map run: :jvm, :js, :unsupported (the file needs the JVM and the
-   backend is down) or :refused (an explicit jvm choice and the backend is down)."
-  [{:keys [needs-jvm? backend-reachable? resolved-runtime]}]
-  (cond
-    needs-jvm?                (if backend-reachable? :jvm :unsupported)
-    (= :jvm resolved-runtime) (if backend-reachable? :jvm :refused)
-    :else                     :js))

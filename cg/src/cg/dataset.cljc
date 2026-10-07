@@ -2500,6 +2500,14 @@
             :else           x)
      :cljs x))
 
+(defn- with-dataset
+  "`layer` with `dataset` as :dataset in its metadata on the JVM, where a
+   backend session keeps the dataset and the map gets only the GeoJSON."
+  #_{:clj-kondo/ignore [:unused-binding]}
+  [layer dataset]
+  #?(:clj (with-meta layer {:dataset dataset})
+     :cljs layer))
+
 (defn map-layer
   "Sink: converts a table to map-layer data {:layer true :var :geojson
    :spec} for the host. opts: :kind (:fill or :line), :color, :color-by,
@@ -2512,23 +2520,25 @@
          labeled (if-let [lc (:label-by opts)]
                    (label-column->label dataset lc)
                    dataset)]
-     {:layer true
-      :var (or (:name opts) "result")
-      :geojson (dataset->geojson-string labeled geom-col)
-      :spec {:kind (when-let [k (:kind opts)] (name k))
-             :color (:color opts)
-             ;; (str c), not (name c): the host matches a geojson property
-             ;; name, and dataset->geojson-string writes those with (str k).
-             :color-by (when-let [c (:color-by opts)] (str c))
-             ;; Pairs, because JSON keeps the order of an array.
-             :colors (when-let [c (:colors opts)]
-                       (mapv (fn [[value color]] [(str (value-name value)) color]) c))
-             ;; The host reads the popup as JSON, where a keyword has no
-             ;; form of its own.
-             :popup (some-> (:popup opts) named-data)
-             :offset (:offset opts)
-             :opacity (:opacity opts)
-             :counts (:counts opts)}})))
+     (with-dataset
+      {:layer true
+       :var (or (:name opts) "result")
+       :geojson (dataset->geojson-string labeled geom-col)
+       :spec {:kind (when-let [k (:kind opts)] (name k))
+              :color (:color opts)
+              ;; (str c), not (name c): the host matches a geojson property
+              ;; name, and dataset->geojson-string writes those with (str k).
+              :color-by (when-let [c (:color-by opts)] (str c))
+              ;; Pairs, because JSON keeps the order of an array.
+              :colors (when-let [c (:colors opts)]
+                        (mapv (fn [[value color]] [(str (value-name value)) color]) c))
+              ;; The host reads the popup as JSON, where a keyword has no
+              ;; form of its own.
+              :popup (some-> (:popup opts) named-data)
+              :offset (:offset opts)
+              :opacity (:opacity opts)
+              :counts (:counts opts)}}
+      dataset))))
 
 (defn report-table
   "Sink: converts a summarize or block-presence result to table data

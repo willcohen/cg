@@ -5,48 +5,10 @@
 ;; SPDX-License-Identifier: Apache-2.0 WITH LLVM-exception
 
 (ns cg-gui.run.lane-test
-  "The pure backend decisions: runtime resolution, the web Run route and the
-   CG Map route. A runtime choice is never rerouted in silence."
-  (:require [cljs.test :as t :refer [deftest is testing]]
+  "The pure backend decisions: runtime resolution and the Run route. A
+   runtime choice is never rerouted in silence."
+  (:require [cljs.test :as t :refer [deftest is]]
             ["../../../src/cg_gui/run/lane.mjs" :as lane]))
-
-(defn- route [needs-jvm? backend-reachable? resolved-runtime]
-  (lane/route-map-run {:needs-jvm? needs-jvm?
-                          :backend-reachable? backend-reachable?
-                          :resolved-runtime resolved-runtime}))
-
-(deftest route-decision-table
-  (testing "self-contained .cg follows the resolved runtime"
-    (is (= :js  (route false true  :js)))
-    (is (= :js  (route false false :js)))
-    (is (= :jvm (route false true  :jvm))))
-  (testing "explicit jvm with the backend down refuses loudly (ExplicitChoiceWins)"
-    (is (= :refused (route false false :jvm))))
-  (testing "needs-jvm overrides the toggle — reachable backend routes to jvm"
-    (is (= :jvm (route true true :js)))
-    (is (= :jvm (route true true :jvm))))
-  (testing "needs-jvm with the backend down is unsupported (guard message)"
-    (is (= :unsupported (route true false :js)))
-    (is (= :unsupported (route true false :jvm)))))
-
-(deftest runtime-choice-never-silently-rerouted
-  (doseq [nj [true false]
-          br [true false]
-          rr [:jvm :js]]
-    (let [lane (route nj br rr)]
-      (when nj
-        (is (not= :js lane)
-            (str "a needs-jvm file must never run on the JS backend: " [nj br rr] " -> " lane)))
-      (when (= :jvm rr)
-        (is (not= :js lane)
-            (str "an explicit jvm choice must never silently fall back to js: " [nj br rr] " -> " lane))))))
-
-(deftest flow-needs-jvm-predicate
-  (is (true?  (lane/flow-needs-jvm? {:loaded-modules ["parcel"]})))
-  (is (true?  (lane/flow-needs-jvm? {:loaded-modules ["a" "b"]})))
-  (is (false? (lane/flow-needs-jvm? {:loaded-modules []})))
-  (is (false? (lane/flow-needs-jvm? {})))
-  (is (false? (lane/flow-needs-jvm? {:bindings [{:name "m"}]}))))
 
 (deftest resolve-explicit-wins
   (is (= "jvm" (lane/resolve-runtime "jvm" false)))

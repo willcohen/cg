@@ -5,7 +5,7 @@
 ;; SPDX-License-Identifier: Apache-2.0 WITH LLVM-exception
 
 (ns cg-vscode.run-relay-test
-  "The canvas messages of a JS run in the CG Map tab.
+  "The canvas messages of a run in the CG Map tab.
    Runs standalone: node test/cg_vscode/run_relay_test.mjs."
   (:require [cljs.test :as t :refer [deftest is]]
             ["../../src/cg_vscode/run_relay.mjs" :as relay]))
@@ -36,6 +36,13 @@
   (let [msgs (relay/canvas-messages #js {:type "cg/run-ended" :outcome "success" :count 1} file)]
     (is (= ["cg/run-output" "cg/run-ended"] (types msgs)))
     (is (= "ran on the JS backend: 1 result, no map layer\n" (aget (first msgs) "text")))))
+
+(deftest a-jvm-run-names-the-jvm-backend
+  (let [msgs (relay/canvas-messages #js {:type "cg/run-ended" :outcome "success" :count 2
+                                         :layer "dots" :runtime "JVM"} file)]
+    (is (= "ran on the JVM backend: 2 results, map layer cgdata-dots in the CG Map tab
+"
+           (aget (first msgs) "text")))))
 
 (deftest a-failed-run-gives-the-message-of-the-error
   (let [[m] (relay/canvas-messages #js {:type "cg/run-error" :message "boom"} file)]

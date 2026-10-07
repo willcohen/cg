@@ -7,10 +7,8 @@
 (ns cg-vscode.editor
   (:require ["vscode" :as vscode]
             ["fs" :as fs]
-            ["child_process" :as cp]
             [clojure.string :as str]
             [cg-vscode.canvas-html :as canvas-html]
-            [cg-vscode.dev-shell :as dev-shell]
             [cg-vscode.diagnostics :as diag]
             [cg-vscode.doc :as cg-doc]
             [cg-vscode.exec-webview :as exec-webview]
@@ -18,7 +16,6 @@
             [cg-vscode.extract :as extract]
             [cg-vscode.kondo :as kondo]
             [cg-vscode.modules :as modules]
-            [cg-vscode.run-status :as run-status]
             ["../../../cg-app/shared/squint/src/cg_gui/doc/overlay.mjs" :as overlay]
             ["../../../cg-app/shared/squint/src/cg_gui/run/js.mjs" :as run-js]))
 
@@ -128,111 +125,6 @@
                        (.appendLine channel
                                     (str "CG: parser stack\n" stack))))))))))
 
-(defn- start-trace-tail!
-  "Polls `trace-file-path` every 100 ms and posts each new event one time for
-  each `:seq`. Returns a cleanup fn."
-  [post ^js channel trace-file-path]
-  (let [pos       (atom 0)
-        seen-seqs (atom #{})
-        timer     (atom nil)
-        poll-fn   (fn poll []
-                    (try
-                      (when (.existsSync fs trace-file-path)
-                        (let [^js stat (.statSync fs trace-file-path)
-                              size (.-size stat)]
-                          (when (> size @pos)
-                            (let [^js fd (.openSync fs trace-file-path "r")
-                                  delta (- size @pos)
-                                  buf (js/Buffer.alloc delta)
-                                  _ (.readSync fs fd buf 0 delta @pos)
-                                  _ (.closeSync fs fd)
-                                  text (.toString buf "utf8")]
-                              (reset! pos size)
-                              (doseq [line (str/split-lines text)]
-                                (when-not (str/blank? line)
-                                  (try
-                                    (let [evt (js/JSON.parse line)
-                                          seq-num (.-seq evt)]
-                                      (when-not (contains? @seen-seqs seq-num)
-                                        (swap! seen-seqs conj seq-num)
-                                        (post #js {:type "cg/trace-event"
-                                                   :event evt})))
-                                    (catch :default e
-                                      (.appendLine channel
-                                                   (str "CG: trace-tail JSON parse failed: "
-                                                        (.-message e)))))))))))
-                      (catch :default e
-                        (.appendLine channel
-                                     (str "CG: trace-tail poll error: " (.-message e))))))
-        interval  (js/setInterval poll-fn 100)]
-    (reset! timer interval)
-    (fn cleanup []
-      (when @timer
-        (js/clearInterval @timer)
-        (reset! timer nil))
-      ;; A last poll reads the end of the file after the subprocess exits.
-      (poll-fn))))
-
-(defn- post-run-output!
-  "Posts a chunk of run output to the console pane of the canvas, as it is,
-  because a chunk can end in the middle of a line."
-  [post stream text]
-  (post #js {:type "cg/run-output" :stream stream :text text}))
-
-(defn- run-jvm-and-tail!
-  "Spawns `bb run <doc>` in the dev shell, with the model that the canvas
-  picked. Sends the output to the channel and the canvas, and tails the trace."
-  [!state ^js panel ^js document model]
-  (let [^js channel (:runtime/output-channel @!state)
-        file-path (.. document -uri -fsPath)
-        cwd       (modules/bb-root-for-document document)
-        [prog args] (dev-shell/spawn-args js/process.platform js/process.env cwd
-                                          (if model
-                                            ["bb" "run" file-path "--model" model]
-                                            ["bb" "run" file-path]))
-        ;; cg.trace writes the trace file only into a folder that
-        ;; CG_TRACE_DIR names.
-        proc      (.spawn cp prog args
-                          #js {:cwd cwd
-                               :env (js/Object.assign #js {} js/process.env
-                                                      #js {:CG_TRACE_DIR "tmp/cg-traces"})
-                               :stdio #js ["pipe" "pipe" "pipe"]})
-        cleanup   (atom nil)
-        post      (fn [msg] (run-status/post-to! !state panel msg))]
-    (.show channel true)
-    (.appendLine channel (str "CG: spawned bb run " file-path
-                              " (pid " (.-pid proc) ", cwd " cwd ")"))
-    (post #js {:type "cg/run-started"
-               :file file-path
-               :pid  (.-pid proc)})
-    (.on (.-stdout proc) "data"
-         (fn [^js chunk]
-           (let [text (.toString chunk "utf8")]
-             (.append channel text)
-             (post-run-output! post "stdout" text)
-             (when-let [match (.match text #"\[cg\.trace\] writing events to (.+)")]
-               (let [trace-file (.trim (aget match 1))]
-                 (when-not @cleanup
-                   (.appendLine channel (str "CG: tailing " trace-file))
-                   (reset! cleanup (start-trace-tail! post channel trace-file))))))))
-    (.on (.-stderr proc) "data"
-         (fn [^js chunk]
-           (let [text (.toString chunk "utf8")]
-             (.append channel text)
-             (post-run-output! post "stderr" text))))
-    (.on proc "exit"
-         (fn [code _signal]
-           (.appendLine channel (str "CG: bb run exited code=" code))
-           (when @cleanup (@cleanup) (reset! cleanup nil))
-           (post #js {:type "cg/run-ended"
-                      :outcome (if (= 0 code) "success" "error")
-                      :exitCode code})))
-    (.on proc "error"
-         (fn [^js err]
-           (.appendLine channel (str "CG: bb run spawn error: " (.-message err)))
-           (post #js {:type "cg/run-error"
-                      :message (.-message err)})))))
-
 (defn- apply-position-edit! [^js document positions]
   (let [text (.getText document)]
     (-> (extract/extract-models text)
@@ -327,11 +219,7 @@
                                       (extract-and-fan-out! !state panel document))
                                     nil))
                                 "cg/run"
-                                (let [model (get-in @!state [:editor/run-models (str (.-uri document))])]
-                                  (if (= "js" (or (:runtime/resolved @!state)
-                                                  (:runtime/choice @!state)))
-                                    (exec-webview/run-document! !state document)
-                                    (run-jvm-and-tail! !state panel document model)))
+                                (exec-webview/run-document! !state document)
 
                                 "cg/select-model"
                                 (let [model (.-model msg)]

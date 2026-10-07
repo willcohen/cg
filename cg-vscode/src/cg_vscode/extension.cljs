@@ -15,7 +15,7 @@
 (defonce !app-db
   (atom {:extension/context       nil
          :extension/disposables   []
-         :runtime/choice          "auto"
+         :runtime/choice          "jvm"
          :runtime/resolved        nil
          :runtime/jvm-reachable   false
          :runtime/status-bar      nil

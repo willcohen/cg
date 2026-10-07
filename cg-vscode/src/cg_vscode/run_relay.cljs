@@ -7,10 +7,13 @@
 (ns cg-vscode.run-relay
   "The canvas messages for a run in the CG Map tab. No vscode dependency.")
 
-(defn- result-line [msg]
+(defn- result-line
+  "The console line of the end of a run. `msg` names its :runtime, JS when it
+   has none, because the page posts the end of a JS run."
+  [msg]
   (let [n (aget msg "count")
         layer (aget msg "layer")]
-    (str "ran on the JS backend: " n " result" (when (not= 1 n) "s")
+    (str "ran on the " (or (aget msg "runtime") "JS") " backend: " n " result" (when (not= 1 n) "s")
          (if layer
            (str ", map layer cgdata-" layer " in the CG Map tab")
            ", no map layer")

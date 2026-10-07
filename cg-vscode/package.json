@@ -65,6 +65,11 @@
         "title": "Open Map"
       },
       {
+        "command": "cg.showDatasets",
+        "category": "CG",
+        "title": "Show Datasets (JVM)"
+      },
+      {
         "command": "cg.showRunStatus",
         "category": "CG",
         "title": "Show Run Status"
@@ -95,7 +100,7 @@
       "properties": {
         "cg.runtime": {
           "type": "string",
-          "default": "auto",
+          "default": "jvm",
           "enum": [
             "jvm",
             "js",

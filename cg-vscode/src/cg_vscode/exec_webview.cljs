@@ -5,8 +5,8 @@
 ;; SPDX-License-Identifier: Apache-2.0 WITH LLVM-exception
 
 (ns cg-vscode.exec-webview
-  "The 'CG Map' webview tab. It runs a .cg on the shared JS backend of the web app
-   and shows its dataset output on a MapLibre map."
+  "The 'CG Map' webview tab. It runs a .cg on the JS backend in the page, or in
+   the JVM session of the tab, and draws its layers on a MapLibre map."
   (:require ["vscode" :as vscode]
             ["path" :as path]
             [cg-vscode.asset-server :as asset-server]
@@ -15,6 +15,7 @@
             [cg-vscode.extract :as extract]
             [cg-vscode.modules :as modules]
             ["../../../cg-app/shared/squint/src/cg_gui/run/lane.mjs" :as lane]
+            ["../../../cg-app/shared/squint/src/cg_gui/run/js.mjs" :as run-js]
             [cg-vscode.run-relay :as relay]
             [cg-vscode.run-status :as run-status]
             [cg-vscode.runtime :as runtime]
@@ -57,17 +58,6 @@
   [^js panel ^js msg]
   (reset! !last-run msg)
   (when @!ready (post-pending! panel)))
-
-(defn- post-needs-backend!
-  "The :unsupported route: the .cg needs the JVM backend (load-module or file I/O)
-   and the backend is not reachable."
-  [^js panel ^js cg-uri]
-  (reset! !last-run nil)
-  (vscode/window.showWarningMessage
-   (str "CG map: " (.-fsPath cg-uri)
-        " needs the JVM backend (it uses run/load-module or local-file I/O), but the"
-        " CG backend is unreachable. Start it with `bb backend:dev`."))
-  (post-status! panel "needs the JVM backend, which is unreachable (bb backend:dev)"))
 
 (defn- post-refused!
   "The :refused route: the runtime choice is `jvm` and the backend is down.
@@ -118,8 +108,8 @@
     r))
 
 (defn ^:async run-jvm-feed!
-  "Runs the active .cg in the JVM session of the tab, again in a new session
-   when the session expired, then renders."
+  "Loads the .cg in the JVM session of the tab, again in a new session when
+   the session expired, and draws its dataset vars (Show Datasets)."
   [^js panel port text filename]
   (reset! !jvm-port port)
   ;; session/load has no response timeout, and a first load can take minutes.
@@ -163,43 +153,97 @@
                                 :model (get-in @!state [:editor/run-models uri-str])
                                 :file (path/basename file)})))
 
-(defn ^:async route-and-run!
-  "Starts the JVM backend when the run can need it, then runs the .cg on
-   the route that lane/route-map-run picks."
-  [^js panel !state ^js cg-uri text flow]
-  (let [needs-jvm? (lane/flow-needs-jvm? flow)]
-    (when (or needs-jvm? (runtime/wants-jvm?))
-      (await (runtime/ensure-backend! !state (:runtime/output-channel @!state))))
-    (let [{:keys [resolved reachable port]} (await (runtime/resolve-map-target !state))
-          lane (lane/route-map-run
-                {:needs-jvm? needs-jvm?
-                 :backend-reachable? reachable
-                 :resolved-runtime (if (= "jvm" resolved) :jvm :js)})]
-      (cond
-        (= lane :js)  (post-js-run! !state panel cg-uri text flow)
-        (= lane :jvm) (do (reset! !run-docs [])
-                          (await (run-jvm-feed! panel port text
-                                                (path/basename (.-fsPath cg-uri)))))
-        (= lane :unsupported) (post-needs-backend! panel cg-uri)
-        (= lane :refused)     (post-refused! panel)))))
+(defn ^:async run-js!
+  "Parses `document` and posts its JS run to the tab `panel`. A parser failure
+   goes to the canvas."
+  [!state ^js panel ^js document]
+  (let [text (.getText document)
+        ^js uri (.-uri document)]
+    (try
+      (post-js-run! !state panel uri text (await (extract/extract-models text)))
+      (catch :default e
+        (run-status/post! !state (str uri)
+                          #js {:type "cg/run-error"
+                               :message (str "the parser failed: " (.-message e))})))))
 
-(defn- resolve-run!
-  "Reads and parses the active .cg, then routes it to a backend. Posts a status
-   when no .cg is in view."
-  [^js panel !state]
-  (let [^js cg-uri (doc/active-cg-uri)]
-    (if-not cg-uri
-      (do (reset! !last-run nil)
-          (post-status! panel "no .cg in view. Open one and run CG: Open Map again."))
-      (-> (vscode/workspace.openTextDocument cg-uri)
-          (.then (fn [^js doc]
-                   (let [text (.getText doc)]
-                     (-> (extract/extract-models text)
-                         (.then (fn [flow]
-                                  (route-and-run! panel !state cg-uri text flow)))))))
-          (.catch (fn [^js e]
-                    (vscode/window.showErrorMessage
-                     (str "CG map: parse failed for " (.-fsPath cg-uri) ": " (.-message e)))))))))
+(defn ^:async run-in-tab-session!
+  "jvm/run-in-session in the session of the tab, again in a new session when
+   that one expired."
+  [port req on-event]
+  (let [r (await (jvm/run-in-session port (await (ensure-map-session! port)) req on-event))]
+    (if (:expired r)
+      (do (reset! !map-session nil)
+          (await (jvm/run-in-session port (await (ensure-map-session! port)) req on-event)))
+      r)))
+
+(defn- jvm-run-request
+  "The execution request of the document `cg-uri`, with the model that its
+   canvas picked."
+  [!state ^js cg-uri text]
+  (let [model (get-in @!state [:editor/run-models (str cg-uri)])
+        req #js {:code text :filename (path/basename (.-fsPath cg-uri))}]
+    (when model (aset req "opts" #js {:name model :model model}))
+    req))
+
+(defn- end-jvm-run!
+  "Posts the end of a JVM run with `post`, and the layers of its result `res`
+   to the tab."
+  [^js panel post file ^js res]
+  (let [layers (run-js/run-result->layers nil res)
+        n (aget res "count")]
+    (doseq [m (relay/canvas-messages #js {:type "cg/run-ended" :outcome "success" :count n
+                                          :layer (some-> (last layers) (aget "var"))
+                                          :runtime "JVM"}
+                                     file)]
+      (post m))
+    (if (pos? (.-length layers))
+      (stash-and-post! panel #js {:type "cg/layers" :layers layers})
+      (post-status! panel (str "run ok (" n " result(s)), no map layer")))))
+
+(defn ^:async run-jvm!
+  "Runs `document` in the JVM session of the tab, so that its datasets stay
+   there. The canvas of the document gets the trace, and the tab gets the
+   layers of the result."
+  [!state ^js panel ^js document port]
+  (let [^js uri (.-uri document)
+        file (.-fsPath uri)
+        post (fn [m] (run-status/post! !state (str uri) m))
+        fail! (fn [message]
+                (post #js {:type "cg/run-error" :message message})
+                (vscode/window.showErrorMessage (str "CG map run failed: " message)))]
+    (reset! !jvm-port port)
+    ;; The viewport refetch belongs to Show Datasets.
+    (reset! !last-vars nil)
+    (post #js {:type "cg/run-started" :file file})
+    (post-status! panel "running in the JVM session")
+    (try
+      (let [r (await (run-in-tab-session! port (jvm-run-request !state uri (.getText document))
+                                          (fn [evt] (post #js {:type "cg/trace-event" :event evt}))))]
+        (if-let [res (:result r)]
+          (end-jvm-run! panel post file res)
+          (fail! (:error r))))
+      (catch :default e (fail! (.-message e))))))
+
+(defn ^:async run-route!
+  "lane/execute-route of the runtime choice, with the :port of the backend.
+   An explicit jvm choice starts the backend. auto uses it only when it is up,
+   because a first boot takes minutes."
+  [!state]
+  (when (runtime/jvm-choice?)
+    (await (runtime/ensure-backend! !state (:runtime/output-channel @!state))))
+  (let [{:keys [reachable port]} (await (runtime/resolve-map-target !state))]
+    (assoc (lane/execute-route (:runtime/choice @!state) reachable) :port port)))
+
+(defn ^:async run-in-tab!
+  "Runs `document` with the tab `panel`, on the route of run-route!."
+  [!state ^js panel ^js document]
+  (let [route (await (run-route! !state))]
+    (cond
+      (:refused route) (do (post-refused! panel)
+                           (run-status/post! !state (str (.-uri document))
+                                             #js {:type "cg/run-error" :message (:reason route)}))
+      (= "jvm" (:runtime route)) (await (run-jvm! !state panel document (:port route)))
+      :else (await (run-js! !state panel document)))))
 
 (defn ^:async answer-module-read!
   "Answers cg/read-module of the page with the text of the module, resolved
@@ -308,48 +352,77 @@
         (reset! !ready false)
         (reset! !panel panel))))
 
+(defn- with-active-cg!
+  "Calls (f document) with the .cg in view, or posts a status to the tab when
+   there is none."
+  [^js panel f]
+  (if-let [^js uri (doc/active-cg-uri)]
+    (.then (vscode/workspace.openTextDocument uri) f)
+    (do (reset! !last-run nil)
+        (post-status! panel "no .cg in view. Open one and run the command again."))))
+
+(defn- reveal-tab!
+  "The map tab, revealed or created, with the focus."
+  [!state]
+  (let [existing @!panel
+        ^js panel (ensure-panel! !state false)]
+    (when existing (.reveal panel vscode/ViewColumn.Beside))
+    panel))
+
+(defn- canvas-tab!
+  "The map tab for a run of a canvas: beside it, with the focus left in the
+   canvas."
+  [!state]
+  (let [existing @!panel
+        ^js panel (ensure-panel! !state true)]
+    (when (and existing (not (.-visible panel)))
+      (.reveal panel vscode/ViewColumn.Beside true))
+    panel))
+
 (defn open-map-webview!
   "The command handler. Reveals the map tab or creates it, then runs the active
    .cg."
   [!state & _]
-  (let [existing @!panel
-        ^js panel (ensure-panel! !state false)]
-    (when existing (.reveal panel vscode/ViewColumn.Beside))
-    (resolve-run! panel !state)))
+  (let [panel (reveal-tab! !state)]
+    (with-active-cg! panel (fn [document] (run-in-tab! !state panel document)))))
 
 (defn ^:async run-document!
-  "Runs `document` on the JS backend in the CG Map tab. The tab opens beside the
-   canvas and leaves it the focus."
+  "Runs `document` in the CG Map tab, on the route of the runtime choice. The
+   tab opens beside the canvas and leaves it the focus."
   [!state ^js document]
-  (let [text (.getText document)
-        ^js uri (.-uri document)]
-    (try
-      (let [flow (await (extract/extract-models text))
-            existing @!panel
-            ^js panel (ensure-panel! !state true)]
-        (when (and existing (not (.-visible panel)))
-          (.reveal panel vscode/ViewColumn.Beside true))
-        (post-js-run! !state panel uri text flow))
-      (catch :default e
-        (run-status/post! !state (str uri)
-                          #js {:type "cg/run-error"
-                               :message (str "the parser failed: " (.-message e))})))))
+  (await (run-in-tab! !state (canvas-tab! !state) document)))
 
-(defn- run-active-js!
-  "Runs the .cg in view on the JS backend, in the CG Map tab."
-  [!state]
+(defn- run-active!
+  "Runs the .cg in view with `run` (run-in-tab! or run-js!) in the CG Map tab.
+   `label` names the command in the message when no .cg is in view."
+  [!state run label]
   (if-let [^js uri (doc/active-cg-uri)]
-    (-> (vscode/workspace.openTextDocument uri)
-        (.then (fn [^js document] (run-document! !state document))))
-    (vscode/window.showInformationMessage "CG: Run (JS): no .cg in view")))
+    (.then (vscode/workspace.openTextDocument uri)
+           (fn [^js document] (run !state (canvas-tab! !state) document)))
+    (vscode/window.showInformationMessage (str label ": no .cg in view"))))
+
+(defn- show-datasets!
+  "The command handler: loads the .cg in view in the JVM session of the tab and
+   draws its dataset vars, with the viewport refetch. It runs no model."
+  [!state & _]
+  (let [panel (reveal-tab! !state)]
+    (with-active-cg!
+     panel
+     (fn [^js document]
+       (.then (runtime/ensure-backend! !state (:runtime/output-channel @!state))
+              (fn [{:keys [reachable port]}]
+                (if reachable
+                  (run-jvm-feed! panel port (.getText document)
+                                 (path/basename (.. document -uri -fsPath)))
+                  (do (vscode/window.showErrorMessage
+                       "CG: Show Datasets needs the JVM backend, and it did not start. See the CG output.")
+                      (post-status! panel "the JVM backend did not start")))))))))
 
 (defn register-run-commands!
-  "`CG: Eval (JS)` and `CG: Run`. The JS backend is the CG Map tab, because only
-   a webview loads wasmts the way the web app does."
+  "`CG: Eval (JS)`, `CG: Run` and `CG: Show Datasets (JVM)`. The JS backend is
+   the CG Map tab, because only a webview loads wasmts the way the web app
+   does."
   [!state]
-  (lc/register-command! !state "cg.evalJs" run-active-js!)
-  (lc/register-command! !state "cg.runEval"
-                        (fn [state]
-                          (if (= "jvm" (or (:runtime/resolved @state) (:runtime/choice @state)))
-                            (runtime/run-eval-jvm! state)
-                            (run-active-js! state)))))
+  (lc/register-command! !state "cg.evalJs" (fn [state] (run-active! state run-js! "CG: Eval (JS)")))
+  (lc/register-command! !state "cg.runEval" (fn [state] (run-active! state run-in-tab! "CG: Run")))
+  (lc/register-command! !state "cg.showDatasets" show-datasets!))

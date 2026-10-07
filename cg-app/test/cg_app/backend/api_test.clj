@@ -11,10 +11,13 @@
             [clojure.core.async :as async]
             [clojure.string]
             [cg-app.backend.api :as api]
+            [cg.run :as run]
             [cg.feature :as feature]
             [cg.macros :refer [item-> coll->]]
             [cg.geo :as geo]
             [cg.trace :as trace]
+            [cg.dataset :as ds]
+            [charred.api :as charred]
             [ring.core.protocols :as protocols]))
 
 (set! *warn-on-reflection* true)
@@ -247,6 +250,82 @@
       (is (= 200 (:status response)))
       (is (= "failed" (get-in result [:body :status])))
       (is (re-find #"model binding" (get-in result [:body :result :error]))))))
+
+(def ^:private layer-models-code
+  "(require '[cg.dataset :as ds])
+(require '[cg.feature :as f])
+(require '[cg.geo :as geo])
+(require '[cg.macros :refer [table->]])
+(def shapes (ds/->dataset {:geometry [(f/point 0 0) (f/point 1 1)] :name [\"a\" \"b\"]}))
+(def rings (table-> :shapes (geo/buffer 1) (map-layer {:name \"rings\" :kind :fill})))
+(def centers (table-> :shapes (geo/centroid)))
+(def broken (table-> :missing (map-layer {:name \"broken\"})))
+(def dots (table-> :shapes (map-layer {:name \"dots\" :kind :point})))")
+
+(defn- with-session
+  "Calls (f sid) with a new session, and deletes the session after."
+  [f]
+  (let [sid (get-in (api/session-create {}) [:body :session-id])]
+    (try (f sid)
+         (finally (api/session-delete {:headers {"x-session-id" sid}})))))
+
+(defn- session-execution
+  "Starts an execution of `body` in the session `sid` and gives the result
+   once it is done."
+  [sid body]
+  (let [start (api/execution-start {:headers {"x-session-id" sid} :body body})]
+    (is (= 200 (:status start)) (str "body: " (:body start)))
+    (poll-result (get-in start [:body :execution-id]))))
+
+(defn- sink
+  "The map of a map-layer result, which the JVM can collect in a vector."
+  [r]
+  (if (map? r) r (first r)))
+
+(deftest session-execution-gives-the-map-layers-test
+  (with-session
+    (fn [sid]
+      (let [r (session-execution sid {:code layer-models-code})
+            res (get-in r [:body :result])]
+        (is (= "complete" (get-in r [:body :status])) (str "body: " (:body r)))
+        (is (= "dots" (:name res)))
+        (is (= "dots" (:var (sink (:results res)))) "the model of the run is a layer")
+        (is (= ["rings" "broken"] (mapv :model (:layers res)))
+            "the other map-layer models in source order, with no other model")
+        (is (= "fill" (get-in (sink (:result (first (:layers res)))) [:spec :kind])))
+        (is (some? (:error (second (:layers res)))) "a failed layer does not fail the run")
+        (is (string? (charred/write-json-str res)) "the result is JSON data")))))
+
+(deftest session-execution-keeps-the-datasets-in-the-session-test
+  (with-session
+    (fn [sid]
+      (session-execution sid {:code layer-models-code})
+      (let [ctx (:sci-ctx (get @api/sessions sid))
+            results (run/eval-cg* ctx "cg.session/results")]
+        (is (= #{"dots" "rings"} (set (keys results))) "a failed layer keeps nothing")
+        (is (ds/dataset? (get results "dots")) "the dataset that went into map-layer")
+        (is (= 2 (ds/row-count (get results "rings"))))
+        (is (= 2 (run/eval-cg* ctx "(require '[cg.dataset :as ds]) (ds/row-count (get cg.session/results \"dots\"))"))
+            "a REPL in the session reads them")
+        (is (not-any? #(= "cg.session" (:ns %))
+                      (get-in (api/session-vars {:headers {"x-session-id" sid}}) [:body :vars]))
+            "the results are not a user var")))))
+
+(deftest session-execution-maps-a-dataset-result-test
+  (with-session
+    (fn [sid]
+      (let [res (get-in (session-execution sid {:code layer-models-code
+                                                :opts {:model "centers"}})
+                        [:body :result])
+            gj (charred/read-json (:geojson (:results res)))]
+        (is (= "centers" (:var (:results res))) "a plain layer named after the model")
+        (is (= 2 (count (get gj "features"))))
+        (is (empty? (:layers res)) "only a map-layer model brings the other layers")))))
+
+(deftest session-execution-unknown-session-test
+  (let [r (api/execution-start {:headers {"x-session-id" "no-such-session"}
+                                :body {:code layer-models-code}})]
+    (is (= 404 (:status r)))))
 
 (deftest execution-trace-sse-stream-test
   (testing "SSE stream carries proc events and terminates with the execution-ended sentinel"

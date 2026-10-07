@@ -2051,11 +2051,12 @@
                (recur (eval-top form)))))))))
 
 (defn eval-cg
-  "Evaluate a CG code string in the default context (SCI on the JVM, squint
-  on JS) and give the value of the last form. A def stays visible in the next
-  call. On JS the result gets no clj->js conversion."
+  "Evaluate a CG code string in *cg-context* when it is bound, else in the
+  default context (SCI on the JVM, squint on JS), and give the value of the
+  last form. A def stays visible in the next call. On JS the result gets no
+  clj->js conversion."
   [code-str]
-  #?(:clj (eval-cg* (ensure-cg-context!) code-str)
+  #?(:clj (eval-cg* (or *cg-context* (ensure-cg-context!)) code-str)
      :cljs (eval-cg-cljs code-str)))
 
 (defn eval-cg-file
@@ -2394,6 +2395,6 @@
 
 #?(:clj
    (def ^:dynamic *cg-context*
-     "Not read by this namespace: the default context is in cg-context-atom
-      (see get-cg-context)."
+     "The SCI context of eval-cg, and so of run-file, when bound. A backend
+      session binds its own context, so that a run keeps its values there."
      nil))
