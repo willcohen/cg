@@ -5,9 +5,10 @@
 ;; SPDX-License-Identifier: Apache-2.0 WITH LLVM-exception
 
 ;; A flow does not stop by itself. A proc also cannot close the channels of its
-;; connections. Thus each proc of a table flow sends `eos` after its last
-;; batch. A sink completes when each of its inputs sent `eos`. This ns does not
-;; require cg.run, because cg.run requires the namespaces of the fetch steps.
+;; connections. Thus each proc of a flow sends `eos` after its last message, in
+;; table mode and in item mode. A sink completes when each of its inputs sent
+;; `eos`. This ns does not require cg.run, because cg.run requires the
+;; namespaces of the fetch steps.
 
 (ns cg.run.eos)
 

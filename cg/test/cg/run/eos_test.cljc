@@ -5,9 +5,9 @@
 ;; SPDX-License-Identifier: Apache-2.0 WITH LLVM-exception
 
 (ns cg.run.eos-test
-  "A table flow completes when its sink gets end-of-stream from each input,
-   not after a batch count. The step factory ops here send a number of batches
-   that the sources do not know."
+  "A flow completes when its sink gets end-of-stream from each input, not
+   after a count. The step factory ops here send a number of batches that the
+   sources do not know, and the item ops drop items or join them."
   #?(:clj (:require [clojure.test :refer [deftest is testing]]
                     [cg.run :as run]
                     [cg.run.eos :as eos]
@@ -55,6 +55,46 @@
     (run/register-bare-op! op-name "cg.eos-test" f)
     (feature/register-operation! (str "cg.eos-test/" op-name)
                                  {:type :step-factory :params []})))
+
+(defn- total [items] (reduce + 0 items))
+
+(defn- keep-odd [x] (when (odd? x) x))
+
+(defn- register-item-ops! []
+  (doseq [[op-name f] [["total" total] ["keep-odd" keep-odd]]]
+    (run/register-bare-op! op-name "cg.eos-test" f)
+    (feature/register-operation! (str "cg.eos-test/" op-name)
+                                 {:type :transformer :params []})))
+
+(defn- item-node [id op-name mode]
+  {:type :operation :id id :fn (str "cg.eos-test/" op-name)
+   :params {} :mode mode})
+
+(defn- item-model
+  "A model of a source :nums, the ops `nodes` in a chain, and a sink."
+  [& nodes]
+  (let [ids (concat [:nums-src] (map :id nodes) [:result])]
+    {:nodes (vec (concat [{:type :source :id :nums-src :data-ref :nums}]
+                         nodes
+                         [{:type :sink :id :result :output-binding :result}]))
+     :edges (mapv (fn [a b] {:from a :to b :type :data-flow}) ids (rest ids))
+     :config {}}))
+
+(def ^:private two-coll-model
+  (item-model (item-node :total-1 "total" :coll) (item-node :total-2 "total" :coll)))
+
+(def ^:private keep-odd-model
+  (item-model (item-node :keep-1 "keep-odd" :item)))
+
+(def ^:private item-fan-in-model
+  {:nodes [{:type :source :id :a-src :data-ref :a}
+           {:type :source :id :b-src :data-ref :b}
+           (item-node :keep-1 "keep-odd" :item)
+           {:type :sink :id :result :output-binding :result}]
+   :edges [{:from :a-src :to :keep-1 :type :data-flow}
+           {:from :b-src :to :keep-1 :type :data-flow}
+           {:from :keep-1 :to :result :type :data-flow}]
+   :config {}})
 
 (defn- op-node [id op-name]
   {:type :operation :id id :fn (str "cg.eos-test/" op-name)
@@ -179,6 +219,47 @@
                                                     {:timeout-ms 10000 :batch-size 2})))
                   "the rows of both sources"))
      :cljs (run-fan-in!)))
+
+#?(:cljs
+   (do
+     (defn ^:async run-two-coll! []
+       (register-item-ops!)
+       (is (= [6] (vec (await (run/run-model two-coll-model {:nums [1 2 3]} {:timeout-ms 3000}))))))
+
+     (defn ^:async run-keep-odd! []
+       (register-item-ops!)
+       (is (= [1 3] (vec (await (run/run-model keep-odd-model {:nums [1 2 3]} {:timeout-ms 3000}))))))
+
+     (defn ^:async run-no-items! []
+       (register-item-ops!)
+       (is (= [] (vec (await (run/run-model keep-odd-model {:nums []} {:timeout-ms 3000}))))))
+
+     (defn ^:async run-item-fan-in! []
+       (register-item-ops!)
+       (is (= [1 3 5] (vec (sort (await (run/run-model item-fan-in-model {:a [1 2] :b [3 4 5]}
+                                                       {:timeout-ms 3000})))))))))
+
+(deftest a-chain-of-two-collection-ops-completes
+  (testing "open item 18: the second op gets one item and completes on end-of-stream"
+    #?(:clj (do (register-item-ops!)
+                (is (= [6] (vec (run/run-model two-coll-model {:nums [1 2 3]} {:timeout-ms 3000})))))
+       :cljs (run-two-coll!))))
+
+(deftest an-item-op-that-drops-items-completes
+  #?(:clj (do (register-item-ops!)
+              (is (= [1 3] (vec (run/run-model keep-odd-model {:nums [1 2 3]} {:timeout-ms 3000})))))
+     :cljs (run-keep-odd!)))
+
+(deftest a-source-with-no-items-completes
+  #?(:clj (do (register-item-ops!)
+              (is (= [] (vec (run/run-model keep-odd-model {:nums []} {:timeout-ms 3000})))))
+     :cljs (run-no-items!)))
+
+(deftest an-item-op-with-two-inputs-gets-the-items-of-both
+  #?(:clj (do (register-item-ops!)
+              (is (= [1 3 5] (vec (sort (run/run-model item-fan-in-model {:a [1 2] :b [3 4 5]}
+                                                       {:timeout-ms 3000}))))))
+     :cljs (run-item-fan-in!)))
 
 (deftest a-failed-batch-fails-the-run
   (testing "end-of-stream completes the sink, but the error of the step wins"

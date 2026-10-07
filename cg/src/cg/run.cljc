@@ -540,29 +540,31 @@
 (declare ^:private wire-pid)
 
 (defn collection-operation->step
-  "A step fn that collects :expected-count items, then applies the collection
-  operation one time and emits the result. `schema` orders params map values."
+  "A step fn that collects the items until each of its :n-inputs connections
+  sent eos/eos, then applies the collection operation one time and emits the
+  result and eos/eos. `schema` orders params map values."
   [op-fn params schema]
   (fn
-    ([] {:params (assoc params :expected-count 0) ; Will be set during flow construction
+    ([] {:params (assoc params :n-inputs 0) ; model->flow gives the count
          :ins {:in "Items"}
          :outs {:out "Result"}})
 
     ([args]
-     (let [expected (:expected-count args 0)]
-       {:collected []
-        :expected expected}))
+     {:collected []
+      :n-inputs (:n-inputs args 0)
+      :eos-count 0})
 
     ([state _transition]
      state)
 
     ([state _in-name msg]
-     (let [new-collected (conj (:collected state) msg)
-           expected (:expected state)]
-       (if (= (count new-collected) expected)
-         (let [result (apply-params op-fn new-collected params schema)]
-           [(assoc state :collected new-collected) {:out [result]}])
-         [(assoc state :collected new-collected) {}])))))
+     (if (eos/eos? msg)
+       (let [n (inc (:eos-count state))
+             state' (assoc state :eos-count n)]
+         (if (= n (:n-inputs state))
+           [state' {:out [(apply-params op-fn (:collected state) params schema) eos/eos]}]
+           [state' {}]))
+       [(update state :collected conj msg) {}]))))
 
 #?(:cljs
    (defn- thenable? [x]
@@ -628,6 +630,12 @@
                  (fn [e]
                    (trace/busy-end! tag (ex-message e))
                    (throw e))))))))
+
+(defn- collection-node?
+  "True when the operation node `op-node` runs at the collection level. :mode
+  and :execution name the level, as in operation->step."
+  [op-node]
+  (contains? #{:coll :collection-level} (:mode op-node (:execution op-node :item))))
 
 (defn operation->step
   "Convert the operation node `op-node` to a step fn for flow/create-flow.
@@ -797,8 +805,8 @@
         (assoc model :nodes new-nodes :edges new-edges)))))
 
 (defn- source-step
-  "A step fn that emits the items of `data` one time, on a dummy :trigger
-  input."
+  "A step fn that emits the items of `data` one time, then eos/eos, on a
+  dummy :trigger input."
   [data]
   (letfn [(step-fn
             ([] {:params {}
@@ -815,19 +823,20 @@
              (if (:emitting state)
                [state {}]
                [(assoc state :emitting true)
-                {:out (:items state)}])))]
+                {:out (conj (:items state) eos/eos)}])))]
     step-fn))
 
 (defn- sink-step
   "A step fn that collects results in `result-atom` and calls `completion-fn`
-  when `expected-count` results are in. Only completion-fn marks completion."
-  ([result-atom] (sink-step result-atom nil nil))
-  ([result-atom expected-count completion-fn]
+  when each of its `n-inputs` connections sent eos/eos. Only completion-fn
+  marks completion."
+  ([result-atom] (sink-step result-atom 0 nil))
+  ([result-atom n-inputs completion-fn]
    (letfn [(step-fn
              ([] {:params {}
                   :ins {:in "Data"}
                   :outs {}})
-             ([_args] {:results []})
+             ([_args] {:results [] :eos-count 0})
              ([state lifecycle]
               ;; Use the literal, not ::flow/stop. squint builds an auto-resolved
               ;; keyword from the module specifier: ::flow/stop compiles to
@@ -837,12 +846,13 @@
                 (reset! result-atom (:results state)))
               state)
              ([state _in-name msg]
-              (let [new-state (update state :results conj msg)]
-                (when (and expected-count completion-fn
-                           (= (count (:results new-state)) expected-count))
-                  (reset! result-atom (:results new-state))
-                  (completion-fn))
-                [new-state {}])))]
+              (if (eos/eos? msg)
+                (let [n (inc (:eos-count state))]
+                  (when (and (= n n-inputs) completion-fn)
+                    (reset! result-atom (:results state))
+                    (completion-fn))
+                  [(assoc state :eos-count n) {}])
+                [(update state :results conj msg) {}])))]
      step-fn)))
 
 (defn- table-source-step
@@ -1085,37 +1095,6 @@
                               (filter #(= :operation (:type %))
                                       (:nodes model)))
 
-        ;; Completion needs the item count of all sources: the items of each
-        ;; :source node, and 1 item for each source operation node.
-         source-op-count (count
-                          (filter (fn [node]
-                                    (when (= :operation (:type node))
-                                      (let [fn-ref (:fn node)
-                                            fn-sym (when fn-ref
-                                                     #?(:clj (cond
-                                                               (keyword? fn-ref) (subs (str fn-ref) 1)
-                                                               :else (str fn-ref))
-                                                        :cljs (str fn-ref)))
-                                            op-info (feature/get-operation-info fn-sym)]
-                                        (= :source (:type op-info)))))
-                                  (:nodes model)))
-
-        ;; In table mode the count is in batches, and each source sets it.
-         total-items (if is-table-mode?
-                       nil
-                       (+ (reduce + 0 (map count (vals sources)))
-                          source-op-count))
-
-        ;; With a collection operation the sink expects 1 item, because that
-        ;; operation makes 1 result from N items.
-         has-collection-op? (some #(= :coll (:mode % :item))
-                                  (filter #(= :operation (:type %))
-                                          (:nodes model)))
-         sink-expected-count (cond
-                               is-table-mode? nil
-                               has-collection-op? 1
-                               :else total-items)
-
          result-atom (atom nil)
          completed (atom false)
          completion-fn #(reset! completed true)
@@ -1136,12 +1115,8 @@
                                  :else [[from :out] [to :in]]))))
                      (:edges model))
 
-        ;; A table proc sends eos/eos after an eos/eos from each of these.
+        ;; A proc sends eos/eos after an eos/eos from each of these.
          n-inputs (frequencies (map (fn [[_ [to _]]] to) conns))
-         table-step (fn [pid step]
-                      (if is-table-mode?
-                        (eos/forward-eos step (get n-inputs pid 0))
-                        step))
 
         ;; trace/with-worker-busy attributes the work on each row to the pool
         ;; thread that ran it.
@@ -1218,13 +1193,14 @@
                       (contains? fused-steps pid)
                       (assoc acc pid
                              {:proc #?(:clj  (cg-flow/make-process
-                                              (table-step
-                                               pid
+                                              (eos/forward-eos
                                                (cg-flow/instrument-flow-step
                                                 (wire-pid model pid)
-                                                (get fused-steps pid))))
+                                                (get fused-steps pid))
+                                               (get n-inputs pid 0)))
                                        :cljs (cg-flow/make-process
-                                              (table-step pid (get fused-steps pid))))
+                                              (eos/forward-eos (get fused-steps pid)
+                                                               (get n-inputs pid 0))))
                               :args {}})
 
                       :else
@@ -1244,30 +1220,32 @@
 
                                :operation
                                (let [has-incoming-edge? (some #(= pid (:to %)) (:edges model))
-                                     mode (:mode node :item)
-                                     args (if (= mode :coll)
-                                            {:expected-count total-items}
-                                            {})]
-                                 (if has-incoming-edge?
+                                     step (fn [] (cg-flow/instrument-flow-step
+                                                  (wire-pid model pid)
+                                                  (operation->step node opts)))]
+                                 (cond
+                                   ;; No incoming edge: a source operation.
+                                   (not has-incoming-edge?)
                                    {:proc (cg-flow/make-process
-                                           (table-step
-                                            pid
+                                           (eos/end-with-eos
                                             (cg-flow/instrument-flow-step
                                              (wire-pid model pid)
-                                             (operation->step node opts))))
-                                    :args args}
-                                ;; No incoming edge: a source operation.
-                                   (let [step (cg-flow/instrument-flow-step
-                                               (wire-pid model pid)
-                                               (source-operation->step
-                                                (resolve-operation (:fn node))
-                                                (:params node)
-                                                (op-schema node)))]
-                                     {:proc (cg-flow/make-process
-                                             (if is-table-mode?
-                                               (eos/end-with-eos step)
-                                               step))
-                                      :args {}})))
+                                             (source-operation->step
+                                              (resolve-operation (:fn node))
+                                              (:params node)
+                                              (op-schema node)))))
+                                    :args {}}
+
+                                   ;; A collection op sends eos/eos itself,
+                                   ;; after its result.
+                                   (collection-node? node)
+                                   {:proc (cg-flow/make-process (step))
+                                    :args {:n-inputs (get n-inputs pid 0)}}
+
+                                   :else
+                                   {:proc (cg-flow/make-process
+                                           (eos/forward-eos (step) (get n-inputs pid 0)))
+                                    :args {}}))
 
                                :sink
                                (if is-table-mode?
@@ -1276,8 +1254,8 @@
                                                                        completion-fn))
                                   :args {}}
                                  {:proc (cg-flow/make-process (sink-step result-atom
-                                                                 sink-expected-count
-                                                                 completion-fn))
+                                                                         (get n-inputs pid 0)
+                                                                         completion-fn))
                                   :args {}})
 
                                (throw (ex-info (str "Unknown node type: " (:type node))
