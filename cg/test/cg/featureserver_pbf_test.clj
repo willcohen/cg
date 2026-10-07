@@ -246,3 +246,11 @@
     (doseq [k date-keys]
       (is (number? (get (first (:rows raw)) k))
           (str k " is epoch milliseconds when :raw-dates? is set")))))
+
+(deftest a-fetch-in-a-def-counts-its-rows-on-the-card
+  ;; The loader card of the def shows the rows that its fetches read.
+  (let [pages [(fixture-bytes "polygon-donut") (fixture-bytes "point")]
+        events (collect-events
+                #(trace/call-in-def "parcels"
+                                    (fn [] (pbf/load-pages (recording-fetch pages (atom []))))))]
+    (is (= [10 21] (mapv :done (events-of events "def-progress" "binding-parcels"))))))

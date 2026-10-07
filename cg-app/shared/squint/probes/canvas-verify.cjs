@@ -213,9 +213,9 @@ async function rowsProgress(page, check) {
     const el = document.querySelector(`.react-flow__node[data-id="${nid}"] .cg-progress-fill`);
     return el ? el.style.width : null;
   }, id);
-  // The stat line formats counts with the locale of the page.
+  // The stat line formats counts as en-US, whatever the locale of the page.
   const rows = (done) => page.evaluate(([d, t]) =>
-    d.toLocaleString() + ' / ' + t.toLocaleString() + ' rows', [done, TOTAL]);
+    d.toLocaleString('en-US') + ' / ' + t.toLocaleString('en-US') + ' rows', [done, TOTAL]);
 
   await h.sendFlow(page, SIMPLE);
   await h.waitForNodes(page, [IDS.loader, IDS.buffer, IDS.simplify]);

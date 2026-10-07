@@ -63,7 +63,7 @@
 
 ;; A run sends these kinds many times each second.
 (def ^:private frequent-kinds
-  #js ["rows-progress" "worker-busy-start" "worker-busy-end" "flow-snapshot"])
+  #js ["rows-progress" "def-progress" "worker-busy-start" "worker-busy-end" "flow-snapshot"])
 
 (defn- publish! []
   (when-let [timer (:timer @publish)] (js/clearTimeout timer))

@@ -16,6 +16,7 @@
             ;; The alias is `cn`, not `nodes`: App binds a local `nodes`, and
             ;; squint resolves `nodes/x` against the local.
             [cg-gui.canvas.nodes :as cn]
+            [cg-gui.trace-state :as tstate]
             [cg-gui.canvas.toolbar :as toolbar]
             [cg-gui.canvas.palette :as palette]
             [cg-gui.canvas.console :as console]
@@ -685,26 +686,20 @@
                    ;; The flow-* rows are aggregate and have no node.
                    (= t "cg/trace-event")
                    (let [evt  (aget m "event")
-                         kind (when evt (aget evt "kind"))
                          pid  (when evt (aget evt "pid"))
-                         st   (cond
-                                (= kind "proc-start")    "running"
-                                (= kind "proc-complete") "complete"
-                                (= kind "proc-error")    "error"
-                                :else nil)]
+                         st   (when evt (tstate/node-state (aget evt "kind")))
+                         pr   (when evt (tstate/node-progress evt))]
                      (when (and st pid)
                        (set-trace-state
                         (fn [prev]
                           (let [next (js/Object.assign #js {} prev)]
                             (aset next pid st)
                             next))))
-                     ;; Only the JVM backend sends rows-progress events.
-                     (when (and (= kind "rows-progress") pid)
+                     (when (and pr pid)
                        (set-progress-state
                         (fn [prev]
                           (let [next (js/Object.assign #js {} prev)]
-                            (aset next pid #js {:done (aget evt "done")
-                                                :total (aget evt "total")})
+                            (aset next pid pr)
                             next)))))
 
                    ;; A hit in a collapsed container selects the container and

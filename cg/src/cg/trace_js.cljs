@@ -85,3 +85,51 @@
   and a repaint can run."
   []
   (js/Promise. (fn [resolve] (js/setTimeout resolve 0))))
+
+;; The def events light the loader card of a def: the canvas gives the card of
+;; a top-level def the id binding-<name>, and the pid of each event is that id.
+;; cg.run/run-file puts a call of def-start! or def-end! before each top-level
+;; form. The forms of a module run in order, so one def is open at a time.
+
+(defonce ^:private open-def #js {:pid nil :t0 0})
+
+;; pid -> the rows that the fetches of the def read.
+(defonce ^:private def-rows #js {})
+
+(defn current-def-pid
+  "The pid of the open def, or nil."
+  []
+  (aget open-def "pid"))
+
+(defn def-end!
+  "Complete the open def with def-complete, or with def-error for the error
+   `e`. No effect when no def is open."
+  ([] (def-end! nil))
+  ([e]
+   (when-let [pid (aget open-def "pid")]
+     (aset open-def "pid" nil)
+     (emit! (if e "def-error" "def-complete")
+            (cond-> {:pid pid :ms (- (js/Date.now) (aget open-def "t0"))}
+              e (assoc :message (or (.-message e) (str e))))))
+   nil))
+
+(defn def-start!
+  "Complete the open def, then open the def `def-name` with def-start. The pid
+   is binding-<name>."
+  [def-name]
+  (def-end!)
+  (let [pid (str "binding-" def-name)]
+    (aset open-def "pid" pid)
+    (aset open-def "t0" (js/Date.now))
+    (aset def-rows pid 0)
+    (emit! "def-start" {:pid pid :name def-name})
+    nil))
+
+(defn def-rows!
+  "Add `n` rows to the count of the def `pid`, and emit def-progress. No
+   effect when `pid` is nil."
+  [pid n]
+  (when pid
+    (let [done (+ (or (aget def-rows pid) 0) n)]
+      (aset def-rows pid done)
+      (emit! "def-progress" {:pid pid :done done}))))

@@ -1543,7 +1543,35 @@
         "item__GT_" macros/item->*
         "coll__GT_" macros/coll->*
         "table__GT_" macros/table->*
-        "register_alias_BANG_" macros/register-alias!})))
+        "register_alias_BANG_" macros/register-alias!
+        ;; The calls that mark-defs puts in the text of a run.
+        "__cg_def_start" trace/def-start!
+        "__cg_def_end" trace/def-end!})))
+
+#?(:cljs
+   (def ^:private def-line
+     "A top-level def at the start of a line, and its name."
+     (js/RegExp. "^\\(def\\s+(?:\\^\\S+\\s+)*([^\\s\\[\\]()\"]+)")))
+
+#?(:cljs
+   (defn- mark-defs
+     "`text` with a call on the line before each top-level form at the start of
+      a line, for the def events of the loader cards. A def opens its card, and
+      another form completes the open card. A call at the end completes the
+      last card. The ns form gets no call, because a module starts with it.
+      The calls go on their own lines, because module-def-names finds a def at
+      the start of a line."
+     [text]
+     (str (str/join "\n"
+                    (map (fn [line]
+                           (cond
+                             (not (str/starts-with? line "(")) line
+                             (re-find #"^\(ns[\s)]" line) line
+                             :else (if-let [m (.exec def-line line)]
+                                     (str "(js/globalThis.__cg_def_start \"" (aget m 1) "\")\n" line)
+                                     (str "(js/globalThis.__cg_def_end)\n" line))))
+                         (str/split text #"\n")))
+          "\n(js/globalThis.__cg_def_end)\n")))
 
 #?(:cljs
    (defn- set-globals! [m]
@@ -1704,22 +1732,36 @@
        (register-op! (str (:ns (meta v))) (var-op-decl v) @v))))
 
 #?(:clj
+   (defn- def-form-name
+     "The name of a (def name ...) form, or nil."
+     [form]
+     (when (and (seq? form) (= 'def (first form)) (symbol? (second form)))
+       (name (second form)))))
+
+#?(:clj
    (defn eval-cg*
      "Evaluate the CG code string `code-str` in the SCI context `ctx` form by
       form and give the last value. A ^:op defn registers before the next form
-      expands. The forms of a top-level (do ...) are top-level forms."
-     [ctx code-str]
-     (let [rdr (sci/reader code-str)
-           eval-top (fn eval-top [form]
-                      (if (and (seq? form) (= 'do (first form)))
-                        (reduce (fn [_ f] (eval-top f)) nil (rest form))
-                        (doto (sci/eval-form ctx form) register-op-var!)))]
+      expands. The forms of a top-level (do ...) are top-level forms. With
+      :def-events? in `opts`, each top-level def emits the def events of its
+      loader card (see cg.trace/call-in-def)."
+     ([ctx code-str] (eval-cg* ctx code-str nil))
+     ([ctx code-str {:keys [def-events?]}]
+      (let [rdr (sci/reader code-str)
+            eval-form (fn [form]
+                        (if-let [nm (when def-events? (def-form-name form))]
+                          (trace/call-in-def nm #(sci/eval-form ctx form))
+                          (sci/eval-form ctx form)))
+            eval-top (fn eval-top [form]
+                       (if (and (seq? form) (= 'do (first form)))
+                         (reduce (fn [_ f] (eval-top f)) nil (rest form))
+                         (doto (eval-form form) register-op-var!)))]
        (sci/binding [sci/ns @sci/ns]
          (loop [v nil]
            (let [form (sci/parse-next ctx rdr)]
              (if (= :sci.core/eof form)
                v
-               (recur (eval-top form)))))))))
+               (recur (eval-top form))))))))))
 
 (defn eval-cg
   "Evaluate a CG code string in *cg-context* when it is bound, else in the
@@ -1843,6 +1885,21 @@
           (recur (rest todo) out)))
       out)))
 
+#?(:cljs
+   (defn- ^:async eval-run-text!
+     "Evaluate the text of a run, with the def events of mark-defs. Resolves to
+      the namespace object of a module, or nil for text with no ns form. An
+      error completes the open def with def-error."
+     [text file]
+     (let [marked (mark-defs text)]
+       (try
+         (if (re-find #"^\s*(?:;[^\n]*\n\s*)*\(ns\s" text)
+           (await (load-entry-module! marked file))
+           (do (eval-cg marked) nil))
+         (catch :default e
+           (trace/def-end! e)
+           (throw e))))))
+
 (defn ^:async run-file
   "Evaluate the .cg source `text` and run one model. Gives {:model :result :layers}, a Promise on cljs.
   `opts`: :model, :file, :grammar-wasm, :map-layers (see run-map-layer-models); others go to run-model."
@@ -1852,11 +1909,9 @@
               (await (parser/init! opts))))
    #?(:cljs (await (load-deps! text)))
    (let [file-ns #?(:clj (do (binding [*script-file* (or (:file opts) *script-file*)]
-                               (eval-cg text))
+                               (eval-cg* (or *cg-context* (ensure-cg-context!)) text {:def-events? true}))
                              (file-ns-prefix text))
-                    :cljs (if (re-find #"^\s*(?:;[^\n]*\n\s*)*\(ns\s" text)
-                            (await (load-entry-module! text (:file opts)))
-                            (do (eval-cg text) nil)))
+                    :cljs (await (eval-run-text! text (:file opts))))
          nm (or (:model opts)
                 (last #?(:clj (model-names text opts)
                          :cljs (await (model-names text opts)))))]

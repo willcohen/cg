@@ -12,7 +12,8 @@
                                      getBezierPath getSmoothStepPath useInternalNode]]
             ["@carbon/react" :refer [Tag]]
             [cg-gui.canvas.host :as host]
-            [cg-gui.canvas.param-field :refer [ParamFields]]))
+            [cg-gui.canvas.param-field :refer [ParamFields]]
+            [cg-gui.trace-state :as tstate]))
 
 (def ^:private default-stat-text
   #js {:idle "ready" :running "running" :complete "complete" :error "error"
@@ -21,20 +22,6 @@
 (defn- state-str [d]
   (let [s (aget d "state")]
     (if (and s (not= s "")) (str s) "idle")))
-
-(defn- progress-text
-  "A rows-progress event as the stat line of the node: \"<done> / <total>
-   rows\"."
-  [^js p]
-  (str (.toLocaleString (aget p "done")) " / "
-       (.toLocaleString (aget p "total")) " rows"))
-
-(defn- progress-pct [^js p]
-  (let [total (aget p "total")]
-    (str (if (> total 0)
-           (js/Math.round (* 100 (/ (aget p "done") total)))
-           0)
-         "%")))
 
 (defn- node-class [d selected?]
   (str "cg-node"
@@ -268,7 +255,7 @@
         progress  (aget d "progress")
         running?  (= st "running")
         stat-text (or (aget d "stat")
-                      (when (and progress running?) (progress-text progress))
+                      (when (and progress running?) (tstate/progress-text progress))
                       (aget default-stat-text st) st)
         ;; :label first: a builder puts the display text in :label and the
         ;; bare symbol in :head.
@@ -347,10 +334,10 @@
            (when val  #jsx [:div {:className "cg-val"} val])
            (when footer?
              #jsx [:div {:className "cg-stat"} [:span] stat-text])
-           (when (and footer? progress running?)
+           (when-let [pct (and footer? progress running? (tstate/progress-pct progress))]
              #jsx [:div {:className "cg-progress"}
                    [:div {:className "cg-progress-fill"
-                          :style #js {:width (progress-pct progress)}}]])
+                          :style #js {:width pct}}]])
            (when src-line
              #jsx [:span {:className "cg-source-link"} (str "L" src-line " →")])
            (when divable?

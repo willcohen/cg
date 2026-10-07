@@ -550,8 +550,9 @@
 
      (defn- rows-sink-step
        "The sink of the fetch: it joins the rows of the pages, and on eos/eos
-        it gives {:rows :source-crs :pages} to `result-atom`."
-       [result-atom completed progress-pid]
+        it gives {:rows :source-crs :pages} to `result-atom`. `def-pid` names
+        the def that counts the rows (see cg.trace/def-rows!)."
+       [result-atom completed progress-pid def-pid]
        (fn
          ([] {:ins {:in "The rows of each page"} :outs {}})
          ([_args] {:rows [] :source-crs nil :pages 0})
@@ -566,6 +567,7 @@
                              (update :source-crs #(or % (:source-crs msg)))
                              (update :pages inc))]
               (trace/emit! "rows-progress" {:pid progress-pid :done (count (:rows state'))})
+              (trace/def-rows! def-pid (count (:rows msg)))
               [state' {}])))))
 
      (defn- step-exception
@@ -598,8 +600,10 @@
               procs {:parse {:proc (cg-flow/make-process
                                     (cg-flow/instrument-flow-step parse-pid parse))
                              :args {}}
+                     ;; The flow threads do not see the binding of the def.
                      :rows {:proc (cg-flow/make-process
-                                   (rows-sink-step result completed parse-pid))
+                                   (rows-sink-step result completed parse-pid
+                                                   (trace/current-def-pid)))
                             :args {}}}]
           (try
             (cg-flow/run-flow {:config {:procs procs :conns [[[:parse :out] [:rows :in]]]}

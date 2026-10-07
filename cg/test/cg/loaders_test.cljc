@@ -337,6 +337,22 @@
              (trace/remove-trace-listener listener)
              (await ((:close srv)))))))
 
+     (defn ^:async run-def-progress! []
+       (await (setup!))
+       (let [srv (await (spin-geoservices-server!))
+             events (atom [])
+             listener (trace/add-trace-listener (fn [e] (swap! events conj e)))]
+         (try
+           (trace/def-start! "parcels")
+           (await (ds/load-gdal! (:base-url srv) nil))
+           (trace/def-end!)
+           (is (= [2 3] (mapv :done (filter #(= "binding-parcels" (:pid %))
+                                            (events-of @events "def-progress"))))
+               "the card of the def counts the rows of each page")
+           (finally
+             (trace/remove-trace-listener listener)
+             (await ((:close srv)))))))
+
      (defn ^:async run-repeated-first-page! []
        (await (setup!))
        ;; A server that ignores resultOffset gives page 1 for each request.
@@ -420,6 +436,11 @@
    (deftest the-page-fetch-runs-as-a-flow
      (testing "the fetch of a layer emits the events of a flow"
        (run-paging-events!))))
+
+#?(:cljs
+   (deftest a-fetch-in-a-def-counts-its-rows-on-the-card
+     (testing "the loader card of the def shows the rows that its fetches read"
+       (run-def-progress!))))
 
 #?(:cljs
    (deftest a-repeated-first-page-stops-the-fetch

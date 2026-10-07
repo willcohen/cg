@@ -441,6 +441,29 @@
   (is (= "9.9 s" (rs/duration-text 9949)))
   (is (= "0:10" (rs/duration-text 10000))))
 
+(defn- def-event
+  ([kind nm] (trace #js {:kind kind :pid (str "binding-" nm) :name nm}))
+  ([kind nm done] (trace #js {:kind kind :pid (str "binding-" nm) :name nm :done done})))
+
+(deftest a-def-shows-in-the-status-bar-while-it-runs
+  (let [run (fold (started) 1000 #js [(def-event "def-start" "parcels")
+                                      (def-event "def-progress" "parcels" 2000)])
+        v (rs/run-view run {:status "running" :runtime "js"} 9000)]
+    (is (= "Evaluating parcels" (.-title v)))
+    (is (= "2,000 rows so far" (.-detail v)))))
+
+(deftest a-completed-def-leaves-the-status-bar
+  (doseq [end ["def-complete" "def-error"]]
+    (let [run (fold (started) 1000 #js [(def-event "def-start" "parcels")
+                                        (def-event end "parcels")])]
+      (is (= "Running" (.-title (rs/run-view run {:status "running" :runtime "js"} 9000)))
+          end))))
+
+(deftest a-def-event-adds-no-step
+  (let [run (fold (started) 1000 #js [(def-event "def-start" "parcels")
+                                      (def-event "def-progress" "parcels" 10)])]
+    (is (empty? (:pids run)) "the card of a def is not a step of a flow")))
+
 (.then (js/Promise.resolve (t/run-tests))
        (fn [results]
          (let [fail (or (get results "fail") 0)

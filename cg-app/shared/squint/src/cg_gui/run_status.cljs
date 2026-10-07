@@ -208,8 +208,23 @@
                                 :jobs (inc (aget prev "jobs"))})
           (assoc run :workers workers)))))
 
+(defn- on-def
+  "A def event of the loader card of a def. The status bar shows the open def
+   and the rows of its fetches. A def is not a step of a flow."
+  [run evt now]
+  (case (aget evt "kind")
+    "def-start" (assoc run :def #js {:key (str "def " (aget evt "pid"))
+                                     :name (aget evt "name")
+                                     :since (event-time evt now)
+                                     :done nil})
+    "def-progress" (if-let [d (:def run)]
+                     (assoc run :def (js/Object.assign #js {} d #js {:done (aget evt "done")}))
+                     run)
+    (assoc run :def nil)))
+
 (defn- on-trace [run evt now]
   (case (aget evt "kind")
+    ("def-start" "def-progress" "def-complete" "def-error") (on-def run evt now)
     "stage"             (on-stage run evt)
     "flow-start"        (on-flow-start run evt now)
     "proc-start"        (on-proc-start run evt now)
@@ -350,15 +365,22 @@
          :total total
          :detail (rows-text (aget step "done") total)}))
 
+(defn- def-item [d]
+  (let [done (aget d "done")]
+    #js {:key (aget d "key")
+         :title (str "Evaluating " (aget d "name"))
+         :detail (when (some? done) (str (count-text done "row") " so far"))}))
+
 (defn run-items
   "One #js {:key :title :n :total :detail} for each piece of work that runs:
-   the open stages in the order of their starts, then the running steps of the
-   flow that count rows. A step that counts no rows shows only when nothing
-   else does, because a stage or a row count says more."
+   the open def, the open stages in the order of their starts, then the
+   running steps of the flow that count rows. A step that counts no rows shows
+   only when nothing else does, because a stage or a row count says more."
   [run]
   (let [running (.filter (step-list run) (fn [s] (= "running" (aget s "state"))))
         counted (.filter running (fn [s] (some? (aget s "total"))))
-        items (.concat (.map (or (:stages run) #js []) stage-item)
+        items (.concat (if-let [d (:def run)] #js [(def-item d)] #js [])
+                       (.map (or (:stages run) #js []) stage-item)
                        (.map counted (fn [s] (step-item run s))))]
     (if (pos? (.-length items))
       items

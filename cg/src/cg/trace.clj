@@ -187,3 +187,44 @@
         ;; writer closes.
         (Thread/sleep 50)
         (close-file-writer! session)))))
+
+;; The def events light the loader card of a def: the canvas gives the card of
+;; a top-level def the id binding-<name>, and the pid of each event is that id.
+
+(def ^:dynamic *def-pid*
+  "The pid of the def that call-in-def evaluates on this thread, or nil."
+  nil)
+
+(defonce ^:private def-rows
+  ;; pid -> the rows that the fetches of the def read.
+  (atom {}))
+
+(defn current-def-pid
+  "The pid of the def that this thread evaluates, or nil."
+  []
+  *def-pid*)
+
+(defn def-rows!
+  "Add `n` rows to the count of the def `pid`, and emit def-progress. No
+   effect when `pid` is nil."
+  [pid n]
+  (when pid
+    (let [done (get (swap! def-rows update pid (fnil + 0) n) pid)]
+      (emit! "def-progress" {:pid pid :done done}))))
+
+(defn call-in-def
+  "Call `f` as the evaluation of the def `def-name`, and give its value. Emits
+   def-start, then def-complete or def-error, with the pid binding-<name>."
+  [def-name f]
+  (let [pid (str "binding-" def-name)
+        t0 (System/currentTimeMillis)]
+    (swap! def-rows assoc pid 0)
+    (emit! "def-start" {:pid pid :name def-name})
+    (try
+      (let [v (binding [*def-pid* pid] (f))]
+        (emit! "def-complete" {:pid pid :ms (- (System/currentTimeMillis) t0)})
+        v)
+      (catch Throwable e
+        (emit! "def-error" {:pid pid :ms (- (System/currentTimeMillis) t0)
+                            :message (.getMessage e)})
+        (throw e)))))

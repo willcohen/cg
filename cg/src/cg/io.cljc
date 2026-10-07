@@ -1357,8 +1357,9 @@
      (defn- rows-sink-step
        "The sink of the fetch: it joins the rows of the pages, and on eos/eos
         it gives #js {:rows :sourceCrs} to `result-atom`. `on-page`, when
-        given, gets the row count after each page."
-       [result-atom completed on-page progress-pid]
+        given, gets the row count after each page. `def-pid` names the def
+        that counts the rows (see cg.trace-js/def-rows!)."
+       [result-atom completed on-page progress-pid def-pid]
        (fn
          ([] {:ins {:in "The rows of each page"} :outs {}})
          ([_args] {:rows #js [] :crs nil})
@@ -1372,6 +1373,7 @@
               (doseq [r (.-rows msg)] (.push rows r))
               (when on-page (on-page (.-length rows)))
               (trace/emit! "rows-progress" {:pid progress-pid :done (.-length rows)})
+              (trace/def-rows! def-pid (.-length (.-rows msg)))
               [(assoc state :crs (or (:crs state) (.-crs msg))) {}])))))
 
      (defn- step-error
@@ -1385,8 +1387,11 @@
         after each page. `box` clips the polygons, see clip-flat. An error of a
         fetch or a parse comes to the caller as the step threw it."
        [query-url on-page box flow-name]
-       (await (gdal/gdal-all-register))
-       (let [fetch-pid (cg-flow/pid flow-name :fetch)
+       ;; Read the def before the first await, because another def can open
+       ;; after it.
+       (let [def-pid (trace/current-def-pid)
+             _ (await (gdal/gdal-all-register))
+             fetch-pid (cg-flow/pid flow-name :fetch)
              parse-pid (cg-flow/pid flow-name :parse)
              result    (atom nil)
              completed (atom false)
@@ -1395,7 +1400,7 @@
                                        (cg-flow/instrument-flow-step parse-pid parse))
                                 :args {}}
                         :rows {:proc (cg-flow/make-process
-                                      (rows-sink-step result completed on-page parse-pid))
+                                      (rows-sink-step result completed on-page parse-pid def-pid))
                                :args {}}}]
          (try
            (await (cg-flow/run-flow {:config {:procs procs :conns [[[:parse :out] [:rows :in]]]}
