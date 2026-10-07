@@ -268,6 +268,26 @@ async function rowsProgress(page, check) {
     (await h.statText(page, IDS.buffer)) === null && (await fill(IDS.buffer)) === null);
 }
 
+// At 700 px the open console puts the flow pane under the minimap width.
+async function consoleHoldsStill(page, check) {
+  await h.sendFlow(page, SIMPLE);
+  await page.evaluate(() => {
+    const state = () => (document.querySelector('[data-testid="console-pane"]') ? 'pane'
+      : document.querySelector('[data-testid="console-show"]') ? 'tab' : 'none');
+    let last = state();
+    window.__consoleFlips = 0;
+    new MutationObserver(() => {
+      const s = state();
+      if (s !== last) { window.__consoleFlips += 1; last = s; }
+    }).observe(document.body, { childList: true, subtree: true });
+  });
+  await h.send(page, { type: 'cg/run-started', file: 'f.cg' });
+  await h.send(page, { type: 'cg/run-output', stream: 'stdout', text: 'hello\n' });
+  await page.waitForTimeout(1000);
+  const flips = await page.evaluate(() => window.__consoleFlips);
+  check('the console holds still at 700 px', flips <= 1, `flips=${flips}`);
+}
+
 // cg/run-ended has one shape for the two hosts: {outcome, count?, exitCode?}.
 // A backend run gives outcome and count; the bb run subprocess gives exitCode.
 async function runEndStatus(page, check) {
@@ -1235,6 +1255,7 @@ h.run([
   { name: 'model selection', body: modelSelection },
   { name: 'rows progress', body: rowsProgress },
   { name: 'run end status', body: runEndStatus },
+  { name: 'console at a middle width', viewport: { width: 700, height: 800 }, body: consoleHoldsStill },
   { name: 'thread step drag', body: threadStepDrag },
   { name: 'op body drag', body: opBodyDrag },
   { name: 'toolbar tabs and ghosts', body: tabsAndGhosts },
