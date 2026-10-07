@@ -214,8 +214,12 @@
             (println "Error:" (.getMessage e))
             1))
         :cljs
+        ;; The JVM branch binds the name of the file, and a .cg file reads it
+        ;; with run/script-file.
         (-> (js/Promise.resolve nil)
-            (.then (fn [_] (run/run-file (util/read-file file) opts)))
+            (.then (fn [_] (run/run-file (util/read-file file)
+                                         (assoc (or opts {}) :file
+                                                (last (str/split file #"[/\\]"))))))
             (.then (fn [r]
                      (println "===" (:model r) "===")
                      (print-result (:result r))

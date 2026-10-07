@@ -8,7 +8,7 @@
 
 import { resolve } from 'path';
 import * as fs from 'fs';
-import { fileURLToPath } from 'url';
+import { fileURLToPath, pathToFileURL } from 'url';
 
 
 // Set up fs module globally BEFORE importing cg.mjs
@@ -51,6 +51,7 @@ async function initWasmTS() {
     }
     await new Promise((r) => setTimeout(r, 50));
   }
+  return { jsFile: wasmJsFile, binary: wasmBinary };
 }
 
 function showHelp() {
@@ -85,7 +86,7 @@ async function main() {
   }
 
   // Initialize WasmTS BEFORE importing CG module
-  await initWasmTS();
+  const wasmts = await initWasmTS();
 
   // Dynamic import AFTER WasmTS and nodeFs are set up
   const cg = await import('../dist/cg.mjs');
@@ -104,6 +105,12 @@ async function main() {
   async function runFile(filePath, opts = {}) {
     try {
       await initializeCG();
+      // A reprojection step needs the PROJ handler of the joint pool. A
+      // worker cannot see the fetch shim of initWasmTS, so it gets the bytes.
+      await cg.run.init_cg_workers_BANG_({
+        'wasmts-js-url': pathToFileURL(wasmts.jsFile).href,
+        'wasmts-wasm-binary': wasmts.binary,
+      });
       const code = await cg.cli.run_model_file(filePath, opts);
       process.exit(typeof code === 'number' ? code : 0);
     } catch (error) {

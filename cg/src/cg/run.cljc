@@ -1895,7 +1895,12 @@
        (try
          (if (re-find #"^\s*(?:;[^\n]*\n\s*)*\(ns\s" text)
            (await (load-entry-module! marked file))
-           (do (eval-cg marked) nil))
+           ;; As load-entry-module! does: run/script-file names the file.
+           (do (set! *script-file* file)
+               (try
+                 (eval-cg marked)
+                 nil
+                 (finally (set! *script-file* nil)))))
          (catch :default e
            (trace/def-end! e)
            (throw e))))))
