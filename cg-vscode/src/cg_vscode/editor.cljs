@@ -75,13 +75,18 @@
         (postMessage #js {:type "cg/run-model"
                           :model (or pick (run-js/model-binding-name cg-flow))}))))
 
+;; A parse can end after its canvas closed, and a post to a closed webview
+;; throws.
+(defonce ^:private closed-panels (js/WeakSet.))
+
 (defn- post-flow-to-panel!
   "Posts the flow and the run model to the canvas, and records which node ids
    of this flow can keep a dragged position."
   [!state ^js panel uri-str cg-flow]
-  (swap! !state assoc-in [:editor/overlay-ids uri-str] (extract/overlay-node-ids cg-flow))
-  (send-cg-flow-to-webview! panel cg-flow)
-  (post-run-model! !state panel uri-str cg-flow))
+  (when-not (.has closed-panels panel)
+    (swap! !state assoc-in [:editor/overlay-ids uri-str] (extract/overlay-node-ids cg-flow))
+    (send-cg-flow-to-webview! panel cg-flow)
+    (post-run-model! !state panel uri-str cg-flow)))
 
 (defn- extract-and-fan-out!
   "Parses `document` and its modules, then sets the diagnostics and posts the
@@ -98,27 +103,23 @@
          (.then (fn [cg-flow]
                   (-> (modules/follow-loaded-modules! document cg-flow)
                       (.then (fn [extra-ops]
-                               (let [merged (if (seq extra-ops)
-                                              (extract/recheck
-                                               (update cg-flow :operations
-                                                       (fn [ops]
-                                                         (vec (concat ops extra-ops)))))
-                                              cg-flow)]
-                                 (when coll
-                                   (diag/set-diagnostics! coll uri merged))
-                                 (when panel
-                                   (post-flow-to-panel! !state panel (str uri) merged)))))
+                               (if (seq extra-ops)
+                                 (extract/recheck
+                                  (update cg-flow :operations
+                                          (fn [ops] (vec (concat ops extra-ops)))))
+                                 cg-flow)))
+                      ;; A module that does not parse must not stop the main flow.
                       (.catch (fn [err]
-                                ;; A module that does not parse must not stop
-                                ;; the main flow.
                                 (when channel
                                   (.appendLine channel
                                                (str "CG: load-module follow failed "
                                                     (.-message err))))
-                                (when coll
-                                  (diag/set-diagnostics! coll uri cg-flow))
-                                (when panel
-                                  (post-flow-to-panel! !state panel (str uri) cg-flow)))))))
+                                cg-flow)))))
+         (.then (fn [flow]
+                  (when coll
+                    (diag/set-diagnostics! coll uri flow))
+                  (when panel
+                    (post-flow-to-panel! !state panel (str uri) flow))))
          (.catch (fn [err]
                    (when channel
                      (.appendLine channel
@@ -281,6 +282,7 @@
       (swap! !state assoc-in [:editor/panels uri-str] panel)
       (.onDidDispose panel
                      (fn []
+                       (.add closed-panels panel)
                        (swap! !state update :editor/flow-editor-uris disj uri-str)
                        (swap! !state update :editor/panels dissoc uri-str)
                        (swap! !state update :editor/overlay-ids dissoc uri-str)
