@@ -10,6 +10,7 @@
    It uses node:http, because the undici fetch stops a response that sends
    nothing for 300 s, and a first session load can take minutes."
   (:require ["http" :as http]
+            ["string_decoder" :refer [StringDecoder]]
             ["../../../../cg-app/shared/squint/src/cg_gui/run/js.mjs" :as run-js]
             ["../../../../cg-app/shared/squint/src/cg_gui/run/jvm.mjs" :as jvm]))
 
@@ -45,9 +46,7 @@
          (when body (.write req body))
          (.end req))))))
 
-(defn- layer-of
-  "The map layer of the dataset var `var-name` from its FeatureCollection."
-  [var-name ^js fc]
+(defn- layer-of [var-name ^js fc]
   #js {:var var-name
        :color run-js/run-layer-color
        :crs (or (aget fc "crs") "EPSG:4326")
@@ -57,30 +56,27 @@
        :visible? true})
 
 (defn ^:async fetch-layers
-  "The layers of the dataset vars `vars` of the session, fetched at the same
-   time, in the order of `vars`. Gives {:layers :warnings}, or {:expired true}.
-   opts: :bbox and :limit."
+  "Gives {:layers}, in the order of `vars`, or {:expired true}. opts: :bbox
+   and :limit."
   [send sid vars opts]
   (let [rs (await (js/Promise.all (.map vars (fn [v] (jvm/fetch-dataset send sid v opts)))))]
     (if (.some rs (fn [r] (:expired r)))
       {:expired true}
       {:layers (.filter (.map rs (fn [r i] (when-let [fc (:fc r)] (layer-of (aget vars i) fc))))
-                        some?)
-       :warnings (.filter (.map rs (fn [r i] (when-let [e (:error r)] (str (aget vars i) ": " e))))
-                          some?)})))
+                        some?)})))
 
 (defn ^:async load-layers
   "Loads `code` in the session, with its project dir `root`, and fetches its
-   dataset vars, or `:vars`, as layers. Gives {:layers :warnings}, {:expired
-   true} or {:error <msg>}."
-  [send sid code filename {:keys [vars bbox limit root]}]
+   dataset vars, or `:vars`, as layers. Gives {:layers}, {:expired true} or
+   {:error <msg>}."
+  [send sid code filename {:keys [vars limit root]}]
   (let [loaded (await (jvm/load-session send sid code filename root))
         listed (when-not (or (:expired loaded) (:error loaded) (seq vars))
                  (await (jvm/dataset-var-names send sid)))]
     (cond
       (or (:expired loaded) (:error loaded)) loaded
       (or (:expired listed) (:error listed)) listed
-      :else (await (fetch-layers send sid (or (:names listed) vars) {:bbox bbox :limit limit})))))
+      :else (await (fetch-layers send sid (or (:names listed) vars) {:limit limit})))))
 
 (defn- frame-event [frame]
   (when (.startsWith frame "data: ")
@@ -96,15 +92,17 @@
     #js [(.filter (.map frames frame-event) some?) tail]))
 
 (defn stream-trace
-  "Reads the SSE trace of the execution `id` over node:http, because the undici
-   fetch stops a body that sends nothing for 300 s. Calls (on-event evt) for
-   each event. Resolves to the execution-ended event, and rejects when the
-   stream ends before it."
+  "Calls (on-event evt) for each trace event of the execution `id`. Resolves
+   to the execution-ended event, and rejects when the stream ends before it."
   [port id on-event]
   (js/Promise.
    (fn [resolve reject]
      (let [!buf (atom "")
            !ended (atom false)
+           ;; Not setEncoding: with network inspection on, node:inspector
+           ;; throws on a chunk that is a string.
+           ;; The decoder keeps a character that two chunks split.
+           decoder (StringDecoder. "utf8")
            take! (fn [evt]
                    (if (= "execution-ended" (aget evt "kind"))
                      (do (reset! !ended true) (resolve evt))
@@ -112,10 +110,9 @@
            req (http/get #js {:host "localhost" :port port
                               :path (str "/api/execution/" id "/trace")}
                          (fn [^js res]
-                           (.setEncoding res "utf8")
                            (.on res "data"
                                 (fn [chunk]
-                                  (let [[events tail] (sse-events (str @!buf chunk))]
+                                  (let [[events tail] (sse-events (str @!buf (.write decoder chunk)))]
                                     (reset! !buf tail)
                                     (.forEach events take!))))
                            (.on res "end"

@@ -10,6 +10,7 @@
    JS REPL. `post` sends a message to the host."
   (:require [cg-gui.map.core :as mc]
             [cg-gui.map.popup :as popup]
+            [cg-gui.map.queue :as queue]
             [cg-gui.run.js :as run-js]))
 
 (defn- status! [text]
@@ -18,6 +19,37 @@
 
 (defn- error-text [e]
   (str (or (when e (.-message e)) e)))
+
+(defn- console-text
+  "The text of one console argument: the head of the stack of an error,
+   because its message alone does not locate it."
+  [x]
+  (cond
+    (instance? js/Error x) (.join (.slice (.split (or (.-stack x) (.-message x)) "\n") 0 5) "\n")
+    (string? x) x
+    :else (try (js/JSON.stringify x) (catch :default _ (str x)))))
+
+;; True while a run is on: its console.log text is the output of the run. The
+;; map libraries also log, and their text is not.
+(def ^:private !in-run (atom false))
+
+(defn- forward-errors!
+  "Only the webview developer tools show the console of the page."
+  [post]
+  (let [send (fn [level xs]
+               (post #js {:type "cg/map-error" :level level
+                          :error (.join (.map xs console-text) " ")}))]
+    (.addEventListener js/window "error"
+                       (fn [^js e] (send "error" #js [(or (.-error e) (.-message e))])))
+    (.addEventListener js/window "unhandledrejection"
+                       (fn [^js e] (send "error" #js [(.-reason e)])))
+    (doseq [level ["error" "warn" "log"]]
+      (let [original (aget js/console level)]
+        (aset js/console level
+              (fn [& xs]
+                (.apply original js/console (to-array xs))
+                (when (or (not= "log" level) @!in-run)
+                  (send level (to-array xs)))))))))
 
 ;; load-module reads a module through the host, because the page cannot read
 ;; the files of the workspace.
@@ -28,8 +60,7 @@
   (fn read-module [path]
     (js/Promise.
      (fn [res rej]
-       (swap! !module-seq inc)
-       (let [id @!module-seq]
+       (let [id (swap! !module-seq inc)]
          (.set module-waits id #js {:res res :rej rej})
          (post #js {:type "cg/read-module" :id id :path path}))))))
 
@@ -125,6 +156,7 @@
 ;; because a basemap that does not answer holds the draw for 25 s.
 (defn ^:async run-cg! [ctx ^js m]
   (status! (str "running " (or (.-model m) ".cg") "..."))
+  (reset! !in-run true)
   (try
     (let [mod (:mod ctx)
           r (await (run-js/run-js! mod (.-text m) (.-flow m)
@@ -142,12 +174,11 @@
                (fn [e] (draw-failed! ctx e)))
         (status! (str "run ok (" n " result(s)), no map layer"))))
     (catch :default e
-      (status! (str "run failed: " (error-text e))))))
+      (status! (str "run failed: " (error-text e))))
+    (finally
+      (reset! !in-run false))))
 
-(defn ^:async repl-eval!
-  "Evaluates the REPL form of the message `m` in the page of the runs, and
-   posts cg/repl-result."
-  [ctx ^js m]
+(defn ^:async repl-eval! [ctx ^js m]
   (let [r (await (run-js/repl-eval! (:mod ctx) (.-code m) (:read-module ctx)))]
     (aset r "type" "cg/repl-result")
     (aset r "id" (.-id m))
@@ -159,8 +190,7 @@
          (fn [e] (draw-failed! ctx e))))
 
 (defn ^:async boot!
-  "Loads the cg bundle, starts the map and posts cg/ready. Gives the context
-   of a run."
+  "Gives the context of a run."
   [^js opts]
   (let [post (.-post opts)
         _ (await (run-js/ensure-wasmts! nil))
@@ -172,27 +202,21 @@
     {:post post :mod mod :urls (.-urls opts) :map-ready map-ready
      :read-module (module-reader post)}))
 
-;; One run or REPL form at a time, because the trace listeners of cg see each
-;; run that is on, and the canvas must get the messages of one run. A failure
-;; must not stop the queue.
-(defn- queue! [!runs f m]
-  (swap! !runs (fn [p] (.then p (fn [ctx] (.then (.catch (f ctx m) (fn [_] nil))
-                                                 (fn [_] ctx)))))))
-
 (defn start!
   "Starts the page. opts: post, cgBundle (the URL of the cg browser bundle)
    and urls (the wasmts-js and proj-db URLs of run-js/ensure-workers!)."
   [^js opts]
+  (forward-errors! (.-post opts))
   (let [post (.-post opts)
         boot (boot! opts)
-        !runs (atom boot)]
+        jobs (queue/make boot post)]
     (.catch boot (fn [e] (post #js {:type "cg/map-error" :error (error-text e)})))
     (.addEventListener js/window "message"
                        (fn [^js e]
                          (let [m (.-data e)]
                            (case (when m (.-type m))
-                             "cg/run" (queue! !runs run-cg! m)
-                             "cg/repl-eval" (queue! !runs repl-eval! m)
+                             "cg/run" (queue/enqueue! jobs run-cg! m true)
+                             "cg/repl-eval" (queue/enqueue! jobs repl-eval! m false)
                              "cg/layers" (.then boot (fn [ctx] (draw-jvm-layers! ctx (.-layers m))))
                              "cg/status" (status! (.-text m))
                              "cg/module-text" (answer-module! m)

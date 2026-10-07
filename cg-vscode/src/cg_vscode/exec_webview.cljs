@@ -41,35 +41,28 @@
 (defonce ^:private !js-repl (atom nil))
 (defonce ^:private repl-waits (js/Map.))
 (defonce ^:private !repl-seq (atom 0))
+(defonce ^:private !ready-sends (atom []))
 
-(defn- resolve-dirs
-  "The dirs that the tab serves, from the fsPath of the extension."
-  [^js extension-uri]
+(defn- resolve-dirs [^js extension-uri]
   (let [repo (path/resolve (.-fsPath extension-uri) "..")]
     {:public-dir (path/join repo "cg-app" "shared" "ui" "public")
      :wasmts-dir (path/join repo "cg" "node_modules" "@wcohen" "wasmts" "dist")
      :cg-dist-dir (path/join repo "cg" "dist")
      :grammar-dir (path/join repo "cg" "node_modules" "@yogthos" "tree-sitter-clojure")}))
 
-(defn- post-pending!
-  "Posts the stashed message (cg/run or cg/layers) to the webview, if there is
-   one."
-  [^js panel]
+(defn- post-pending! [^js panel]
   (when-let [^js m @!last-run]
     (.. panel -webview (postMessage m))))
 
 (defn- post-status! [^js panel ^js text]
   (.. panel -webview (postMessage #js {:type "cg/status" :text text})))
 
-(defn- stash-and-post!
-  "Stashes `msg` for replay and posts it when the webview is ready."
-  [^js panel ^js msg]
+(defn- stash-and-post! [^js panel ^js msg]
   (reset! !last-run msg)
   (when @!ready (post-pending! panel)))
 
 (defn- post-refused!
-  "The :refused route: the runtime choice is `jvm` and the backend is down.
-   There is no fallback to JS."
+  "There is no fallback to JS."
   [^js panel]
   (reset! !last-run nil)
   (vscode/window.showErrorMessage
@@ -83,9 +76,7 @@
   (let [send (jvm-client/send-to port nil)]
     (await (jvm/with-session send !map-session (fn [sid] (f send sid))))))
 
-(defn- render-jvm-result!
-  "Posts cg/layers for the layers of the dataset vars, or shows the :error."
-  [^js panel result]
+(defn- render-jvm-result! [^js panel result]
   (let [layers (:layers result)]
     (cond
       (:error result)
@@ -98,17 +89,13 @@
       (post-status! panel "run ok, no geometry dataset vars to map. Open a file that defs dataset layers."))))
 
 (defn- remember-fetched-vars!
-  "Records the geometry var names that a full run rendered. A viewport refetch
-   fetches those vars again."
+  "A viewport refetch fetches these vars again."
   [result]
   (let [layers (:layers result)]
     (when (and layers (pos? (.-length layers)))
       (reset! !last-vars (.map layers (fn [^js l] (aget l "var")))))))
 
-(defn ^:async run-jvm-feed!
-  "Loads the .cg in the JVM session of the tab, again in a new session when
-   the session expired, and draws its dataset vars (Show Datasets)."
-  [^js panel port ^js document]
+(defn ^:async run-jvm-feed! [^js panel port ^js document]
   (reset! !jvm-port port)
   ;; session/load has no response timeout, and a first load can take minutes.
   (post-status! panel "loading session (a first-run full analysis takes minutes)")
@@ -124,14 +111,11 @@
     (catch :default e
       (vscode/window.showErrorMessage (str "CG map (JVM) failed: " (.-message e))))))
 
-(defn ^:async handle-viewport-settled!
-  "Fetches the last vars of the live JVM session for the new viewport `bbox`,
-   with no new run. Only the result of the latest call renders."
-  [^js panel bbox]
+(defn ^:async handle-viewport-settled! [^js panel bbox]
   (let [sid  @!map-session
         port @!jvm-port
         vars @!last-vars]
-    (when (and sid port vars (pos? (.-length vars)))
+    (when (and sid port vars)
       (swap! !refetch-gen inc)
       (let [gen @!refetch-gen]
         (try
@@ -142,10 +126,7 @@
               (= gen @!refetch-gen) (render-jvm-result! panel r)))
           (catch :default _ nil))))))
 
-(defn- post-js-run!
-  "Posts cg/run for the document `cg-uri` to the tab, with the model that its
-   canvas picked, and records the document for the run messages."
-  [!state ^js panel ^js cg-uri text flow]
+(defn- post-js-run! [!state ^js panel ^js cg-uri text flow]
   (let [uri-str (str cg-uri)
         file (.-fsPath cg-uri)]
     ;; The stash keeps only the last message for a page that is not ready.
@@ -156,10 +137,7 @@
                                 :model (get-in @!state [:editor/run-models uri-str])
                                 :file (path/basename file)})))
 
-(defn ^:async run-js!
-  "Parses `document` and posts its JS run to the tab `panel`. A parser failure
-   goes to the canvas."
-  [!state ^js panel ^js document]
+(defn ^:async run-js! [!state ^js panel ^js document]
   (let [text (.getText document)
         ^js uri (.-uri document)]
     (try
@@ -169,10 +147,7 @@
                           #js {:type "cg/run-error"
                                :message (str "the parser failed: " (.-message e))})))))
 
-(defn- jvm-run-request
-  "The execution request of `document`, with the model that its canvas picked
-   and the project dir that its relative module paths resolve against."
-  [!state ^js document]
+(defn- jvm-run-request [!state ^js document]
   (let [^js cg-uri (.-uri document)
         model (get-in @!state [:editor/run-models (str cg-uri)])
         req #js {:code (.getText document) :filename (path/basename (.-fsPath cg-uri))
@@ -180,10 +155,7 @@
     (when model (aset req "opts" #js {:name model :model model}))
     req))
 
-(defn- end-jvm-run!
-  "Posts the end of a JVM run with `post`, and the layers of its result `res`
-   to the tab."
-  [^js panel post file ^js res]
+(defn- end-jvm-run! [^js panel post file ^js res]
   (let [layers (run-js/run-result->layers nil res)
         n (aget res "count")]
     (doseq [m (relay/canvas-messages #js {:type "cg/run-ended" :outcome "success" :count n
@@ -197,8 +169,7 @@
 
 (defn ^:async run-jvm!
   "Runs `document` in the JVM session of the tab, so that its datasets stay
-   there. The canvas of the document gets the trace, and the tab gets the
-   layers of the result."
+   there."
   [!state ^js panel ^js document port]
   (let [^js uri (.-uri document)
         file (.-fsPath uri)
@@ -209,7 +180,7 @@
     (reset! !jvm-port port)
     ;; The viewport refetch belongs to Show Datasets.
     (reset! !last-vars nil)
-    (post #js {:type "cg/run-started" :file file})
+    (post #js {:type "cg/run-started" :file file :runtime "JVM"})
     (post-status! panel "running in the JVM session")
     (try
       (let [req (jvm-run-request !state document)
@@ -220,20 +191,32 @@
           (fail! (:error r))))
       (catch :default e (fail! (.-message e))))))
 
+(defn- backend-stage
+  "The on-stage fn of runtime/ensure-backend! for a run of the document
+   `uri-str`: the boot of the backend shows as a stage of the run."
+  [!state uri-str]
+  (fn [state]
+    (run-status/post! !state uri-str
+                      #js {:type "cg/trace-event"
+                           :event #js {:kind "stage" :label "start the JVM backend"
+                                       :state state :ts (js/Date.now)}})))
+
 (defn ^:async run-route!
   "lane/execute-route of the runtime choice, with the :port of the backend.
    An explicit jvm choice starts the backend. auto uses it only when it is up,
    because a first boot takes minutes."
-  [!state]
+  [!state uri-str]
   (when (runtime/jvm-choice?)
-    (await (runtime/ensure-backend! !state (:runtime/output-channel @!state))))
+    (await (runtime/ensure-backend! !state (backend-stage !state uri-str))))
   (let [{:keys [reachable port]} (await (runtime/resolve-map-target !state))]
     (assoc (lane/execute-route (:runtime/choice @!state) reachable) :port port)))
 
-(defn ^:async run-in-tab!
-  "Runs `document` with the tab `panel`, on the route of run-route!."
-  [!state ^js panel ^js document]
-  (let [route (await (run-route! !state))]
+(defn- request! [!state ^js document runtime]
+  (run-status/requested! !state (str (.-uri document)) (.. document -uri -fsPath) runtime))
+
+(defn ^:async run-in-tab! [!state ^js panel ^js document]
+  (request! !state document (runtime/config-runtime))
+  (let [route (await (run-route! !state (str (.-uri document))))]
     (cond
       (:refused route) (do (post-refused! panel)
                            (run-status/post! !state (str (.-uri document))
@@ -241,10 +224,7 @@
       (= "jvm" (:runtime route)) (await (run-jvm! !state panel document (:port route)))
       :else (await (run-js! !state panel document)))))
 
-(defn ^:async answer-module-read!
-  "Answers cg/read-module of the page with the text of the module of the
-   document of the run, from modules/resolve-module-path."
-  [^js panel ^js msg]
+(defn ^:async answer-module-read! [^js panel ^js msg]
   (let [id (.-id msg)
         p (.-path msg)
         answer (fn [extra]
@@ -264,19 +244,17 @@
         (answer #js {:error (str "load-module " p ": " (.-message e))})))))
 
 (defn- page-eval
-  "Sends the REPL text `code` to the page of the tab. Gives a Promise of #js
-   {:value :out} or #js {:err :out}."
+  "Sends the REPL text `code` to the page of the tab after cg/ready, as a run
+   waits for it. Gives a Promise of #js {:value :out} or #js {:err :out}."
   [code]
-  (let [^js panel @!panel]
-    (if (and panel @!ready)
-      (js/Promise.
-       (fn [res _]
-         (swap! !repl-seq inc)
-         (let [id @!repl-seq]
-           (.set repl-waits id res)
-           (.. panel -webview (postMessage #js {:type "cg/repl-eval" :id id :code code})))))
-      (js/Promise.resolve
-       #js {:err "the CG Map tab is not open or not ready. Open it with CG: Open Map." :out ""}))))
+  (if-let [^js panel @!panel]
+    (js/Promise.
+     (fn [res _]
+       (let [id (swap! !repl-seq inc)
+             send #(.. panel -webview (postMessage #js {:type "cg/repl-eval" :id id :code code}))]
+         (.set repl-waits id res)
+         (if @!ready (send) (swap! !ready-sends conj send)))))
+    (js/Promise.resolve #js {:err "the CG Map tab is not open. Open it with CG: Open Map." :out ""})))
 
 (defn- answer-repl! [^js msg]
   (when-let [res (.get repl-waits (.-id msg))]
@@ -288,21 +266,19 @@
   (.clear repl-waits))
 
 (defn- relay!
-  "Posts the canvas messages of the map message `msg` to the canvas of the
-   document of the run. `end?` closes the run."
+  "`end?` closes the run."
   [!state ^js msg end?]
   (when-let [{:keys [uri file]} (first @!run-docs)]
     (doseq [m (relay/canvas-messages msg file)]
       (run-status/post! !state uri m))
     (when end? (swap! !run-docs (fn [ds] (vec (rest ds)))))))
 
-(defn- handle-message!
-  "Handles a message from the webview. The messages of a JS run also go to the
-   canvas of its document."
-  [!state ^js panel ^js msg]
+(defn- handle-message! [!state ^js panel ^js msg]
   (case (.-type msg)
     "cg/ready"            (do (reset! !ready true)
-                              (post-pending! panel))
+                              (post-pending! panel)
+                              (doseq [send @!ready-sends] (send))
+                              (reset! !ready-sends []))
     "cg/read-module"      (answer-module-read! panel msg)
     "cg/viewport-settled" (handle-viewport-settled! panel (.-bbox msg))
     "cg/repl-result"      (answer-repl! msg)
@@ -313,15 +289,16 @@
                               (vscode/window.showErrorMessage (str "CG map run failed: " (.-message msg))))
     ;; Before cg/ready the page could not load the JS backend, and a run that
     ;; waits for it never starts.
-    "cg/map-error"        (when-not @!ready
+    ;; Only the boot failure has no :level. A console line of the page has one.
+    "cg/map-error"        (if (or @!ready (.-level msg))
+                            (run-status/post! !state (:uri (first @!run-docs))
+                                              (relay/page-error-output msg))
                             (relay! !state #js {:type "cg/run-error"
                                                 :message (str "the CG Map tab did not start: " (.-error msg))}
                                     true))
     nil))
 
-(defn- serve-html!
-  "Points `webview` at the asset server on `port` and sets its HTML."
-  [^js webview roots port {:keys [public-dir wasmts-dir grammar-dir]}]
+(defn- serve-html! [^js webview roots port {:keys [public-dir wasmts-dir grammar-dir]}]
   (let [origin (str "http://localhost:" port)]
     (set! (.-options webview)
           #js {:enableScripts true
@@ -336,10 +313,7 @@
             :wasmts-dir wasmts-dir
             :parser-wasm (path/join grammar-dir "tree-sitter-clojure.wasm")}))))
 
-(defn- build-panel!
-  "Creates the map webview panel beside the active editor, with its asset
-   server, HTML and message handler. Clears the singleton state on dispose."
-  [!state keep-focus?]
+(defn- build-panel! [!state keep-focus?]
   (let [^js context (:extension/context @!state)
         {:keys [public-dir wasmts-dir grammar-dir cg-dist-dir] :as dirs} (resolve-dirs (.-extensionUri context))
         ^js panel (vscode/window.createWebviewPanel
@@ -358,64 +332,58 @@
         (.catch (fn [^js e] (vscode/window.showErrorMessage (str "CG map: the page did not load: " (.-message e))))))
     (.onDidReceiveMessage webview (fn [^js msg] (handle-message! !state panel msg)))
     (.onDidDispose panel (fn [] (.then server (fn [^js srv] (.close srv)))
+                          (dotimes [_ (count @!run-docs)]
+                            (relay! !state #js {:type "cg/run-error" :message "the CG Map tab closed"} true))
                           (reset! !panel nil) (reset! !ready false)
-                          (reset! !last-run nil) (reset! !run-docs []) (reset! !map-session nil)
+                          (reset! !last-run nil) (reset! !map-session nil)
                           (reset! !jvm-port nil) (reset! !last-vars nil)
-                          (reset! !refetch-gen 0) (drop-repl-waits!)))
+                          (reset! !refetch-gen 0) (reset! !ready-sends []) (drop-repl-waits!)))
     panel))
 
 (defn- ensure-panel!
-  "The map tab, created when there is none. `keep-focus?` leaves the focus in
-   the active editor."
+  "`keep-focus?` leaves the focus in the active editor."
   [!state keep-focus?]
   (or @!panel
       (let [panel (build-panel! !state keep-focus?)]
         (reset! !ready false)
         (reset! !panel panel))))
 
-(defn- with-active-cg!
-  "Calls (f document) with the .cg in view, or posts a status to the tab when
-   there is none."
-  [^js panel f]
+(defn- with-active-cg! [^js panel f]
   (if-let [^js uri (doc/active-cg-uri)]
     (.then (vscode/workspace.openTextDocument uri) f)
     (do (reset! !last-run nil)
         (post-status! panel "no .cg in view. Open one and run the command again."))))
 
-(defn- reveal-tab!
-  "The map tab, revealed or created, with the focus."
-  [!state]
+(defn- reveal-tab! [!state]
   (let [existing @!panel
         ^js panel (ensure-panel! !state false)]
     (when existing (.reveal panel vscode/ViewColumn.Beside))
     panel))
 
-(defn- canvas-tab!
-  "The map tab for a run of a canvas: beside it, with the focus left in the
-   canvas."
-  [!state]
+(defn- canvas-tab! [!state]
   (let [existing @!panel
         ^js panel (ensure-panel! !state true)]
     (when (and existing (not (.-visible panel)))
       (.reveal panel vscode/ViewColumn.Beside true))
     panel))
 
-(defn open-map-webview!
-  "The command handler. Reveals the map tab or creates it, then runs the active
-   .cg."
-  [!state & _]
+(defn open-map-webview! [!state & _]
   (let [panel (reveal-tab! !state)]
     (with-active-cg! panel (fn [document] (run-in-tab! !state panel document)))))
 
-(defn ^:async run-document!
-  "Runs `document` in the CG Map tab, on the route of the runtime choice. The
-   tab opens beside the canvas and leaves it the focus."
-  [!state ^js document]
+(defn ^:async run-document! [!state ^js document]
   (await (run-in-tab! !state (canvas-tab! !state) document)))
 
+(defn- requested
+  "`run`, a fn of the state, the tab and the document, after the CG Run line
+   of its request on `runtime`."
+  [run runtime]
+  (fn [!state panel ^js document]
+    (request! !state document runtime)
+    (run !state panel document)))
+
 (defn- run-active!
-  "Runs the .cg in view with `run` (run-in-tab! or run-js!) in the CG Map tab.
-   `label` names the command in the message when no .cg is in view."
+  "`label` names the command in the message when no .cg is in view."
   [!state run label]
   (if-let [^js uri (doc/active-cg-uri)]
     (.then (vscode/workspace.openTextDocument uri)
@@ -424,10 +392,11 @@
 
 (defn ^:async jvm-port!
   "The port of the JVM backend, which it starts when it is down, or nil after
-   an error message that names the command `label`."
-  [!state ^js panel label]
+   an error message that names the command `label`. `on-stage` is the one of
+   runtime/ensure-backend!, nil when no run follows."
+  [!state ^js panel label on-stage]
   (when panel (post-status! panel "connecting to the JVM backend (a first boot takes 1 to 3 min)"))
-  (let [{:keys [reachable port]} (await (runtime/ensure-backend! !state (:runtime/output-channel @!state)))]
+  (let [{:keys [reachable port]} (await (runtime/ensure-backend! !state on-stage))]
     (if reachable
       port
       (do (vscode/window.showErrorMessage
@@ -435,79 +404,53 @@
           (when panel (post-status! panel "the JVM backend did not start"))
           nil))))
 
-(defn- show-datasets!
-  "The command handler: loads the .cg in view in the JVM session of the tab and
-   draws its dataset vars, with the viewport refetch. It runs no model."
-  [!state & _]
+(defn- show-datasets! [!state & _]
   (let [panel (reveal-tab! !state)]
     (with-active-cg!
      panel
      (fn ^:async show [^js document]
-       (when-let [port (await (jvm-port! !state panel "CG: Show Datasets"))]
+       (when-let [port (await (jvm-port! !state panel "CG: Show Datasets" nil))]
          (await (run-jvm-feed! panel port document)))))))
 
-(defn ^:async run-jvm-now!
-  "Runs `document` on the JVM with the tab `panel`, whatever the runtime
-   choice, as CG: Eval (JS) runs it on JS."
-  [!state ^js panel ^js document]
-  (if-let [port (await (jvm-port! !state panel "CG: Eval (JVM)"))]
+(defn ^:async run-jvm-now! [!state ^js panel ^js document]
+  (if-let [port (await (jvm-port! !state panel "CG: Eval (JVM)"
+                                  (backend-stage !state (str (.-uri document)))))]
     (await (run-jvm! !state panel document port))
     (run-status/post! !state (str (.-uri document))
                       #js {:type "cg/run-error" :message "the JVM backend did not start"})))
 
-(defn ^:async active-cg-document
-  "The .cg document in view, or nil."
-  []
+(defn ^:async active-cg-document []
   (when-let [^js uri (doc/active-cg-uri)]
     (await (vscode/workspace.openTextDocument uri))))
 
-(defn- calva-sequence
-  "The Calva connect sequence of `runtime`, with the root and the ns of
-   `document` when there is one."
-  [runtime ^js document]
+(defn- calva-sequence [runtime ^js document]
   (calva/connect-sequence runtime
                           (some-> document modules/bb-root-for-document)
                           (some-> document .getText calva/file-ns)))
 
 (defn ^:async connect-calva!
-  "Connects Calva to the nREPL on `repl-port` with the connect sequence
-   `sequence` and opens the REPL Window, the Calva view that takes input. With
-   no Calva, shows the address."
+  "Opens the REPL Window too, the Calva view that takes input."
   [repl-port sequence]
-  (let [addr (str "localhost:" repl-port)]
-    (if (vscode/extensions.getExtension "betterthantomorrow.calva")
-      (do (await (vscode/commands.executeCommand "calva.connect"
-                                                 #js {:host "localhost" :port (str repl-port)
-                                                      :connectSequence sequence}))
-          (await (vscode/commands.executeCommand "calva.showReplWindow")))
-      (when (= "Copy" (await (vscode/window.showInformationMessage
-                              (str "CG: the REPL of the CG Map session is on " addr) "Copy")))
-        (await (vscode/env.clipboard.writeText addr))))))
+  (await (vscode/commands.executeCommand "calva.connect"
+                                         #js {:host "localhost" :port (str repl-port)
+                                              :connectSequence sequence}))
+  (await (vscode/commands.executeCommand "calva.showReplWindow")))
 
-(defn ^:async connect-repl!
-  "The command handler: starts the nREPL of the JVM session of the CG Map
-   tab, where the JVM runs keep their datasets, and connects to it."
-  [!state & _]
+(defn ^:async connect-repl! [!state & _]
   (let [document (await (active-cg-document))]
     ;; No panel: a status of the connect would stay on the map after it.
-    (when-let [port (await (jvm-port! !state nil "CG: Connect REPL (JVM)"))]
+    (when-let [port (await (jvm-port! !state nil "CG: Connect REPL (JVM)" nil))]
       (let [r (await (with-tab-session! port (fn [send sid] (jvm/start-repl send sid))))]
         (if-let [repl-port (:port r)]
           (await (connect-calva! repl-port (calva-sequence "jvm" document)))
           (vscode/window.showErrorMessage (str "CG: Connect REPL failed: " (:error r))))))))
 
-(defn ^:async ensure-js-repl!
-  "The nREPL server of the JS REPL, started one time."
-  []
+(defn ^:async ensure-js-repl! []
   (when (nil? @!js-repl)
     (reset! !js-repl (js-repl/start-server! page-eval)))
   (await @!js-repl))
 
-(defn ^:async connect-repl-js!
-  "The command handler: opens the CG Map tab, starts the nREPL of its JS
-   runtime, and connects to it. A REPL form sees the defs of the JS runs of
-   the tab."
-  [!state & _]
+(defn ^:async connect-repl-js! [!state & _]
   (let [document (await (active-cg-document))]
     (canvas-tab! !state)
     (let [^js srv (await (ensure-js-repl!))]
@@ -518,30 +461,25 @@
     (reset! !js-repl nil)
     (.then p js-repl/stop-server!)))
 
-(defn- js-state
-  "ready, starting or closed: the JS runtime, which is in the CG Map tab."
-  []
+(defn- js-state []
   (cond
     (and @!panel @!ready) "ready"
     @!panel "starting"
     :else "closed"))
 
-(defn ^:async refresh-runtime!
-  "The command handler: probes the backend, and tells the state of both
-   runtimes."
-  [!state & _]
+(defn ^:async refresh-runtime! [!state & _]
   (let [{:keys [choice resolved reachable port]} (await (runtime/probe-runtime! !state))]
     (vscode/window.showInformationMessage
      (lane/runtime-report choice resolved (js-state) reachable port))))
 
 (defn register-run-commands!
-  "The two `CG: Eval` commands, `CG: Run`, `CG: Refresh Runtime`, `CG: Show
-   Datasets (JVM)` and the two `CG: Connect REPL` commands. The JS backend is
-   the CG Map tab, because only a webview loads wasmts the way the web app
-   does."
+  "The JS backend is the CG Map tab, because only a webview loads wasmts the
+   way the web app does."
   [!state]
-  (lc/register-command! !state "cg.evalJs" (fn [state] (run-active! state run-js! "CG: Eval (JS)")))
-  (lc/register-command! !state "cg.evalJvm" (fn [state] (run-active! state run-jvm-now! "CG: Eval (JVM)")))
+  (lc/register-command! !state "cg.evalJs"
+                        (fn [state] (run-active! state (requested run-js! "js") "CG: Eval (JS)")))
+  (lc/register-command! !state "cg.evalJvm"
+                        (fn [state] (run-active! state (requested run-jvm-now! "jvm") "CG: Eval (JVM)")))
   (lc/register-command! !state "cg.refreshRuntime" refresh-runtime!)
   (lc/register-command! !state "cg.runEval" (fn [state] (run-active! state run-in-tab! "CG: Run")))
   (lc/register-command! !state "cg.showDatasets" show-datasets!)

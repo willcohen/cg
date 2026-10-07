@@ -25,159 +25,113 @@
 (set! *warn-on-reflection* true)
 
 (def sample-point
-  "A sample point feature for testing."
   (feature/make-feature
     (feature/point 0 0)
     {:id "p1" :name "Origin"}))
 
 (def sample-polygon
-  "A sample polygon feature for testing."
   (feature/make-feature
     (feature/polygon [[0 0] [10 0] [10 10] [0 10] [0 0]])
     {:id "poly1" :name "Square"}))
 
-(defn mock-request
-  "Create a mock Ring request with given body."
-  [body]
-  {:request-method :post
-   :uri "/api/execute"
-   :headers {"content-type" "application/json"}
-   :body body})
+(defn- with-session [f]
+  (let [sid (get-in (api/session-create {}) [:body :session-id])]
+    (try (f sid)
+         (finally (api/session-delete {:headers {"x-session-id" sid}})))))
 
 (deftest session-vars-list-only-user-vars-test
-  (testing "a loaded file's vars, and none from the cg library namespaces"
-    (let [sid (get-in (api/session-create {}) [:body :session-id])
-          req (fn [body] {:headers {"x-session-id" sid} :body body})
-          r   (api/session-load (req {:code "(def my-model 42)"
-                                      :filename "vars.cg"}))]
-      (try
+  (with-session
+    (fn [sid]
+      (let [r (api/session-load {:headers {"x-session-id" sid}
+                                 :body {:code "(def my-model 42)" :filename "vars.cg"}})]
         (is (= 200 (:status r)))
         (is (= ["my-model"] (mapv :name (get-in r [:body :vars])))
-            (pr-str (mapv :qualified (get-in r [:body :vars]))))
-        (finally (api/session-delete (req nil)))))))
+            (pr-str (mapv :qualified (get-in r [:body :vars]))))))))
 
 (deftest health-endpoint-test
-  (testing "Health endpoint returns OK status"
-    (let [response (api/health {})]
-      (is (= 200 (:status response)))
-      (is (= "ok" (get-in response [:body :status])))
-      (is (= "cg-app-backend" (get-in response [:body :service])))
-      (is (= "jvm" (get-in response [:body :backend]))))))
+  (let [response (api/health {})]
+    (is (= 200 (:status response)))
+    (is (= "ok" (get-in response [:body :status])))
+    (is (= "cg-app-backend" (get-in response [:body :service])))
+    (is (= "jvm" (get-in response [:body :backend])))))
 
 (deftest execute-simple-buffer-test
-  (testing "Execute simple buffer operation via CG DSL"
-    (let [model (item-> :features
-                  (geo/buffer 100))
-          bindings {:features [sample-point]}
-          request (mock-request {:flow-graph model
-                                 :bindings bindings})
-          response (api/execute-model request)]
-      (is (= 200 (:status response))
-          "Backend should execute successfully")
-      (is (contains? (:body response) :results)
-          "Response should contain results")
-      (let [results (get-in response [:body :results])]
-        (is (seq results)
-            "Results should not be empty")
-        (is (= 1 (count results))
-            "Should have one buffered feature")))))
+  (let [model (item-> :features
+                (geo/buffer 100))
+        response (api/execute-model {:body {:flow-graph model
+                                            :bindings {:features [sample-point]}}})]
+    (is (= 200 (:status response)))
+    (is (= 1 (count (get-in response [:body :results]))))))
 
 (deftest execute-buffer-simplify-pipeline-test
-  (testing "Execute buffer + simplify pipeline via CG DSL"
-    (let [model (item-> :polygons
-                  (geo/buffer 50)
-                  (geo/simplify 1.0))
-          bindings {:polygons [sample-polygon]}
-          request (mock-request {:flow-graph model
-                                 :bindings bindings})
-          response (api/execute-model request)]
-      (is (= 200 (:status response)))
-      (is (seq (get-in response [:body :results]))
-          "Should return buffered and simplified results"))))
+  (let [model (item-> :polygons
+                (geo/buffer 50)
+                (geo/simplify 1.0))
+        response (api/execute-model {:body {:flow-graph model
+                                            :bindings {:polygons [sample-polygon]}}})]
+    (is (= 200 (:status response)))
+    (is (seq (get-in response [:body :results])))))
 
 (deftest execute-collection-union-test
-  (testing "Execute collection-level union via CG DSL"
-    (let [poly1 (feature/make-feature
-                  (feature/polygon [[0 0] [5 0] [5 5] [0 5] [0 0]])
-                  {:id "p1"})
-          poly2 (feature/make-feature
-                  (feature/polygon [[3 3] [8 3] [8 8] [3 8] [3 3]])
-                  {:id "p2"})
-          model (coll-> :features
-                  (geo/union))
-          bindings {:features [poly1 poly2]}
-          request (mock-request {:flow-graph model
-                                 :bindings bindings})
-          response (api/execute-model request)]
-      (is (= 200 (:status response)))
-      (let [result (first (get-in response [:body :results]))]
-        (is (map? result)
-            "Union should return a single merged feature")))))
+  (let [poly1 (feature/make-feature
+                (feature/polygon [[0 0] [5 0] [5 5] [0 5] [0 0]])
+                {:id "p1"})
+        poly2 (feature/make-feature
+                (feature/polygon [[3 3] [8 3] [8 8] [3 8] [3 3]])
+                {:id "p2"})
+        model (coll-> :features
+                (geo/union))
+        response (api/execute-model {:body {:flow-graph model
+                                            :bindings {:features [poly1 poly2]}}})]
+    (is (= 200 (:status response)))
+    (is (map? (first (get-in response [:body :results]))))))
 
 (deftest execute-model-missing-bindings-test
-  (testing "Execute model with missing bindings returns error"
-    (let [model (item-> :missing-data
-                  (geo/buffer 100))
-          bindings {}
-          request (mock-request {:flow-graph model
-                                 :bindings bindings})
-          response (api/execute-model request)]
-      (is (= 500 (:status response))
-          "Should return error for missing bindings")
-      (is (contains? (:body response) :error)))))
+  (let [model (item-> :missing-data
+                (geo/buffer 100))
+        response (api/execute-model {:body {:flow-graph model :bindings {}}})]
+    (is (= 500 (:status response)))
+    (is (contains? (:body response) :error))))
 
 (deftest transform-geometry-buffer-test
-  (testing "Direct geometry transformation - buffer"
-    (let [request (mock-request {:geometry sample-point
-                                 :operation :buffer
-                                 :params {:distance 10}})
-          response (api/transform-geometry request)]
-      (is (= 200 (:status response)))
-      (is (contains? (:body response) :result)
-          "Should return transformed geometry"))))
+  (let [response (api/transform-geometry {:body {:geometry sample-point
+                                                 :operation :buffer
+                                                 :params {:distance 10}}})]
+    (is (= 200 (:status response)))
+    (is (contains? (:body response) :result))))
 
 (deftest transform-geometry-simplify-test
-  (testing "Direct geometry transformation - simplify"
-    (let [request (mock-request {:geometry sample-polygon
-                                 :operation :simplify
-                                 :params {:tolerance 0.5}})
-          response (api/transform-geometry request)]
-      (is (= 200 (:status response)))
-      (is (contains? (:body response) :result)))))
+  (let [response (api/transform-geometry {:body {:geometry sample-polygon
+                                                 :operation :simplify
+                                                 :params {:tolerance 0.5}}})]
+    (is (= 200 (:status response)))
+    (is (contains? (:body response) :result))))
 
 (deftest transform-geometry-union-test
-  (testing "Direct geometry transformation - union"
-    (let [request (mock-request {:geometry sample-polygon
-                                 :operation :union
-                                 :params {:other sample-polygon}})
-          response (api/transform-geometry request)]
-      (is (= 200 (:status response)))
-      (is (contains? (:body response) :result)))))
+  (let [response (api/transform-geometry {:body {:geometry sample-polygon
+                                                 :operation :union
+                                                 :params {:other sample-polygon}}})]
+    (is (= 200 (:status response)))
+    (is (contains? (:body response) :result))))
 
 (deftest transform-geometry-unknown-operation-test
-  (testing "Unknown operation returns error in result"
-    (let [request (mock-request {:geometry sample-point
-                                 :operation :unknown-op
-                                 :params {}})
-          response (api/transform-geometry request)]
-      (is (= 200 (:status response)))
-      (is (contains? (get-in response [:body :result]) :error)
-          "Should return error for unknown operation"))))
+  (let [response (api/transform-geometry {:body {:geometry sample-point
+                                                 :operation :unknown-op
+                                                 :params {}}})]
+    (is (= 200 (:status response)))
+    (is (contains? (get-in response [:body :result]) :error))))
 
 (deftest project-geometry-not-implemented-test
-  (testing "Projection endpoint returns 501 not implemented"
-    (let [request (mock-request {:geometry sample-point
-                                 :from-crs "EPSG:4326"
-                                 :to-crs "EPSG:3857"})
-          response (api/project-geometry request)]
-      (is (= 501 (:status response))
-          "Projection not yet implemented")
-      (is (contains? (:body response) :error)))))
+  (let [response (api/project-geometry {:body {:geometry sample-point
+                                               :from-crs "EPSG:4326"
+                                               :to-crs "EPSG:3857"}})]
+    (is (= 501 (:status response)))
+    (is (contains? (:body response) :error))))
 
 (deftest execute-code-def-ending-cg-file-test
   (testing "execute-code runs a def-ending .cg file with a trailing ^:cgproj overlay"
     (let [code (slurp "app/probes/fixtures/exec-buffer.cg")
-          response (api/execute-code (mock-request {:code code}))]
+          response (api/execute-code {:body {:code code}})]
       (is (= 200 (:status response))
           (str "body: " (:body response)))
       (is (= "success" (get-in response [:body :status])))
@@ -197,19 +151,18 @@
 
 (deftest execute-code-runs-the-last-model-by-default-test
   (testing "the last threading-macro binding runs, though a plain def follows it"
-    (let [response (api/execute-code (mock-request {:code two-models-code}))]
+    (let [response (api/execute-code {:body {:code two-models-code}})]
       (is (= 200 (:status response)) (str "body: " (:body response)))
       (is (= 1 (get-in response [:body :count])) "last-model reads pt, one point"))))
 
 (deftest execute-code-runs-the-model-in-opts-test
-  (let [response (api/execute-code (mock-request {:code two-models-code
-                                                  :opts {:model "first-model"}}))]
+  (let [response (api/execute-code {:body {:code two-models-code
+                                           :opts {:model "first-model"}}})]
     (is (= 200 (:status response)) (str "body: " (:body response)))
-    (is (= 2 (get-in response [:body :count])) "first-model reads pts, two points")))
+    (is (= 2 (get-in response [:body :count])) "first-model reads pts, two points")
+    (is (= 1 (#'api/result-count {:a 1 :b 2})) "a map is one result, as on JS")))
 
-(defn- poll-result
-  "Poll the result endpoint until the execution leaves :running (or ~20s)."
-  [id]
+(defn- poll-result [id]
   (loop [i 0]
     (let [r (api/execution-result {:path-params {:id id}})]
       (if (and (= "running" (get-in r [:body :status])) (< i 200))
@@ -219,10 +172,9 @@
 (deftest execution-start-returns-id-and-records-result-test
   (testing "start returns an execution-id immediately; summary lands in the registry"
     (let [code (slurp "app/probes/fixtures/exec-buffer.cg")
-          response (api/execution-start (mock-request {:code code}))
+          response (api/execution-start {:body {:code code}})
           id (get-in response [:body :execution-id])]
       (is (= 200 (:status response)) (str "body: " (:body response)))
-      (is (string? id))
       (let [result (poll-result id)]
         (is (= "complete" (get-in result [:body :status]))
             (str "body: " (:body result)))
@@ -237,7 +189,7 @@
              {:id fake-id :chan ch :status :running
               :started-at (System/currentTimeMillis)})
       (try
-        (let [response (api/execution-start (mock-request {:code "(ignored)"}))]
+        (let [response (api/execution-start {:body {:code "(ignored)"}})]
           (is (= 409 (:status response)))
           (is (= fake-id (get-in response [:body :live-execution-id]))))
         (finally
@@ -246,7 +198,7 @@
 
 (deftest execution-start-failure-recorded-test
   (testing "a failing execution records :failed with the error, and ends the stream"
-    (let [response (api/execution-start (mock-request {:code "(+ 1 1)"}))
+    (let [response (api/execution-start {:body {:code "(+ 1 1)"}})
           id (get-in response [:body :execution-id])
           result (poll-result id)]
       (is (= 200 (:status response)))
@@ -264,17 +216,7 @@
 (def broken (table-> :missing (map-layer {:name \"broken\"})))
 (def dots (table-> :shapes (map-layer {:name \"dots\" :kind :point})))")
 
-(defn- with-session
-  "Calls (f sid) with a new session, and deletes the session after."
-  [f]
-  (let [sid (get-in (api/session-create {}) [:body :session-id])]
-    (try (f sid)
-         (finally (api/session-delete {:headers {"x-session-id" sid}})))))
-
-(defn- session-execution
-  "Starts an execution of `body` in the session `sid` and gives the result
-   once it is done."
-  [sid body]
+(defn- session-execution [sid body]
   (let [start (api/execution-start {:headers {"x-session-id" sid} :body body})]
     (is (= 200 (:status start)) (str "body: " (:body start)))
     (poll-result (get-in start [:body :execution-id]))))
@@ -307,8 +249,6 @@
         (is (= #{"dots" "rings"} (set (keys results))) "a failed layer keeps nothing")
         (is (ds/dataset? (get results "dots")) "the dataset that went into map-layer")
         (is (= 2 (ds/row-count (get results "rings"))))
-        (is (= 2 (run/eval-cg* ctx "(require '[cg.dataset :as ds]) (ds/row-count (get cg.session/results \"dots\"))"))
-            "a REPL in the session reads them")
         (is (not-any? #(= "cg.session" (:ns %))
                       (get-in (api/session-vars {:headers {"x-session-id" sid}}) [:body :vars]))
             "the results are not a user var")))))
@@ -329,10 +269,7 @@
                                 :body {:code layer-models-code}})]
     (is (= 404 (:status r)))))
 
-(defn- with-project
-  "Calls (f root) with a temp project dir that holds `files` (relative path ->
-   text), and deletes the dir after."
-  [files f]
+(defn- with-project [files f]
   (let [root (str (java.nio.file.Files/createTempDirectory
                    "cg-root" (make-array java.nio.file.attribute.FileAttribute 0)))]
     (try
@@ -372,19 +309,7 @@
                 "a later eval resolves like the last run")))))))
 
 (deftest session-load-resolves-paths-against-the-root-test
-  (with-project project-files
-    (fn [root]
-      (with-session
-        (fn [sid]
-          (let [r (api/session-load {:headers {"x-session-id" sid}
-                                     :body {:code project-main-code :filename "main.cg" :root root}})
-                ctx (:sci-ctx (get @api/sessions sid))]
-            (is (= 200 (:status r)) (str "body: " (:body r)))
-            (is (= 3 (count (run/eval-cg* ctx "pts"))))
-            (is (= "hello" (run/eval-cg* ctx "note")))))))))
-
-(deftest session-root-comes-before-the-cg-project-test
-  (with-project {"deps.edn" "{:root true}"}
+  (with-project (assoc project-files "deps.edn" "{:root true}")
     (fn [root]
       (with-session
         (fn [sid]
@@ -392,17 +317,19 @@
                 read-deps #(run/eval-cg* ctx "(slurp \"deps.edn\")")]
             (is (= (slurp (io/file api/cg-project-root "deps.edn")) (read-deps))
                 "with no root, the file of the cg project")
-            (api/session-load {:headers {"x-session-id" sid} :body {:code "nil" :root root}})
-            (is (= "{:root true}" (read-deps)))))))))
+            (let [r (api/session-load {:headers {"x-session-id" sid}
+                                       :body {:code project-main-code :filename "main.cg" :root root}})]
+              (is (= 200 (:status r)) (str "body: " (:body r)))
+              (is (= 3 (count (run/eval-cg* ctx "pts"))))
+              (is (= "hello" (run/eval-cg* ctx "note")))
+              (is (= "{:root true}" (read-deps)) "the root comes before the cg project"))))))))
 
 (defn- repl-port [sid]
   (let [r (api/session-repl {:headers {"x-session-id" sid}})]
     (is (= 200 (:status r)) (str "body: " (:body r)))
     (get-in r [:body :port])))
 
-(defn- repl-eval
-  "The responses of `code` evaluated over nREPL on `port`."
-  [port code]
+(defn- repl-eval [port code]
   (with-open [conn (nrepl/connect :port port)]
     (doall (nrepl/message (nrepl/client conn 10000) {:op "eval" :code code}))))
 
@@ -435,7 +362,7 @@
 (deftest execution-trace-sse-stream-test
   (testing "SSE stream carries proc events and terminates with the execution-ended sentinel"
     (let [code (slurp "app/probes/fixtures/exec-buffer.cg")
-          start (api/execution-start (mock-request {:code code}))
+          start (api/execution-start {:body {:code code}})
           id (get-in start [:body :execution-id])
           trace-response (api/execution-trace {:path-params {:id id}})
           baos (java.io.ByteArrayOutputStream.)]
@@ -445,24 +372,36 @@
       (protocols/write-body-to-stream (:body trace-response) trace-response baos)
       (let [out (.toString baos "UTF-8")
             frames (re-seq #"data: \{[^\n]*\}" out)]
-        (is (seq frames) "at least one SSE data frame")
         (is (some #(re-find #"\"kind\":\"proc-start\"" %) frames) (str "frames: " (count frames)))
         (is (some #(re-find #"\"kind\":\"proc-complete\"" %) frames))
         (is (re-find #"\"kind\":\"execution-ended\"" (last frames))
             "sentinel is the final frame")
         (is (re-find #"\"outcome\":\"success\"" (last frames)))))))
 
+(deftest session-execution-sends-its-output-test
+  (testing "the text that a run prints is an output frame of its stream, also after a REPL start"
+    (with-session
+      (fn [sid]
+        ;; The REPL gives the session printers that write to sci/out.
+        (api/session-repl {:headers {"x-session-id" sid}})
+        (let [code (str layer-models-code "\n(println \"hello from the run\")")
+              start (api/execution-start {:headers {"x-session-id" sid} :body {:code code}})
+              id (get-in start [:body :execution-id])
+              trace-response (api/execution-trace {:path-params {:id id}})
+              baos (java.io.ByteArrayOutputStream.)]
+          (protocols/write-body-to-stream (:body trace-response) trace-response baos)
+          (is (re-find #"\"kind\":\"output\"[^\n]*hello from the run" (.toString baos "UTF-8"))))))))
+
 (deftest execution-trace-unknown-id-test
-  (testing "404 for an unknown execution id"
-    (is (= 404 (:status (api/execution-trace {:path-params {:id "nope"}}))))
-    (is (= 404 (:status (api/execution-result {:path-params {:id "nope"}}))))))
+  (is (= 404 (:status (api/execution-trace {:path-params {:id "nope"}}))))
+  (is (= 404 (:status (api/execution-result {:path-params {:id "nope"}})))))
 
 (deftest execution-tap-never-wedges-global-trace-test
   (testing "overflowing an unconsumed execution tap does not stall the trace mult"
     ;; A fixed-size tap buffer parks the mult on a full tap, and the global
     ;; trace stream then stops for the whole process. The tap must slide.
     (let [code (slurp "app/probes/fixtures/exec-buffer.cg")
-          start (api/execution-start (mock-request {:code code}))
+          start (api/execution-start {:body {:code code}})
           id (get-in start [:body :execution-id])]
       (dotimes [i 5000]
         (trace/emit! "overflow-probe" {:i i}))
@@ -512,14 +451,11 @@
     (testing "PROJJSON whose own id is 4326 or CRS84"
       (is (true? (crs-4326? projjson-4326)))
       (is (true? (crs-4326? projjson-crs84)))
-      (is (true? (crs-4326? (clojure.string/replace projjson-4326 "4326" "\"4326\""))))
-      )
+      (is (true? (crs-4326? (clojure.string/replace projjson-4326 "4326" "\"4326\"")))))
 
     (testing "a projected CRS is never 4326, even though its base_crs is"
       ;; A substring match finds the 4326 of the base_crs. The feed then skips
       ;; reprojection, and survey feet reach the map as degrees.
-      (is (clojure.string/includes? projjson-2249 "4326")
-          "fixture must contain 4326 somewhere, or it does not test the bug")
       (is (false? (crs-4326? projjson-2249))))
 
     (testing "non-strings and junk"

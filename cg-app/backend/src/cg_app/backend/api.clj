@@ -40,9 +40,8 @@
       :else cwd)))
 
 (def ^:private builtin-ns-prefixes
-  "Prefixes of the namespaces whose vars are not user vars: the library
-   namespaces in the SCI context, the Clojure, SCI and nREPL namespaces, and
-   cg.session, which holds the results of the last run."
+  "Prefixes of the namespaces whose vars are not user vars. cg.session holds
+   the results of the last run."
   (into ["clojure." "sci." "nrepl." "cg.session"]
         (map str (keys dsl/cg-namespaces))))
 
@@ -87,8 +86,7 @@
           path))))
 
 (defn- set-session-root!
-  "Keeps `root` as the :root of the session `sid`, when there is a root. The
-   last root wins, so a later REPL eval resolves paths like the last run."
+  "The last root wins, so a later REPL eval resolves paths like the last run."
   [sid root]
   (when root
     (swap! sessions #(cond-> % (contains? % sid) (assoc-in [sid :root] root)))))
@@ -99,8 +97,7 @@
   ;; the CG project. It calls the host fn, because that keeps the content hash
   ;; and the load-cycle guard of load-module.
   (delay
-    ;; ensure-cg-context! is private.
-    (let [env (:env (#'run/ensure-cg-context!))]
+    (let [env (:env (run/get-cg-context))]
       (swap! env assoc-in [:namespaces 'cg.run 'load-module]
              (fn [path] (run/load-module (resolve-cg-path path))))
       (swap! env assoc-in [:namespaces 'clojure.core 'slurp]
@@ -108,8 +105,7 @@
       true)))
 
 (defn- new-session
-  "Creates the session `sid` with its own SCI context. Overrides load-module
-   and slurp to read paths as session-input does."
+  "Overrides load-module and slurp to read paths as session-input does."
   [sid]
   (let [ctx (dsl/create-cg-context)
         env (:env ctx)
@@ -223,6 +219,11 @@
 (defn- builtin-ns? [ns-str]
   (some #(.startsWith ^String ns-str %) builtin-ns-prefixes))
 
+(defn- deref-if-var
+  "eval-cg of a .cg file that ends with a def returns the Var."
+  [v]
+  (if (instance? sci.lang.Var v) @v v))
+
 (defn- user-vars
   "The user-defined vars of an SCI context, each as an introspect-var map with
    :ns and :qualified."
@@ -234,12 +235,9 @@
                    (when (and (symbol? ns-sym)
                               (not (builtin-ns? (str ns-sym))))
                      (->> ns-map
-                          (filter (fn [[k _]]
-                                    (and (symbol? k)
-                                         (not (#{:obj :aliases :refers :imports :refer-clojure} k))
-                                         (not= k 'require))))
+                          (filter (fn [[k _]] (and (symbol? k) (not= k 'require))))
                           (keep (fn [[k v]]
-                                  (let [val (if (instance? sci.lang.Var v) @v v)]
+                                  (let [val (deref-if-var v)]
                                     (when-not (or (= val :sci.impl.vars/unrealized)
                                                   (nil? val))
                                       (assoc (introspect-var (str k) val)
@@ -248,20 +246,19 @@
          (into []))))
 
 (defn- lookup-var-value [sci-ctx var-name]
-  (let [env @(:env sci-ctx)
-        deref-var (fn [v] (if (instance? sci.lang.Var v) @v v))]
+  (let [env @(:env sci-ctx)]
     (or (when-let [v (get-in env [:namespaces 'user (symbol var-name)])]
-          (deref-var v))
+          (deref-if-var v))
         (when-let [[_ ns-str name-str] (re-matches #"(.+)/(.+)" var-name)]
           (when-let [v (get-in env [:namespaces (symbol ns-str) (symbol name-str)])]
-            (deref-var v)))
+            (deref-if-var v)))
         ;; A module file opened as the session entry defines its vars in its
         ;; own namespace, but the client fetches by the unqualified name from
         ;; /api/session/vars.
         (some (fn [[ns-sym ns-map]]
                 (when (and (symbol? ns-sym) (not (builtin-ns? (str ns-sym))))
                   (when-let [v (get ns-map (symbol var-name))]
-                    (deref-var v))))
+                    (deref-if-var v))))
               (get env :namespaces)))))
 
 (defn health [_request]
@@ -269,12 +266,6 @@
    :body {:status "ok"
           :service "cg-app-backend"
           :backend "jvm"}})
-
-(defn- deref-if-var
-  "The value of `v` when it is a SCI Var, else `v`. eval-cg of a .cg file that
-   ends with a def returns the Var."
-  [v]
-  (if (instance? sci.lang.Var v) @v v))
 
 (defn- resolve-source-bindings
   "Adds each missing source-node :data-ref to `bindings`. A named ref resolves
@@ -293,7 +284,7 @@
 (defn- result-count [results]
   (cond
     (ds/dataset? results) (ds/row-count results)
-    (coll? results) (count results)
+    (sequential? results) (count results)
     (some? results) 1
     :else 0))
 
@@ -335,9 +326,7 @@
                     layers)))
 
 (defn- run-in-session
-  "run-file of the code of `body` in the context of the session `sess`, with
-   the map-layer models. Keeps the results in the session, and gives
-   {:count :message :name :results :layers}, the shape that the map hosts read."
+  "Gives {:count :message :name :results :layers}, the shape that the map hosts read."
   [sess body]
   (let [ctx (:sci-ctx sess)
         filename (:filename body)
@@ -358,8 +347,7 @@
                    (:layers out))}))
 
 (defn- run-request
-  "Runs the model of a request body and returns the results. `code` runs
-   through cg.run/run-file with no overlay. A `flow-graph` runs as it is."
+  "`code` runs through cg.run/run-file with no overlay. A `flow-graph` runs as it is."
   [body]
   (let [opts (walk/keywordize-keys (or (:opts body) {}))]
     (if-let [code-str (:code body)]
@@ -413,8 +401,7 @@
   (some #(when (= :running (:status %)) %) (vals m)))
 
 (defn- finish-execution!
-  "Records the outcome, untaps the trace stream, puts the end sentinel and
-   closes the channel. The sleep before the untap lets in-flight events arrive."
+  "The sleep before the untap lets in-flight events arrive."
   [id updates sentinel]
   (let [{:keys [chan]} (get @executions id)]
     (swap! executions update id merge updates {:ended-at (now-ms)})
@@ -432,12 +419,57 @@
     (let [n (result-count (run-request body))]
       {:count n :message (done-message n)})))
 
-(defn- run-execution!
-  "Body of the execution future: run the request's model, then finish."
-  [id body sess]
+(defn- trace-writer
+  "A Writer that sends each line written to it as an \"output\" trace event
+   of `stream`. The trace is the stream of an execution to its client, and
+   the output of the extension's backend process goes nowhere."
+  ^java.io.Writer [stream]
+  (let [buf (StringBuilder.)
+        emit! (fn [^String text] (trace/emit! "output" {:stream stream :text text}))
+        lines! (fn []
+                 (loop []
+                   (let [i (.indexOf buf "\n")]
+                     (when (>= i 0)
+                       (emit! (.substring buf 0 (inc i)))
+                       (.delete buf 0 (inc i))
+                       (recur)))))]
+    (proxy [java.io.Writer] []
+      (write
+        ([x]
+         (cond
+           (string? x)  (.append buf ^String x)
+           (integer? x) (.append buf (char (int x)))
+           :else        (.append buf ^chars x))
+         (lines!))
+        ([x off len]
+         (if (string? x)
+           (.append buf ^String x (int off) (+ (int off) (int len)))
+           (.append buf ^chars x (int off) (int len)))
+         (lines!)))
+      (flush [] (lines!))
+      (close []
+        (when (pos? (.length buf))
+          (emit! (str buf))
+          (.setLength buf 0))))))
+
+(defn- with-run-output
+  "(f) with its printed text sent as output trace events. The REPL printers
+   of a session write to sci/out, therefore both bindings."
+  [f]
+  (let [out (trace-writer "out")
+        err (trace-writer "err")]
+    (try
+      (binding [*out* out *err* err]
+        (sci/binding [sci/out out sci/err err]
+          (f)))
+      (finally
+        (.close out)
+        (.close err)))))
+
+(defn- run-execution! [id body sess]
   (try
     (log/info "Async execution" id "starting")
-    (let [summary (execution-summary body sess)]
+    (let [summary (with-run-output #(execution-summary body sess))]
       (log/info "Async execution" id "complete," (:count summary) "results")
       (finish-execution! id
                          {:status :complete :result summary}
@@ -564,9 +596,7 @@
        :body {:error (.getMessage e)
               :type (-> e class .getName)}})))
 
-(defn transform-geometry
-  "Transform geometry using cg.geo functions."
-  [request]
+(defn transform-geometry [request]
   (try
     (let [{:keys [geometry operation params]} (:body request)
           _ (log/info "Transforming geometry with operation:" operation)
@@ -582,16 +612,12 @@
       {:status 500
        :body {:error (.getMessage e)}})))
 
-(defn project-geometry
-  "Returns 501: projection is not implemented."
-  [_request]
+(defn project-geometry [_request]
   {:status 501
    :body {:error "Projection not yet implemented"
           :message "CRS transformation will be available in future version"}})
 
-(defn session-create
-  "POST /api/session/create - Create a new isolated session."
-  [_request]
+(defn session-create [_request]
   (expire-sessions!)
   (let [sid (str (java.util.UUID/randomUUID))]
     (swap! sessions assoc sid (new-session sid))
@@ -691,9 +717,7 @@
        :body {:error (.getMessage e)
               :type (-> e class .getName)}})))
 
-(defn session-vars
-  "GET /api/session/vars - List all user vars in the session."
-  [request]
+(defn session-vars [request]
   (try
     (let [sess (get-session! request)
           vars (user-vars (:sci-ctx sess))]

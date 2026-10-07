@@ -8,8 +8,8 @@
   "The canvas messages for a run in the CG Map tab. No vscode dependency.")
 
 (defn- result-line
-  "The console line of the end of a run. `msg` names its :runtime, JS when it
-   has none, because the page posts the end of a JS run."
+  "`msg` names its :runtime, JS when it has none, because the page posts the
+   end of a JS run."
   [msg]
   (let [n (aget msg "count")
         layer (aget msg "layer")]
@@ -19,12 +19,18 @@
            ", no map layer")
          "\n")))
 
-(defn canvas-messages
-  "The messages for the canvas that a message `msg` of the map webview gives,
-   as a vector. `file` is the path of the .cg of the run."
-  [msg file]
+(defn page-error-output
+  "The console.log text of a run (level log) is the output of the run."
+  [msg]
+  (let [level (or (aget msg "level") "error")]
+    (if (= "log" level)
+      #js {:type "cg/run-output" :stream "stdout" :text (str (aget msg "error") "\n")}
+      #js {:type "cg/run-output" :stream "stderr"
+           :text (str "page " level ": " (aget msg "error") "\n")})))
+
+(defn canvas-messages [msg file]
   (case (aget msg "type")
-    "cg/run-started" [#js {:type "cg/run-started" :file file}]
+    "cg/run-started" [#js {:type "cg/run-started" :file file :runtime "JS"}]
     "cg/trace-event" [msg]
     "cg/run-ended"   [#js {:type "cg/run-output" :stream "stdout" :text (result-line msg)} msg]
     "cg/run-error"   [msg]

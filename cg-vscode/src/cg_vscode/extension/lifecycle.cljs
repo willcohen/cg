@@ -26,6 +26,3 @@
   (let [arr (js/Uint8Array. 16)]
     (js/crypto.getRandomValues arr)
     (.toString (js/Buffer.from arr) "base64")))
-
-(defn set-when-context! [key value]
-  (vscode/commands.executeCommand "setContext" key value))

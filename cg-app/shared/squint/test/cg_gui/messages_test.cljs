@@ -67,7 +67,7 @@
    {:type "cg/run-error" :channel "map" :from "view" :to "host" :fields ["message"]}
    {:type "cg/viewport-settled" :channel "map" :from "view" :to "host"
     :fields ["bbox"]}
-   {:type "cg/map-error" :channel "map" :from "view" :to "host" :fields ["error"]}
+   {:type "cg/map-error" :channel "map" :from "view" :to "host" :fields ["error" "level?"]}
    {:type "cg/repl-result" :channel "map" :from "view" :to "host"
     :fields ["id" "out" "value?" "err?"]}
    {:type "cg/trace-event" :channel "map" :from "view" :to "host"
@@ -107,6 +107,7 @@
             "cg-app/shared/squint/src/cg_gui/run/js.cljs"]}
    {:name "map webview" :channel "map" :role "view"
     :files ["cg-app/shared/squint/src/cg_gui/map/page.cljs"
+            "cg-app/shared/squint/src/cg_gui/map/queue.cljs"
             "cg-app/shared/squint/src/cg_gui/run/js.cljs"]}
    {:name "map host" :channel "map" :role "host"
     :files ["cg-vscode/src/cg_vscode/exec_webview.cljs"
