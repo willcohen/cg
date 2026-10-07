@@ -248,6 +248,19 @@
       (= 404 (.-status res)) {:expired true}
       :else {:error (or (aget b "error") (str "execution/start HTTP " (.-status res)))})))
 
+(defn ^:async start-repl
+  "Starts the nREPL of the session `session-id`, one time. Returns {:port},
+   {:expired true} on 404, or {:error <msg>}."
+  [port session-id]
+  (let [res (await (js/fetch (str (jvm-base-url port) "/api/session/repl")
+                             #js {:method "POST"
+                                  :headers #js {"X-Session-Id" session-id}}))
+        b (await (.catch (.json res) (fn [_] #js {})))]
+    (cond
+      (.-ok res) {:port (aget b "port")}
+      (= 404 (.-status res)) {:expired true}
+      :else {:error (or (aget b "error") (str "session/repl HTTP " (.-status res)))})))
+
 (defn ^:async execution-result
   "The result of the execution `id`: #js {:count :message :name :results :layers}."
   [port id]

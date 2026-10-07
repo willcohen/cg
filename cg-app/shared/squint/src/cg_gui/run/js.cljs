@@ -179,6 +179,45 @@
       (post #js {:type "cg/run-error" :message (or (.-message e) (str e))})
       (throw e))))
 
+(defn- repl-text [x]
+  (if (string? x) x (pr-str x)))
+
+(defn- dataset-text [^js v]
+  (let [n (aget v "numRows")
+        cols (aget v "columnNames")]
+    (str "#dataset {:rows " (if (fn? n) (.call n v) n)
+         (when (fn? cols) (str " :columns " (pr-str (vec (.call cols v)))))
+         "}")))
+
+(defn repl-value-text
+  "The REPL text of a value. A dataset gives its size, because its rows can be
+   too many to print."
+  [v]
+  (if (and (some? v) (not (js/Array.isArray v)) (some? (aget v "numRows")))
+    (dataset-text v)
+    (try (pr-str v) (catch :default _ (str v)))))
+
+(defn ^:async repl-eval!
+  "Evaluates the REPL text `code` with cg.run/eval-cg, as a run evaluates a
+   .cg, so it sees the defs and the aliases of the runs of the page. Gives #js
+   {:value :out}, or #js {:err :out}, and waits for a Promise value. The
+   console.log output of the eval goes to :out, and to the console too."
+  [mod code read-module]
+  (let [log js/console.log
+        out #js []]
+    (set! js/console.log
+          (fn [& xs]
+            (.push out (str (.join (.map (to-array xs) repl-text) " ") "\n"))
+            (apply log xs)))
+    (try
+      (await (ensure-arquero! mod))
+      (await (load-modules! mod code read-module))
+      (let [v (await ((lookup2 mod "run" "eval_cg") code))]
+        #js {:value (repl-value-text v) :out (.join out "")})
+      (catch :default e
+        #js {:err (or (.-message e) (str e)) :out (.join out "")})
+      (finally (set! js/console.log log)))))
+
 (defn report-shaped?
   "True when a run result looks like report data: a summarize tallies vector, a
    single tally map, a block-presence result, or a normalized report table."
@@ -191,9 +230,7 @@
                 (and (aget r "counts") (aget r "rows"))
                 (and (aget r "columns") (aget r "rows")))))))
 
-(defn- numrows-dataset?
-  "A numRows-bearing, non-array, non-report value is already a cg dataset."
-  [r]
+(defn- numrows-dataset? [r]
   (and (some? r)
        (not (js/Array.isArray r))
        (some? (aget r "numRows"))

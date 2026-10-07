@@ -79,8 +79,8 @@
                                (fn [l] (aget l "var"))))))))
 
 (defn- recording-cg-module
-  "A cg module for execute-js! that records its calls in `calls`. Its
-   load_deps_BANG_ resolves one macrotask late, to expose a run that does not wait."
+  "Its load_deps_BANG_ resolves one macrotask late, to expose a run that does
+   not wait."
   [calls]
   #js {:metadata #js {:split_code_and_metadata (fn [text] #js {:code text})}
        :run #js {:run_file (fn [code opts]
@@ -157,10 +157,7 @@
   (is (= 2 (rc/pool-size #js {:userAgent "Windows" :hardwareConcurrency 2})))
   (is (= 2 (rc/pool-size nil))))
 
-(defn- traced-cg-module
-  "A cg module whose run_file sends one trace event, then gives `result`, or
-   fails with `error`."
-  [result error]
+(defn- traced-cg-module [result error]
   (let [listeners #js []]
     #js {:metadata #js {:split_code_and_metadata (fn [text] #js {:code text})}
          :run #js {:run_file (fn [_ _]
@@ -199,6 +196,33 @@
   (is (= "west roxbury" (rc/scalar-text "west roxbury")))
   (is (= "false" (rc/scalar-text false)))
   (is (= "{\"ok\":true}" (rc/scalar-text #js {:ok true}))))
+
+(defn- repl-module [f] #js {:run #js {:eval_cg f}})
+
+(deftest repl-eval-prints-the-value
+  (.then (rc/repl-eval! (repl-module (fn [_] #js [1 "a"])) "(x)" nil)
+         (fn [r] (is (= "[1 \"a\"]" (aget r "value"))))))
+
+(deftest repl-eval-gives-the-output-and-waits-for-a-promise
+  (let [log js/console.log]
+    (.then (rc/repl-eval! (repl-module (fn [_] (js/console.log "hi" #js [2]) (js/Promise.resolve 7))) "(x)" nil)
+           (fn [r]
+             (is (= "7" (aget r "value")))
+             (is (= "hi [2]
+" (aget r "out")))
+             (is (identical? log js/console.log))))))
+
+(deftest repl-eval-gives-the-error
+  (.then (rc/repl-eval! (repl-module (fn [_] (throw (js/Error. "boom")))) "(x)" nil)
+         (fn [r]
+           (is (= "boom" (aget r "err")))
+           (is (nil? (aget r "value"))))))
+
+(deftest repl-eval-summarizes-a-dataset
+  (.then (rc/repl-eval! (repl-module (fn [_] #js {:numRows (fn [] 3)
+                                                  :columnNames (fn [] #js ["geometry" "name"])}))
+                        "(x)" nil)
+         (fn [r] (is (= "#dataset {:rows 3 :columns [\"geometry\" \"name\"]}" (aget r "value"))))))
 
 (.then (js/Promise.resolve (t/run-tests))
        (fn [results]

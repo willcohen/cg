@@ -18,6 +18,7 @@
             [cg.trace :as trace]
             [cg.dataset :as ds]
             [charred.api :as charred]
+            [nrepl.core :as nrepl]
             [ring.core.protocols :as protocols]))
 
 (set! *warn-on-reflection* true)
@@ -326,6 +327,43 @@
   (let [r (api/execution-start {:headers {"x-session-id" "no-such-session"}
                                 :body {:code layer-models-code}})]
     (is (= 404 (:status r)))))
+
+(defn- repl-port [sid]
+  (let [r (api/session-repl {:headers {"x-session-id" sid}})]
+    (is (= 200 (:status r)) (str "body: " (:body r)))
+    (get-in r [:body :port])))
+
+(defn- repl-eval
+  "The responses of `code` evaluated over nREPL on `port`."
+  [port code]
+  (with-open [conn (nrepl/connect :port port)]
+    (doall (nrepl/message (nrepl/client conn 10000) {:op "eval" :code code}))))
+
+(deftest session-repl-evaluates-in-the-session-test
+  (with-session
+    (fn [sid]
+      (session-execution sid {:code layer-models-code})
+      (let [port (repl-port sid)]
+        (is (pos-int? port))
+        (is (= port (repl-port sid)) "one server for each session")
+        (is (= [2] (nrepl/response-values
+                    (repl-eval port "(ds/row-count (get cg.session/results \"dots\"))")))
+            "the datasets of the last run")
+        (is (= (str ":hi" (System/lineSeparator))
+               (apply str (keep :out (repl-eval port "(println :hi)"))))
+            "the output goes to the REPL client")
+        (repl-eval port "(def from-repl 7)")
+        (is (= 7 (run/eval-cg* (:sci-ctx (get @api/sessions sid)) "from-repl"))
+            "a REPL def goes into the session")))))
+
+(deftest session-delete-stops-the-repl-test
+  (let [sid (get-in (api/session-create {}) [:body :session-id])
+        port (repl-port sid)]
+    (api/session-delete {:headers {"x-session-id" sid}})
+    (is (thrown? java.net.ConnectException (java.net.Socket. "127.0.0.1" (int port))))))
+
+(deftest session-repl-unknown-session-test
+  (is (= 404 (:status (api/session-repl {:headers {"x-session-id" "no-such-session"}})))))
 
 (deftest execution-trace-sse-stream-test
   (testing "SSE stream carries proc events and terminates with the execution-ended sentinel"

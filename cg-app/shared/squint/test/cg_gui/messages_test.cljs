@@ -60,6 +60,7 @@
    {:type "cg/status" :channel "map" :from "host" :to "view" :fields ["text"]}
    {:type "cg/module-text" :channel "map" :from "host" :to "view"
     :fields ["id" "path" "text?" "error?"]}
+   {:type "cg/repl-eval" :channel "map" :from "host" :to "view" :fields ["id" "code"]}
 
    {:type "cg/ready" :channel "map" :from "view" :to "host"}
    {:type "cg/run-started" :channel "map" :from "view" :to "host"}
@@ -70,6 +71,8 @@
    {:type "cg/viewport-settled" :channel "map" :from "view" :to "host"
     :fields ["bbox"]}
    {:type "cg/map-error" :channel "map" :from "view" :to "host" :fields ["error"]}
+   {:type "cg/repl-result" :channel "map" :from "view" :to "host"
+    :fields ["id" "out" "value?" "err?"]}
    {:type "cg/trace-event" :channel "map" :from "view" :to "host"
     :fields ["event"]}
 

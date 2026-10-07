@@ -16,8 +16,7 @@
     "betterthantomorrow.calva"
   ],
   "activationEvents": [
-    "workspaceContains:**/*.cg",
-    "onCustomEditor:cg.flowEditor"
+    "workspaceContains:**/*.cg"
   ],
   "main": "dist/extension.js",
   "contributes": {
@@ -68,6 +67,16 @@
         "command": "cg.showDatasets",
         "category": "CG",
         "title": "Show Datasets (JVM)"
+      },
+      {
+        "command": "cg.connectRepl",
+        "category": "CG",
+        "title": "Connect REPL (JVM)"
+      },
+      {
+        "command": "cg.connectReplJs",
+        "category": "CG",
+        "title": "Connect REPL (JS)"
       },
       {
         "command": "cg.showRunStatus",

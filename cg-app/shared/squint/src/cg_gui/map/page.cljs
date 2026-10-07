@@ -5,9 +5,9 @@
 ;; SPDX-License-Identifier: Apache-2.0 WITH LLVM-exception
 
 (ns cg-gui.map.page
-  "The page of the cg-vscode CG Map tab. It runs a .cg on the JS backend and
-   draws the layers of a run or of cg/layers. `post` sends a message to the
-   host."
+  "The page of the cg-vscode CG Map tab. It runs a .cg on the JS backend,
+   draws the layers of a run or of cg/layers, and evaluates the forms of the
+   JS REPL. `post` sends a message to the host."
   (:require [cg-gui.map.core :as mc]
             [cg-gui.map.popup :as popup]
             [cg-gui.run.js :as run-js]))
@@ -144,6 +144,15 @@
     (catch :default e
       (status! (str "run failed: " (error-text e))))))
 
+(defn ^:async repl-eval!
+  "Evaluates the REPL form of the message `m` in the page of the runs, and
+   posts cg/repl-result."
+  [ctx ^js m]
+  (let [r (await (run-js/repl-eval! (:mod ctx) (.-code m) (:read-module ctx)))]
+    (aset r "type" "cg/repl-result")
+    (aset r "id" (.-id m))
+    ((:post ctx) r)))
+
 (defn- draw-jvm-layers! [ctx layers]
   (.then (draw! (:map-ready ctx) layers)
          (fn [_] (status! (str (.-length layers) " layer(s) from the JVM session")))
@@ -163,10 +172,12 @@
     {:post post :mod mod :urls (.-urls opts) :map-ready map-ready
      :read-module (module-reader post)}))
 
-;; One run at a time, because the trace listeners of cg see each run that is
-;; on, and the canvas must get the messages of one run.
-(defn- queue-run! [!runs m]
-  (swap! !runs (fn [p] (.then p (fn [ctx] (.then (run-cg! ctx m) (fn [_] ctx)))))))
+;; One run or REPL form at a time, because the trace listeners of cg see each
+;; run that is on, and the canvas must get the messages of one run. A failure
+;; must not stop the queue.
+(defn- queue! [!runs f m]
+  (swap! !runs (fn [p] (.then p (fn [ctx] (.then (.catch (f ctx m) (fn [_] nil))
+                                                 (fn [_] ctx)))))))
 
 (defn start!
   "Starts the page. opts: post, cgBundle (the URL of the cg browser bundle)
@@ -180,7 +191,8 @@
                        (fn [^js e]
                          (let [m (.-data e)]
                            (case (when m (.-type m))
-                             "cg/run" (queue-run! !runs m)
+                             "cg/run" (queue! !runs run-cg! m)
+                             "cg/repl-eval" (queue! !runs repl-eval! m)
                              "cg/layers" (.then boot (fn [ctx] (draw-jvm-layers! ctx (.-layers m))))
                              "cg/status" (status! (.-text m))
                              "cg/module-text" (answer-module! m)

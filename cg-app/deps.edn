@@ -17,7 +17,10 @@
                          ch.qos.logback/logback-classic {:mvn/version "1.4.14"}
                          org.clojure/tools.logging {:mvn/version "1.2.4"}
                          nrepl/nrepl {:mvn/version "1.1.0"}
-                         cider/cider-nrepl {:mvn/version "0.47.1"}}
+                         cider/cider-nrepl {:mvn/version "0.47.1"}
+                         ;; Asks for sci 0.10.49. The sci of cg/cg is newer and wins,
+                         ;; and api-test runs the server on it.
+                         babashka/babashka.nrepl {:mvn/version "0.0.8"}}
             :jvm-opts ["--enable-native-access=ALL-UNNAMED"]
             :main-opts ["-m" "cg-app.backend.server"]}
 
@@ -38,6 +41,8 @@
                       metosin/reitit-ring {:mvn/version "0.7.0"}
                       ch.qos.logback/logback-classic {:mvn/version "1.4.14"}
                       org.clojure/tools.logging {:mvn/version "1.2.4"}
+                      babashka/babashka.nrepl {:mvn/version "0.0.8"}
+                      nrepl/nrepl {:mvn/version "1.1.0"}
                       io.github.cognitect-labs/test-runner
                       {:git/tag "v0.5.1" :git/sha "dfb30dd"}}
          :jvm-opts ["--enable-native-access=ALL-UNNAMED"]

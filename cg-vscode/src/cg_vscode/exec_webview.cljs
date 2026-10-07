@@ -20,7 +20,8 @@
             [cg-vscode.run-status :as run-status]
             [cg-vscode.runtime :as runtime]
             [cg-vscode.runtime.jvm-client :as jvm]
-            [cg-vscode.doc :as doc]))
+            [cg-vscode.doc :as doc]
+            [cg-vscode.repl.js-repl :as js-repl]))
 
 (defonce ^:private !panel (atom nil))
 (defonce ^:private !ready (atom false))
@@ -33,6 +34,11 @@
 (defonce ^:private !last-vars (atom nil))
 ;; A newer viewport refetch supersedes one in flight.
 (defonce ^:private !refetch-gen (atom 0))
+;; The Promise of the nREPL server of the JS REPL, and the evals that wait
+;; for the page: id -> resolve.
+(defonce ^:private !js-repl (atom nil))
+(defonce ^:private repl-waits (js/Map.))
+(defonce ^:private !repl-seq (atom 0))
 
 (defn- resolve-dirs
   "The dirs that the tab serves, from the fsPath of the extension."
@@ -166,14 +172,14 @@
                           #js {:type "cg/run-error"
                                :message (str "the parser failed: " (.-message e))})))))
 
-(defn ^:async run-in-tab-session!
-  "jvm/run-in-session in the session of the tab, again in a new session when
-   that one expired."
-  [port req on-event]
-  (let [r (await (jvm/run-in-session port (await (ensure-map-session! port)) req on-event))]
+(defn ^:async with-tab-session!
+  "(f session-id) with the JVM session of the tab, again with a new session
+   when `f` gives {:expired true}."
+  [port f]
+  (let [r (await (f (await (ensure-map-session! port))))]
     (if (:expired r)
       (do (reset! !map-session nil)
-          (await (jvm/run-in-session port (await (ensure-map-session! port)) req on-event)))
+          (await (f (await (ensure-map-session! port)))))
       r)))
 
 (defn- jvm-run-request
@@ -217,8 +223,9 @@
     (post #js {:type "cg/run-started" :file file})
     (post-status! panel "running in the JVM session")
     (try
-      (let [r (await (run-in-tab-session! port (jvm-run-request !state uri (.getText document))
-                                          (fn [evt] (post #js {:type "cg/trace-event" :event evt}))))]
+      (let [req (jvm-run-request !state uri (.getText document))
+            on-event (fn [evt] (post #js {:type "cg/trace-event" :event evt}))
+            r (await (with-tab-session! port (fn [sid] (jvm/run-in-session port sid req on-event))))]
         (if-let [res (:result r)]
           (end-jvm-run! panel post file res)
           (fail! (:error r))))
@@ -267,6 +274,30 @@
       (catch :default e
         (answer #js {:error (str "load-module " p ": " (.-message e))})))))
 
+(defn- page-eval
+  "Sends the REPL text `code` to the page of the tab. Gives a Promise of #js
+   {:value :out} or #js {:err :out}."
+  [code]
+  (let [^js panel @!panel]
+    (if (and panel @!ready)
+      (js/Promise.
+       (fn [res _]
+         (swap! !repl-seq inc)
+         (let [id @!repl-seq]
+           (.set repl-waits id res)
+           (.. panel -webview (postMessage #js {:type "cg/repl-eval" :id id :code code})))))
+      (js/Promise.resolve
+       #js {:err "the CG Map tab is not open or not ready. Open it with CG: Open Map." :out ""}))))
+
+(defn- answer-repl! [^js msg]
+  (when-let [res (.get repl-waits (.-id msg))]
+    (.delete repl-waits (.-id msg))
+    (res msg)))
+
+(defn- drop-repl-waits! []
+  (.forEach repl-waits (fn [res _] (res #js {:err "the CG Map tab closed" :out ""})))
+  (.clear repl-waits))
+
 (defn- relay!
   "Posts the canvas messages of the map message `msg` to the canvas of the
    document of the run. `end?` closes the run."
@@ -285,6 +316,7 @@
                               (post-pending! panel))
     "cg/read-module"      (answer-module-read! panel msg)
     "cg/viewport-settled" (handle-viewport-settled! panel (.-bbox msg))
+    "cg/repl-result"      (answer-repl! msg)
     "cg/run-started"      (relay! !state msg false)
     "cg/trace-event"      (relay! !state msg false)
     "cg/run-ended"        (relay! !state msg true)
@@ -340,7 +372,7 @@
                           (reset! !panel nil) (reset! !ready false)
                           (reset! !last-run nil) (reset! !run-docs []) (reset! !map-session nil)
                           (reset! !jvm-port nil) (reset! !last-vars nil)
-                          (reset! !refetch-gen 0)))
+                          (reset! !refetch-gen 0) (drop-repl-waits!)))
     panel))
 
 (defn- ensure-panel!
@@ -418,11 +450,61 @@
                        "CG: Show Datasets needs the JVM backend, and it did not start. See the CG output.")
                       (post-status! panel "the JVM backend did not start")))))))))
 
+(defn ^:async connect-calva!
+  "Connects Calva to the nREPL on `repl-port` with the connect sequence
+   `sequence`, or shows the address when Calva is not installed."
+  [repl-port sequence]
+  (let [addr (str "localhost:" repl-port)]
+    (if (vscode/extensions.getExtension "betterthantomorrow.calva")
+      (await (vscode/commands.executeCommand "calva.connect"
+                                             #js {:host "localhost" :port (str repl-port)
+                                                  :connectSequence sequence}))
+      (when (= "Copy" (await (vscode/window.showInformationMessage
+                              (str "CG: the REPL of the CG Map session is on " addr) "Copy")))
+        (await (vscode/env.clipboard.writeText addr))))))
+
+(defn ^:async connect-repl!
+  "The command handler: starts the nREPL of the JVM session of the CG Map
+   tab, where the JVM runs keep their datasets, and connects to it."
+  [!state & _]
+  (let [{:keys [reachable port]} (await (runtime/ensure-backend! !state (:runtime/output-channel @!state)))]
+    (if-not reachable
+      (vscode/window.showErrorMessage
+       "CG: Connect REPL needs the JVM backend, and it did not start. See the CG output.")
+      (let [r (await (with-tab-session! port (fn [sid] (jvm/start-repl port sid))))]
+        (if-let [repl-port (:port r)]
+          (await (connect-calva! repl-port "Generic"))
+          (vscode/window.showErrorMessage (str "CG: Connect REPL failed: " (:error r))))))))
+
+(defn ^:async ensure-js-repl!
+  "The nREPL server of the JS REPL, started one time."
+  []
+  (when (nil? @!js-repl)
+    (reset! !js-repl (js-repl/start-server! page-eval)))
+  (await @!js-repl))
+
+(defn ^:async connect-repl-js!
+  "The command handler: opens the CG Map tab, starts the nREPL of its JS
+   runtime, and connects to it. A REPL form sees the defs of the JS runs of
+   the tab."
+  [!state & _]
+  (canvas-tab! !state)
+  (let [^js srv (await (ensure-js-repl!))]
+    (await (connect-calva! (aget srv "port") "squint"))))
+
+(defn- stop-js-repl! []
+  (when-let [p @!js-repl]
+    (reset! !js-repl nil)
+    (.then p js-repl/stop-server!)))
+
 (defn register-run-commands!
-  "`CG: Eval (JS)`, `CG: Run` and `CG: Show Datasets (JVM)`. The JS backend is
-   the CG Map tab, because only a webview loads wasmts the way the web app
-   does."
+  "`CG: Eval (JS)`, `CG: Run`, `CG: Show Datasets (JVM)` and the two `CG:
+   Connect REPL` commands. The JS backend is the CG Map tab, because only a
+   webview loads wasmts the way the web app does."
   [!state]
   (lc/register-command! !state "cg.evalJs" (fn [state] (run-active! state run-js! "CG: Eval (JS)")))
   (lc/register-command! !state "cg.runEval" (fn [state] (run-active! state run-in-tab! "CG: Run")))
-  (lc/register-command! !state "cg.showDatasets" show-datasets!))
+  (lc/register-command! !state "cg.showDatasets" show-datasets!)
+  (lc/register-command! !state "cg.connectRepl" connect-repl!)
+  (lc/register-command! !state "cg.connectReplJs" connect-repl-js!)
+  (lc/push-disposable! !state #js {:dispose stop-js-repl!}))

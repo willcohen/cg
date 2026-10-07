@@ -7,7 +7,8 @@
 (ns cg-app.backend.api
   "API handlers for the CG backend. A run returns a summary, not geometries,
    and a client fetches one dataset through /api/data/:var."
-  (:require [cg.run :as run]
+  (:require [babashka.nrepl.server :as nrepl-server]
+            [cg.run :as run]
             [cg.geo :as geo]
             [cg.dsl :as dsl]
             [cg.dataset :as ds]
@@ -45,7 +46,8 @@
         (map str (keys dsl/cg-namespaces))))
 
 (def ^:private session-ttl-ms
-  "Sessions expire after 30 minutes of inactivity."
+  "Sessions expire after 30 minutes of inactivity, except a session with a
+   REPL (see session-repl)."
   (* 30 60 1000))
 
 (defn- now-ms [] (System/currentTimeMillis))
@@ -116,7 +118,7 @@
   (let [cutoff (- (now-ms) session-ttl-ms)]
     (swap! sessions
            (fn [m]
-             (into {} (filter (fn [[_ s]] (> (:last-access s) cutoff)) m))))))
+             (into {} (filter (fn [[_ s]] (or (:repl s) (> (:last-access s) cutoff))) m))))))
 
 (defn- get-session-id [request]
   (or (get-in request [:headers "x-session-id"])
@@ -564,13 +566,53 @@
     {:status 200
      :body {:session-id sid}}))
 
+(defn- sci-out-printer
+  "`f` with *out* bound to the current sci/out, which an nREPL eval binds to
+   its client. The cg context prints with the JVM fns, which write to *out*."
+  [f]
+  (fn [& xs] (binding [*out* @sci/out] (apply f xs))))
+
+(defn- start-repl-server!
+  "Starts an nREPL server on the SCI context `ctx`, on 127.0.0.1 and a port
+   that the OS assigns. Gives {:server :port}."
+  [ctx]
+  (swap! (:env ctx) update-in [:namespaces 'clojure.core] merge
+         (update-vals {'println println 'print print 'prn prn 'pr pr} sci-out-printer))
+  (let [server (nrepl-server/start-server! ctx {:host "127.0.0.1" :port 0 :quiet true})]
+    {:server server
+     :port (.getLocalPort ^java.net.ServerSocket (:socket server))}))
+
+(defonce ^:private repl-lock (Object.))
+
+(defn session-repl
+  "POST /api/session/repl: starts an nREPL server on the context of the
+   session, one time for each session, and gives {:port}. The REPL and the
+   runs of the session share their vars."
+  [request]
+  (try
+    (let [sess (get-session! request)
+          sid (get-session-id request)
+          repl (locking repl-lock
+                 (or (get-in @sessions [sid :repl])
+                     (let [r (start-repl-server! (:sci-ctx sess))]
+                       (swap! sessions assoc-in [sid :repl] r)
+                       r)))]
+      (log/info "REPL of session" sid "on port" (:port repl))
+      {:status 200
+       :body {:port (:port repl)}})
+    (catch Exception e
+      (log/error e "Failed to start the session REPL")
+      {:status (or (:status (ex-data e)) 500)
+       :body {:error (.getMessage e)}})))
+
 (defn session-delete
   "DELETE /api/session/delete - Destroy a session and free resources.
    Session ID from X-Session-Id header."
   [request]
   (let [sid (get-session-id request)]
     (if (and sid (get @sessions sid))
-      (do (swap! sessions dissoc sid)
+      (do (some-> (get-in @sessions [sid :repl :server]) nrepl-server/stop-server!)
+          (swap! sessions dissoc sid)
           (log/info "Deleted session" sid)
           {:status 200
            :body {:status "ok"}})

@@ -5,13 +5,14 @@
 ;; SPDX-License-Identifier: Apache-2.0 WITH LLVM-exception
 
 (ns cg-vscode.session-run-jvm-test
-  "jvm-client/run-in-session against a running cg-app backend: the trace, and
-   the layers that the CG Map tab draws. Set CG_JVM_PORT to the bound port;
-   with no reachable backend, the test skips."
+  "jvm-client/run-in-session and start-repl against a running cg-app backend:
+   the trace, the layers that the CG Map tab draws, and the nREPL. Set
+   CG_JVM_PORT to the bound port; with no reachable backend, the test skips."
   (:require [cljs.test :as t :refer [deftest is]]
             ["../../src/cg_vscode/runtime/jvm_client.mjs" :as jvm]
             ["../../../cg-app/shared/squint/src/cg_gui/run/js.mjs" :as run-js]
-            ["http" :as http]))
+            ["http" :as http]
+            ["net" :as net]))
 
 (def ^:private jvm-port
   (let [p (aget (.-env js/process) "CG_JVM_PORT")]
@@ -58,6 +59,24 @@
     (is true)
     (is (:expired (await (jvm/run-in-session jvm-port "no-such-session"
                                              #js {:code layer-models} (fn [_] nil)))))))
+
+(defn- accepts? [port]
+  (js/Promise.
+   (fn [resolve _]
+     (let [^js sock (net/connect #js {:host "127.0.0.1" :port port})]
+       (.on sock "connect" (fn [] (.destroy sock) (resolve true)))
+       (.on sock "error" (fn [_] (resolve false)))))))
+
+(deftest ^:async the-repl-of-a-session-starts-one-time
+  (if-not (and jvm-port (await (backend-up? jvm-port)))
+    (is true)
+    (let [sid (await (jvm/create-session jvm-port))
+          r1 (await (jvm/start-repl jvm-port sid))
+          r2 (await (jvm/start-repl jvm-port sid))]
+      (is (pos? (:port r1)) (str "start-repl: " r1))
+      (is (= (:port r1) (:port r2)))
+      (is (await (accepts? (:port r1))) "the nREPL takes a connection")
+      (is (:expired (await (jvm/start-repl jvm-port "no-such-session")))))))
 
 (.then (js/Promise.resolve (t/run-tests))
        (fn [results]

@@ -34,6 +34,7 @@
      ["/create" {:post api/session-create}]
      ["/delete" {:delete api/session-delete}]
      ["/load" {:post api/session-load}]
+     ["/repl" {:post api/session-repl}]
      ["/vars" {:get api/session-vars}]
      ["/source" {:post api/session-source}]]
     ["/data/:var" {:post api/data-var}]]])
