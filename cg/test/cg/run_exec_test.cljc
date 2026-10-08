@@ -91,7 +91,8 @@
   (is (= "dots" (:model r)))
   (is (= ["rings" "broken"] (mapv :model (:layers r)))
       "the other map-layer models, with no model of another sink")
-  (is (some? (:error (second (:layers r)))) "a failed layer does not fail the run")
+  (is (= "the table :missing does not exist" (:error (second (:layers r))))
+      "a failed layer does not fail the run")
   ;; The JS lane gives the sink's map, and the JVM its collected vector.
   (let [res (:result (first (:layers r)))]
     (is (= "rings" (:var (if (map? res) res (first res)))))))

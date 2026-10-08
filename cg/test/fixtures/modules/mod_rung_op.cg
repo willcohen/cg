@@ -1,0 +1,10 @@
+(ns test.mod-rung-op
+  "Fixture for load_module_test: an op with a positional param and an
+   option map after the row, as cg.parcel/analyze-parcel has. Only
+   mod_rung_user.cg loads this module, so its op has no schema before that
+   load.")
+
+(defn ^:op scaled
+  {:outputs {:result {:type :number}}}
+  [^:row ^{:type :number} x ^{:type :number} k ^{:type :map} opts]
+  (* x k (:factor opts)))

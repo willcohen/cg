@@ -49,12 +49,10 @@
       "each module keeps its own helper, and cross-module calls resolve"))
 
 (defn- check-area! [area]
-  (is (= (geo/area (feature/polygon [[0 0] [10 0] [10 10] [0 10] [0 0]])) area)
-      "the module's op runs"))
+  (is (= (geo/area (feature/polygon [[0 0] [10 0] [10 10] [0 10] [0 0]])) area)))
 
 (defn- check-rung! [result]
-  (is (= [(geo/area (square))] (vec result))
-      "the module's op runs as a rung under the module's alias"))
+  (is (= [(geo/area (square))] (vec result))))
 
 #?(:cljs
    (defn ^:async run-module-rung! []
@@ -78,11 +76,28 @@
        :cljs (run-load-module!))))
 
 (deftest module-op-as-an-item-rung
-  (testing "(item-> :squares (a/area-of)), with area-of from mod_a"
-    #?(:clj (do (run/load-module mod-a)
-                (check-rung! (run/run-model (run/eval-cg rung-src)
-                                            {:squares [(square)]} {})))
-       :cljs (run-module-rung!))))
+  #?(:clj (do (run/load-module mod-a)
+              (check-rung! (run/run-model (run/eval-cg rung-src)
+                                          {:squares [(square)]} {})))
+     :cljs (run-module-rung!)))
+
+;; A module's rung must get the param names of an op of a module that it
+;; loads. On the JS runtime the module compiles before its own load-module
+;; calls run, as boston.cg did under a file that loaded it.
+(def ^:private rung-user "test/fixtures/modules/mod_rung_user.cg")
+
+(def ^:private scale-src
+  "(require '[test.mod-rung-user :as u]) (u/scale-model 3 {:factor 2})")
+
+#?(:cljs
+   (defn ^:async run-rung-of-a-loaded-module! []
+     (await (run/load-module rung-user))
+     (is (= [6 12] (vec (await (run/run-model (run/eval-cg scale-src) {:xs [1 2]} {})))))))
+
+(deftest a-module-rung-binds-the-params-of-an-op-that-it-loads
+  #?(:clj (do (run/load-module rung-user)
+              (is (= [6 12] (vec (run/run-model (run/eval-cg scale-src) {:xs [1 2]} {})))))
+     :cljs (run-rung-of-a-loaded-module!)))
 
 ;; cg.cache/version-hash runs on the JS runtime too, because a flow file
 ;; computes the key of a checkpoint when it loads. The hash differs between
@@ -99,12 +114,11 @@
      (check-hash! (run/eval-cg cache-hash-src))))
 
 (deftest cache-version-hash-runs-on-both-runtimes
-  (testing "cg.cache/version-hash runs where a flow file loads"
-    #?(:clj (do (run/load-module "src/cg/cache.cg")
-                (let [h (run/eval-cg cache-hash-src)]
-                  (check-hash! h)
-                  (is (= "214a0400" h) "the JVM hash of this key")))
-       :cljs (run-cache-hash!))))
+  #?(:clj (do (run/load-module "src/cg/cache.cg")
+              (let [h (run/eval-cg cache-hash-src)]
+                (check-hash! h)
+                (is (= "214a0400" h) "the JVM hash of this key")))
+     :cljs (run-cache-hash!)))
 
 ;; A module's ns name may carry metadata; the name is the symbol after
 ;; it.
@@ -120,11 +134,10 @@
      (is (= 42 (run/eval-cg twice-src)))))
 
 (deftest a-marked-module-loads-under-its-name
-  (testing "(ns ^:module test.mod-marked ...)"
-    #?(:clj (let [info (run/load-module marked)]
-              (is (= "test.mod-marked" (str (:ns-name info))))
-              (is (= 42 (run/eval-cg twice-src))))
-       :cljs (run-marked!))))
+  #?(:clj (let [info (run/load-module marked)]
+            (is (= "test.mod-marked" (str (:ns-name info))))
+            (is (= 42 (run/eval-cg twice-src))))
+     :cljs (run-marked!)))
 
 ;; A consumer of the library runs in a folder that has no src/cg/. The
 ;; JVM then reads a library module from the classpath. test/ is a classpath

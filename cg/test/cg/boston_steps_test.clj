@@ -18,15 +18,24 @@
     (run/load-module "examples/boston.cg")
     (t)))
 
-(defn- boston-fn [n]
-  (deref (run/eval-cg (str "#'boston/" n))))
+(defn- cg-value [qualified-name]
+  (deref (run/eval-cg (str "#'" qualified-name))))
 
 (deftest the-boston-steps
-  (testing "roll-up-parcels is a table op, because it takes a table"
-    (is (some? (feature/get-operation-info "boston/roll-up-parcels"))))
-  (testing "analyze-parcels is a table op"
+  (testing "roll-up-parcels and analyze-parcels are table ops, because they take a table"
+    (is (some? (feature/get-operation-info "boston/roll-up-parcels")))
     (is (some? (feature/get-operation-info "boston/analyze-parcels"))))
   (testing "the other steps are plain fns, because they take no table or row"
-    (doseq [n ["label-neighborhood" "ensure-analysis!"]]
-      (is (fn? (boston-fn n)) n)
-      (is (nil? (feature/get-operation-info (str "boston/" n))) n))))
+    (doseq [n ["boston/label-neighborhood" "boston/ensure-analysis!"]]
+      (is (fn? (cg-value n)) n)
+      (is (nil? (feature/get-operation-info n)) n))))
+
+(deftest the-flat-row-keeps-the-cumulative-side-setback
+  (let [rules  (cg-value "boston/boston-current-rules")
+        row    {:edges [{:edge-type :side :setback 4.0} {:edge-type :side :setback 6.5}
+                        {:edge-type :rear :setback 20.0}]
+                :metrics {}}
+        values ((cg-value "cg.zoning/measure-values")
+                rules row (cg-value "boston/boston-parcel-schema"))]
+    (is (= 10.5 (:actual-cumulative-side-setback
+                  ((cg-value "cg.zoning/result-columns") rules values {}))))))

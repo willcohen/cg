@@ -157,7 +157,7 @@
 
 #?(:clj
    (defn terminate-cg-workers!
-     "Shut the JVM workload pool down. Gives :terminated or :no-pool."
+     "Gives :terminated or :no-pool."
      []
      (if-let [handle (cg-pool-reg/current-jvm-pool)]
        (do (wp/shutdown-pool! (:registry handle))
@@ -395,8 +395,7 @@
 ;; predicate applies to the whole input dataset, not to each row.
 
 (defn- evaluate-when-row-predicate
-  "Evaluate the when-row `predicate` against `dset`. Only \"has-column?\" is
-   implemented; any other kind throws."
+  "Only \"has-column?\" is implemented; any other kind throws."
   ;; The param is `dset`, not `dataset`. Under squint a param named `dataset`
   ;; shadows the cg.dataset alias: (dataset/has-column? ...) then reads a
   ;; property of the dataset object, which is undefined, and the flow step
@@ -413,9 +412,7 @@
                       {:predicate predicate
                        :predicate-kinds-implemented #{"has-column?"}})))))
 
-(defn- op-schema
-  "The registered :params schema of the op that `node` names."
-  [node]
+(defn- op-schema [node]
   (:params (feature/get-operation-info (fusion/node->op-key node))))
 
 (defn- param-values
@@ -427,6 +424,19 @@
     (into (mapv #(get params %) names)
           (for [[k v] params :when (not (contains? named k))] v))))
 
+(defn- apply-params
+  "Call `op-fn` with `item` (omitted when nil) and the params: the values of a
+  map in `schema` order, the elements of a vector, or any other value as one arg."
+  [op-fn item params schema]
+  (let [args (cond
+               (map? params) (param-values params schema)
+               (vector? params) params
+               (some? params) [params]
+               :else [])]
+    (if (nil? item)
+      (apply op-fn args)
+      (apply op-fn item args))))
+
 (defn- when-row-apply-body
   "Apply the parsed body op `body`, {:fn <qualified-name> :params ...}, to
    `dataset`. Throws for a body with no :fn (a nested pipeline or when-row)."
@@ -435,13 +445,7 @@
     (when (nil? fn-ref)
       (throw (ex-info "when-row body lacks :fn; nested pipeline/when-row bodies are not yet runnable"
                       {:body body})))
-    (let [op-fn (resolve-operation fn-ref)
-          params (:params body)]
-      (cond
-        (map? params) (apply op-fn dataset (param-values params (op-schema body)))
-        (vector? params) (apply op-fn dataset params)
-        (some? params) (op-fn dataset params)
-        :else (op-fn dataset)))))
+    (apply-params (resolve-operation fn-ref) dataset (:params body) (op-schema body))))
 
 (defn when-row
   "Apply `body` to the dataset when the predicate holds. Otherwise give the
@@ -510,36 +514,6 @@
                             (update m k (fnil conj []) v))
                           acc row))
              {} result-rows))))
-
-(defn- apply-params
-  "Call `op-fn` with `item` (omitted when nil) and the params: the values of a
-  map in `schema` order, the elements of a vector, or any other value as one arg."
-  [op-fn item params schema]
-  (if (nil? item)
-    (cond
-      (map? params)
-      (apply op-fn (param-values params schema))
-
-      (vector? params)
-      (apply op-fn params)
-
-      (some? params)
-      (op-fn params)
-
-      :else
-      (op-fn))
-    (cond
-      (map? params)
-      (apply op-fn item (param-values params schema))
-
-      (vector? params)
-      (apply op-fn item params)
-
-      (some? params)
-      (op-fn item params)
-
-      :else
-      (op-fn item))))
 
 (defn source-operation->step
   "A step fn for a source operation: on its dummy :trigger input it emits the
@@ -1031,6 +1005,25 @@
        :else
        {"_result" (preview-value results 500)})))
 
+(defn- row-errors
+  "{:failed-rows :total-rows :first-error} of the rows of `results` that
+   carry :error, or nil when none does. A per-row op that throws leaves
+   :error on its row and the run goes on, therefore a run whose rows all fail
+   gives no other sign of it. A dataset reads only its :error column."
+  [results]
+  (let [errors (cond
+                 (dataset/dataset? results)
+                 (when (dataset/has-column? results :error)
+                   (vec (dataset/column results :error)))
+
+                 (sequential? results)
+                 (mapv (fn [r] (when (map? r) (get r :error))) results))
+        failed (filterv some? errors)]
+    (when (seq failed)
+      {:failed-rows (count failed)
+       :total-rows  (count errors)
+       :first-error (str (first failed))})))
+
 #?(:clj
    (defn instrument-flow-step
      "Wrap the step fn `step-fn` to emit `proc-start`, `proc-complete` and
@@ -1361,27 +1354,21 @@
   [model]
   (expand-groups model))
 
-(defn model->flow-config
-  "The flow config of `model`, without execution. See model->flow for the
-  shape."
-  [model bindings]
-  (model->flow model bindings))
+(defn- create-pool-flow [config]
+  (flow/create-flow
+   #?(:clj (assoc config :compute-exec (cg-pool-reg/current-compute-exec))
+      :cljs (cond-> config
+              (cg-pool-reg/current-pool)
+              (assoc :compute-exec (cg-pool-reg/joint-compute-pool))))))
 
 (defn create-flow
-  "Create a flow from `model` and `bindings`. The flow is not started."
+  "The flow is not started."
   [model bindings]
   ;; The flow needs the compute executor before model->flow reads it, because
   ;; a :workload :compute step such as transform-coords-step calls PROJ
   ;; through the per-thread Context of a pool worker.
   #?(:clj (ensure-cg-workers!))
-  (let [{:keys [config]} (model->flow model bindings)]
-    #?(:clj (flow/create-flow
-             (assoc config
-                    :compute-exec (cg-pool-reg/current-compute-exec)))
-       :cljs (flow/create-flow
-              (cond-> config
-                (cg-pool-reg/current-pool)
-                (assoc :compute-exec (cg-pool-reg/joint-compute-pool)))))))
+  (create-pool-flow (:config (model->flow model bindings))))
 
 (defn validate-flow-config
   "Check the flow config of `model`: each connection names a defined proc,
@@ -1516,13 +1503,7 @@
     ;; See create-flow: the compute executor must exist before model->flow.
     #?(:clj (ensure-cg-workers!))
     (let [{:keys [config result-atom completed]} (model->flow flow-model bindings opts)
-          flow-obj #?(:clj (flow/create-flow
-                            (assoc config
-                                   :compute-exec (cg-pool-reg/current-compute-exec)))
-                      :cljs (flow/create-flow
-                             (cond-> config
-                               (cg-pool-reg/current-pool)
-                               (assoc :compute-exec (cg-pool-reg/joint-compute-pool)))))]
+          flow-obj (create-pool-flow config)]
 
       #?(:clj
          (let [flow-name (or (:name flow-model) "anon")
@@ -1580,8 +1561,9 @@
                (flow/stop flow-obj)
 
                (trace/emit! "flow-complete"
-                            (cond-> {:flow flow-name
-                                     :ms (- (System/currentTimeMillis) flow-t0)}
+                            (cond-> (merge {:flow flow-name
+                                            :ms (- (System/currentTimeMillis) flow-t0)}
+                                           (row-errors results))
                               (some? results)
                               (assoc :results-preview (results-preview results))))
 
@@ -1620,8 +1602,9 @@
                   resolve (fn [v]
                             ((:stop! watch))
                             (trace/emit! "flow-complete"
-                                         {:flow flow-name
-                                          :ms (- (js/Date.now) flow-t0)})
+                                         (merge {:flow flow-name
+                                                 :ms (- (js/Date.now) flow-t0)}
+                                                (row-errors v)))
                             (resolve* v))
                   reject (fn [e]
                            ((:stop! watch))
@@ -1688,19 +1671,8 @@
                              (check-done))))
                   (.catch reject)))))))))
 
-(defn run-operation
-  "Run one operation through a flow. Not implemented: this fn always throws."
-  [op-fn data params _opts]
-  (throw (ex-info "Single operation execution not yet implemented"
-                  {:operation op-fn
-                   :data-count (count data)
-                   :params params})))
-
 ;; cg.dsl loads on first use, because a require of it here makes a cycle.
-#?(:clj
-   (def ^:private cg-context-atom
-     "The CG context, made on first use (see ensure-cg-context!)."
-     (atom nil)))
+#?(:clj (def ^:private cg-context-atom (atom nil)))
 
 #?(:clj
    (def ^:private loaded-module-hashes
@@ -1716,7 +1688,11 @@
        (reset! cg-context-atom ((resolve 'cg.dsl/create-cg-context))))
      @cg-context-atom))
 
-#?(:clj (declare ^:dynamic *cg-context*))
+#?(:clj
+   (def ^:dynamic *cg-context*
+     "The SCI context of eval-cg, and so of run-file, when bound. A backend
+      session binds its own context, so that a run keeps its values there."
+     nil))
 
 #?(:cljs (def ^:private js-model (js* "model")))
 #?(:cljs (def ^:private js-macros (js* "macros")))
@@ -1730,26 +1706,14 @@
 #?(:cljs
    (defn- compile-with-macros
      "Compile CG source to JS with squint and the cg macros in `cg-macros`, with
-      imports and exports elided for eval."
-     [src cg-macros]
+      imports and exports elided for eval. `context` is \"statement\" or
+      \"expr\", the squint :context."
+     [src cg-macros context]
      (.-javascript
       ((.-compileStringEx squint-compiler)
        src
        #js {:macros cg-macros
-            :context "statement"
-            :elide-imports true
-            :elide-exports true}
-       ((.-compileStringEx squint-compiler) "(ns user)" #js {:macros cg-macros})))))
-
-#?(:cljs
-   (defn- compile-expr-with-macros
-     "Compile CG source to a JS expression, the cg macros in `cg-macros`."
-     [src cg-macros]
-     (.-javascript
-      ((.-compileStringEx squint-compiler)
-       src
-       #js {:macros cg-macros
-            :context "expr"
+            :context context
             :elide-imports true
             :elide-exports true}
        ((.-compileStringEx squint-compiler) "(ns user)" #js {:macros cg-macros})))))
@@ -1761,7 +1725,7 @@
      []
      (let [cg-macros #js {"cg.macros" #js {}}
            entries (aget cg-macros "cg.macros")
-           compile-expr (fn [src] (compile-expr-with-macros src cg-macros))]
+           compile-expr (fn [src] (compile-with-macros src cg-macros "expr"))]
        (aset entries "item->" (macros/threading* :item compile-expr))
        (aset entries "coll->" (macros/threading* :coll compile-expr))
        (aset entries "table->" (macros/threading* :table compile-expr))
@@ -1776,7 +1740,8 @@
       (-> code-str
           (str/replace #"\(require\s+'\[cg\.macros[^\]]*\]\)" ";; macros pre-loaded")
           (str/replace #"\((item->|coll->|table->)(?=\s)" "(cg.macros/$1"))
-      (cg-macros-option))))
+      (cg-macros-option)
+      "statement")))
 
 #?(:cljs (defonce ^:private module-namespaces (atom {})))
 #?(:cljs (defonce ^:private module-loads (atom {})))
@@ -2024,9 +1989,7 @@
         :flags (vec (keep (fn [[k x]] (when (true? x) (name k))) m))})))
 
 #?(:clj
-   (defn- register-op-var!
-     "Register the op of `v` when `v` is the var of a defn with ^:op."
-     [v]
+   (defn- register-op-var! [v]
      (when (and (instance? sci.lang.Var v) (:op (meta v)))
        (when-not (seq (:arglists (meta v)))
          (throw (ex-info (str "op '" (:name (meta v)) "' must be a defn") {:var v})))
@@ -2120,10 +2083,12 @@
               :let [r (:data-ref node)]]
           (if #?(:clj (or (instance? clojure.lang.Named r) (string? r))
                  :cljs (string? r))
-            [r #?(:clj (eval-cg (str file-ns (name r)))
-                  :cljs (if file-ns
-                          (unchecked-get file-ns (util/munge-name (name r)))
-                          (eval-cg (name r))))]
+            [r (or (try #?(:clj (eval-cg (str file-ns (name r)))
+                           :cljs (if file-ns
+                                   (unchecked-get file-ns (util/munge-name (name r)))
+                                   (eval-cg (name r))))
+                        (catch #?(:clj Exception :cljs :default) _ nil))
+                   (throw (ex-info (str "the table :" (name r) " does not exist") {:table (name r)})))]
             [r r]))))
 
 (defn- model-names-or-nil
@@ -2318,26 +2283,63 @@
          path)))
 
 #?(:cljs
+   (defn ^:async read-module-text
+     "The text of the module `path`, from the reader of set-module-reader!, else
+      from the file (Node)."
+     [path]
+     (await (js/Promise.resolve (if-let [f @module-reader]
+                                  (f path)
+                                  (util/read-file (module-file path)))))))
+
+#?(:cljs
+   (defn- module-ns-name
+     "The name of the ns form of the module source `text`, or nil. It skips
+      metadata on the name, such as ^:no-doc."
+     [text]
+     (second (re-find #"\(ns\s+(?:\^\S+\s+)*([^\s\)]+)" text))))
+
+#?(:cljs
+   (defn- ^:async register-module-ops! [text ns-name]
+     (when (re-find op-marker text)
+       (await (parser/init! nil)))
+     (register-ops-of! text ns-name
+                       (fn [munged] (unchecked-get (module-namespace ns-name) munged)))))
+
+#?(:cljs
+   (defn ^:async register-dep-ops!
+     "Registers the ops of each module that `text` loads with run/load-module,
+      and of the modules that those load, with no run. A rung binds its args
+      by the param names of its op when the module compiles, and the
+      load-module calls of the module run only after the compile. `seen` is an
+      atom of the visited paths, which ends a cycle."
+     [text seen]
+     (doseq [[_ path] (re-seq #"\(run/load-module\s+\"([^\"]+)\"\)" text)]
+       (when-not (or (contains? @seen path) (get @module-loads path))
+         (swap! seen conj path)
+         (let [dep     (await (read-module-text path))
+               ns-name (module-ns-name dep)]
+           (when ns-name
+             (await (register-module-ops! dep ns-name))
+             (await (register-dep-ops! dep seen))))))))
+
+#?(:cljs
    (defn ^:async load-module-text!
      "Evaluate `text` as the CG module of `path`. See load-module."
      [path text]
-     ;; Skips metadata on the name, such as ^:no-doc.
-     (let [ns-name (second (re-find #"\(ns\s+(?:\^\S+\s+)*([^\s\)]+)" text))]
+     (let [ns-name (module-ns-name text)]
        (when-not ns-name
          (throw (ex-info (str "Module must start with (ns ...) form: " path)
                          {:path path})))
        (let [info {:ns-name ns-name :path path}
              aliases (vals (into {} (map (fn [[n a]] [a [n a]])) (code-aliases text)))
              _ (swap! module-loads assoc path info)
+             _ (await (register-dep-ops! text (atom #{path})))
              ;; The aliases first: the threading macros resolve them while
              ;; the module compiles.
              _ (doseq [[n a] aliases]
                  (when-not (= n "cg.macros")
                    (macros/register-alias! a n)))
-             _ (when (re-find op-marker text)
-                 (await (parser/init! nil)))
-             _ (register-ops-of! text ns-name
-                                 (fn [munged] (unchecked-get (module-namespace ns-name) munged)))
+             _ (await (register-module-ops! text ns-name))
              module-fn ((js* "(0, eval)")
                         (module-js text (map (fn [[_ a]] (util/munge-alias a)) aliases)))]
          (set-globals! (eval-globals))
@@ -2357,11 +2359,7 @@
       is loaded or loading. Reads the file with the reader of set-module-reader!."
      [path]
      (or (get @module-loads path)
-         (await (load-module-text!
-                 path
-                 (await (js/Promise.resolve (if-let [f @module-reader]
-                                              (f path)
-                                              (util/read-file (module-file path))))))))))
+         (await (load-module-text! path (await (read-module-text path)))))))
 
 #?(:cljs
    (defn ^:async load-entry-module!
@@ -2392,9 +2390,3 @@
      (reset! loaded-module-hashes {})
      (reset! cg-context-atom ((resolve 'cg.dsl/create-cg-context)))
      @cg-context-atom))
-
-#?(:clj
-   (def ^:dynamic *cg-context*
-     "The SCI context of eval-cg, and so of run-file, when bound. A backend
-      session binds its own context, so that a run keeps its values there."
-     nil))
