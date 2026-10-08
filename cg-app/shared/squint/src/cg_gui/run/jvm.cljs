@@ -24,9 +24,7 @@
       (= 404 status) {:expired true}
       :else {:error (or (some-> body (aget "error")) (str label " HTTP " status))})))
 
-(defn ^:async health?
-  "True when the backend answers /api/health with 200."
-  [send]
+(defn ^:async health? [send]
   (try (= 200 (aget (await (send "GET" "/api/health" nil nil)) "status"))
        (catch :default _ false)))
 
@@ -38,10 +36,11 @@
         (throw (js/Error. (str "session/create HTTP " (aget res "status")))))))
 
 (defn ^:async load-session
-  "Evaluates `code` in the session. {:ok vars :files}."
-  [send sid code filename]
+  "Evaluates `code` in the session. {:ok vars :files}. `root`, when given, is
+   the project dir that the relative module paths of `code` resolve against."
+  [send sid code filename root]
   (outcome (await (send "POST" "/api/session/load" (session-headers sid)
-                        #js {:code code :filename filename}))
+                        #js {:code code :filename filename :root root}))
            "session/load"
            (fn [b] {:ok (some-> b (aget "vars")) :files (some-> b (aget "files"))})))
 

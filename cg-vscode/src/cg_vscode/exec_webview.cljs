@@ -22,6 +22,7 @@
             [cg-vscode.runtime.jvm-client :as jvm-client]
             ["../../../cg-app/shared/squint/src/cg_gui/run/jvm.mjs" :as jvm]
             [cg-vscode.doc :as doc]
+            [cg-vscode.repl.calva :as calva]
             [cg-vscode.repl.js-repl :as js-repl]))
 
 (defonce ^:private !panel (atom nil))
@@ -107,15 +108,17 @@
 (defn ^:async run-jvm-feed!
   "Loads the .cg in the JVM session of the tab, again in a new session when
    the session expired, and draws its dataset vars (Show Datasets)."
-  [^js panel port text filename]
+  [^js panel port ^js document]
   (reset! !jvm-port port)
   ;; session/load has no response timeout, and a first load can take minutes.
   (post-status! panel "loading session (a first-run full analysis takes minutes)")
   (try
     (let [r (await (with-tab-session! port
                      (fn [send sid]
-                       (jvm-client/load-layers send sid text filename
-                                               {:limit jvm-client/default-row-limit}))))]
+                       (jvm-client/load-layers send sid (.getText document)
+                                               (path/basename (.. document -uri -fsPath))
+                                               {:limit jvm-client/default-row-limit
+                                                :root (modules/bb-root-for-document document)}))))]
       (remember-fetched-vars! r)
       (render-jvm-result! panel r))
     (catch :default e
@@ -167,11 +170,13 @@
                                :message (str "the parser failed: " (.-message e))})))))
 
 (defn- jvm-run-request
-  "The execution request of the document `cg-uri`, with the model that its
-   canvas picked."
-  [!state ^js cg-uri text]
-  (let [model (get-in @!state [:editor/run-models (str cg-uri)])
-        req #js {:code text :filename (path/basename (.-fsPath cg-uri))}]
+  "The execution request of `document`, with the model that its canvas picked
+   and the project dir that its relative module paths resolve against."
+  [!state ^js document]
+  (let [^js cg-uri (.-uri document)
+        model (get-in @!state [:editor/run-models (str cg-uri)])
+        req #js {:code (.getText document) :filename (path/basename (.-fsPath cg-uri))
+                 :root (modules/bb-root-for-document document)}]
     (when model (aset req "opts" #js {:name model :model model}))
     req))
 
@@ -207,7 +212,7 @@
     (post #js {:type "cg/run-started" :file file})
     (post-status! panel "running in the JVM session")
     (try
-      (let [req (jvm-run-request !state uri (.getText document))
+      (let [req (jvm-run-request !state document)
             on-event (fn [evt] (post #js {:type "cg/trace-event" :event evt}))
             r (await (with-tab-session! port (fn [_ sid] (jvm-client/run-in-session port sid req on-event))))]
         (if-let [res (:result r)]
@@ -237,8 +242,8 @@
       :else (await (run-js! !state panel document)))))
 
 (defn ^:async answer-module-read!
-  "Answers cg/read-module of the page with the text of the module, resolved
-   against the bb root of the document of the run, as `bb run` resolves it."
+  "Answers cg/read-module of the page with the text of the module of the
+   document of the run, from modules/resolve-module-path."
   [^js panel ^js msg]
   (let [id (.-id msg)
         p (.-path msg)
@@ -254,7 +259,7 @@
             text (when abs (modules/read-text-safe! abs))]
         (if text
           (answer #js {:text text})
-          (answer #js {:error (str "load-module " p ": no such file under the bb root of the .cg")})))
+          (answer #js {:error (str "load-module " p ": no such file under the bb root of the .cg or in cg")})))
       (catch :default e
         (answer #js {:error (str "load-module " p ": " (.-message e))})))))
 
@@ -439,8 +444,7 @@
      panel
      (fn ^:async show [^js document]
        (when-let [port (await (jvm-port! !state panel "CG: Show Datasets"))]
-         (await (run-jvm-feed! panel port (.getText document)
-                               (path/basename (.. document -uri -fsPath)))))))))
+         (await (run-jvm-feed! panel port document)))))))
 
 (defn ^:async run-jvm-now!
   "Runs `document` on the JVM with the tab `panel`, whatever the runtime
@@ -451,15 +455,31 @@
     (run-status/post! !state (str (.-uri document))
                       #js {:type "cg/run-error" :message "the JVM backend did not start"})))
 
+(defn ^:async active-cg-document
+  "The .cg document in view, or nil."
+  []
+  (when-let [^js uri (doc/active-cg-uri)]
+    (await (vscode/workspace.openTextDocument uri))))
+
+(defn- calva-sequence
+  "The Calva connect sequence of `runtime`, with the root and the ns of
+   `document` when there is one."
+  [runtime ^js document]
+  (calva/connect-sequence runtime
+                          (some-> document modules/bb-root-for-document)
+                          (some-> document .getText calva/file-ns)))
+
 (defn ^:async connect-calva!
   "Connects Calva to the nREPL on `repl-port` with the connect sequence
-   `sequence`, or shows the address when Calva is not installed."
+   `sequence` and opens the REPL Window, the Calva view that takes input. With
+   no Calva, shows the address."
   [repl-port sequence]
   (let [addr (str "localhost:" repl-port)]
     (if (vscode/extensions.getExtension "betterthantomorrow.calva")
-      (await (vscode/commands.executeCommand "calva.connect"
-                                             #js {:host "localhost" :port (str repl-port)
-                                                  :connectSequence sequence}))
+      (do (await (vscode/commands.executeCommand "calva.connect"
+                                                 #js {:host "localhost" :port (str repl-port)
+                                                      :connectSequence sequence}))
+          (await (vscode/commands.executeCommand "calva.showReplWindow")))
       (when (= "Copy" (await (vscode/window.showInformationMessage
                               (str "CG: the REPL of the CG Map session is on " addr) "Copy")))
         (await (vscode/env.clipboard.writeText addr))))))
@@ -468,11 +488,13 @@
   "The command handler: starts the nREPL of the JVM session of the CG Map
    tab, where the JVM runs keep their datasets, and connects to it."
   [!state & _]
-  (when-let [port (await (jvm-port! !state @!panel "CG: Connect REPL (JVM)"))]
-    (let [r (await (with-tab-session! port (fn [send sid] (jvm/start-repl send sid))))]
-      (if-let [repl-port (:port r)]
-        (await (connect-calva! repl-port "Generic"))
-        (vscode/window.showErrorMessage (str "CG: Connect REPL failed: " (:error r)))))))
+  (let [document (await (active-cg-document))]
+    ;; No panel: a status of the connect would stay on the map after it.
+    (when-let [port (await (jvm-port! !state nil "CG: Connect REPL (JVM)"))]
+      (let [r (await (with-tab-session! port (fn [send sid] (jvm/start-repl send sid))))]
+        (if-let [repl-port (:port r)]
+          (await (connect-calva! repl-port (calva-sequence "jvm" document)))
+          (vscode/window.showErrorMessage (str "CG: Connect REPL failed: " (:error r))))))))
 
 (defn ^:async ensure-js-repl!
   "The nREPL server of the JS REPL, started one time."
@@ -486,9 +508,10 @@
    runtime, and connects to it. A REPL form sees the defs of the JS runs of
    the tab."
   [!state & _]
-  (canvas-tab! !state)
-  (let [^js srv (await (ensure-js-repl!))]
-    (await (connect-calva! (aget srv "port") "squint"))))
+  (let [document (await (active-cg-document))]
+    (canvas-tab! !state)
+    (let [^js srv (await (ensure-js-repl!))]
+      (await (connect-calva! (aget srv "port") (calva-sequence "js" document))))))
 
 (defn- stop-js-repl! []
   (when-let [p @!js-repl]

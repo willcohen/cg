@@ -70,10 +70,11 @@
                           some?)})))
 
 (defn ^:async load-layers
-  "Loads `code` in the session and fetches its dataset vars, or `:vars`, as
-   layers. Gives {:layers :warnings}, {:expired true} or {:error <msg>}."
-  [send sid code filename {:keys [vars bbox limit]}]
-  (let [loaded (await (jvm/load-session send sid code filename))
+  "Loads `code` in the session, with its project dir `root`, and fetches its
+   dataset vars, or `:vars`, as layers. Gives {:layers :warnings}, {:expired
+   true} or {:error <msg>}."
+  [send sid code filename {:keys [vars bbox limit root]}]
+  (let [loaded (await (jvm/load-session send sid code filename root))
         listed (when-not (or (:expired loaded) (:error loaded) (seq vars))
                  (await (jvm/dataset-var-names send sid)))]
     (cond

@@ -9,6 +9,7 @@
   from real CG DSL code."
   (:require [clojure.test :refer [deftest is testing]]
             [clojure.core.async :as async]
+            [clojure.java.io :as io]
             [clojure.string]
             [cg-app.backend.api :as api]
             [cg.run :as run]
@@ -327,6 +328,72 @@
   (let [r (api/execution-start {:headers {"x-session-id" "no-such-session"}
                                 :body {:code layer-models-code}})]
     (is (= 404 (:status r)))))
+
+(defn- with-project
+  "Calls (f root) with a temp project dir that holds `files` (relative path ->
+   text), and deletes the dir after."
+  [files f]
+  (let [root (str (java.nio.file.Files/createTempDirectory
+                   "cg-root" (make-array java.nio.file.attribute.FileAttribute 0)))]
+    (try
+      (doseq [[path text] files]
+        (io/make-parents root path)
+        (spit (io/file root path) text))
+      (f root)
+      (finally
+        (run! #(.delete ^java.io.File %) (reverse (file-seq (io/file root))))))))
+
+(def ^:private project-files
+  "A project outside the cg folder, which its main file reads by relative paths."
+  {"lib/roads.cg" "(ns roads)\n(def lanes 3)\n"
+   "data/note.txt" "hello"})
+
+(def ^:private project-main-code
+  "(require '[cg.feature :as f] '[cg.geo :as geo] '[cg.run :as run])
+(require '[cg.macros :refer [item->]])
+(run/load-module \"lib/roads.cg\")
+(require '[roads])
+(def note (slurp \"data/note.txt\"))
+(def pts (mapv (fn [i] (f/point i i)) (range roads/lanes)))
+(def model (item-> :pts (geo/buffer 1)))")
+
+(deftest session-execution-resolves-paths-against-the-root-test
+  (with-project project-files
+    (fn [root]
+      (with-session
+        (fn [sid]
+          (let [r (session-execution sid {:code project-main-code :root root})
+                ctx (:sci-ctx (get @api/sessions sid))]
+            (is (= "complete" (get-in r [:body :status])) (str "body: " (:body r)))
+            (is (= 3 (get-in r [:body :result :count])) "the run sees the def of the module")
+            (is (= "hello" (run/eval-cg* ctx "note")) "slurp reads a file under the root")
+            (is (= (.getAbsolutePath (io/file root "lib/roads.cg"))
+                   (:path (run/eval-cg* ctx "(cg.run/load-module \"lib/roads.cg\")")))
+                "a later eval resolves like the last run")))))))
+
+(deftest session-load-resolves-paths-against-the-root-test
+  (with-project project-files
+    (fn [root]
+      (with-session
+        (fn [sid]
+          (let [r (api/session-load {:headers {"x-session-id" sid}
+                                     :body {:code project-main-code :filename "main.cg" :root root}})
+                ctx (:sci-ctx (get @api/sessions sid))]
+            (is (= 200 (:status r)) (str "body: " (:body r)))
+            (is (= 3 (count (run/eval-cg* ctx "pts"))))
+            (is (= "hello" (run/eval-cg* ctx "note")))))))))
+
+(deftest session-root-comes-before-the-cg-project-test
+  (with-project {"deps.edn" "{:root true}"}
+    (fn [root]
+      (with-session
+        (fn [sid]
+          (let [ctx (:sci-ctx (get @api/sessions sid))
+                read-deps #(run/eval-cg* ctx "(slurp \"deps.edn\")")]
+            (is (= (slurp (io/file api/cg-project-root "deps.edn")) (read-deps))
+                "with no root, the file of the cg project")
+            (api/session-load {:headers {"x-session-id" sid} :body {:code "nil" :root root}})
+            (is (= "{:root true}" (read-deps)))))))))
 
 (defn- repl-port [sid]
   (let [r (api/session-repl {:headers {"x-session-id" sid}})]

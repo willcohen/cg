@@ -19,6 +19,7 @@
             [sci.lang]
             [charred.api :as charred]
             [clojure.core.async :as async]
+            [clojure.java.io :as io]
             [clojure.string :as str]
             [clojure.walk :as walk]
             [clojure.tools.logging :as log]
@@ -52,17 +53,45 @@
 
 (defn- now-ms [] (System/currentTimeMillis))
 
+(defn- file-under
+  "The absolute path of `path` under the directory `dir` when that file
+   exists, else nil."
+  [dir path]
+  (when dir
+    (let [f (java.io.File. ^String dir ^String path)]
+      (when (.exists f)
+        (.getAbsolutePath f)))))
+
 (defn- resolve-cg-path
   "Resolves a relative path against the CG project root when the file exists
    there. Else returns `path`."
   [path]
+  (if (.isAbsolute (java.io.File. ^String path))
+    path
+    (or (file-under cg-project-root path) path)))
+
+(defn- session-input
+  "What the session `sid` reads for `path`: an absolute path as it is, else the
+   file under the :root of the session, else the file under the CG project
+   root, else the classpath resource of the library as cg.run/module-text
+   finds it, else `path`."
+  [sid path]
   (let [f (java.io.File. ^String path)]
     (if (.isAbsolute f)
       path
-      (let [cg-file (java.io.File. ^String cg-project-root ^String path)]
-        (if (.exists cg-file)
-          (.getAbsolutePath cg-file)
-          path)))))
+      ;; The root is read at each call, because a later request can change it.
+      (or (file-under (get-in @sessions [sid :root]) path)
+          (file-under cg-project-root path)
+          (when-not (.exists f)
+            (io/resource (str/replace-first path #"^src/" "")))
+          path))))
+
+(defn- set-session-root!
+  "Keeps `root` as the :root of the session `sid`, when there is a root. The
+   last root wins, so a later REPL eval resolves paths like the last run."
+  [sid root]
+  (when root
+    (swap! sessions #(cond-> % (contains? % sid) (assoc-in [sid :root] root)))))
 
 (defonce ^:private default-context-rooted
   ;; run/run-file evaluates in the default cg.run context, where load-module
@@ -79,9 +108,9 @@
       true)))
 
 (defn- new-session
-  "Creates a session with its own SCI context. Overrides load-module and slurp
-   to resolve paths against the CG project root."
-  []
+  "Creates the session `sid` with its own SCI context. Overrides load-module
+   and slurp to read paths as session-input does."
+  [sid]
   (let [ctx (dsl/create-cg-context)
         env (:env ctx)
         ;; path -> content hash. Record the path before the eval, or two
@@ -90,8 +119,9 @@
         loaded (atom {})]
     (swap! env assoc-in [:namespaces 'cg.run 'load-module]
            (fn [path]
-             (let [resolved (resolve-cg-path path)
-                   content (slurp resolved)
+             (let [input (session-input sid path)
+                   resolved (str input)
+                   content (slurp input)
                    h (hash content)]
                (when-not (= h (get @loaded resolved))
                  (swap! loaded assoc resolved h)
@@ -103,7 +133,7 @@
                {:path resolved})))
     (swap! env assoc-in [:namespaces 'clojure.core 'slurp]
            (fn [path & opts]
-             (apply slurp (resolve-cg-path path) opts)))
+             (apply slurp (session-input sid path) opts)))
     {:sci-ctx ctx
      :files []
      :var-meta {}
@@ -423,13 +453,15 @@
 (defn execution-start
   "POST /api/execution/start: runs the request in a future and returns
    {:execution-id id}. With X-Session-Id, the run is in that session (see
-   run-in-session), and an unknown session gets 404. Only one execution
+   run-in-session), and an unknown session gets 404. A `root` in the body
+   becomes the :root of the session (see session-input). Only one execution
    streams at a time; a second gets 409."
   [request]
   (try
     (prune-executions!)
     (let [body (:body request)
-          sess (when (get-session-id request) (get-session! request))
+          sid (get-session-id request)
+          sess (when sid (get-session! request))
           id (str (java.util.UUID/randomUUID))
           ;; The mult waits for each tap. A full fixed buffer with no reader
           ;; blocks the global trace stream for the whole process. A dropped
@@ -438,7 +470,7 @@
           entry {:id id
                  :chan ch
                  :status :running
-                 :session-id (get-session-id request)
+                 :session-id sid
                  :started-at (now-ms)}
           [_ new] (swap-vals! executions
                               (fn [m] (if (live-execution m) m (assoc m id entry))))]
@@ -447,7 +479,8 @@
             {:status 409
              :body {:error "Another execution is already streaming; trace events are global, so executions serialize"
                     :live-execution-id (:id (live-execution new))}})
-        (do (trace/tap-trace ch)
+        (do (when sess (set-session-root! sid (:root body)))
+            (trace/tap-trace ch)
             (future (run-execution! id body sess))
             {:status 200
              :body {:execution-id id}})))
@@ -561,7 +594,7 @@
   [_request]
   (expire-sessions!)
   (let [sid (str (java.util.UUID/randomUUID))]
-    (swap! sessions assoc sid (new-session))
+    (swap! sessions assoc sid (new-session sid))
     (log/info "Created session" sid)
     {:status 200
      :body {:session-id sid}}))
@@ -621,15 +654,17 @@
 
 (defn session-load
   "POST /api/session/load: evaluates .cg code in the session. The body has
-   `code` (with an optional `filename`), or `path` for a file on the server."
+   `code` (with an optional `filename`), or `path` for a file on the server,
+   and an optional `root` for the session (see session-input)."
   [request]
   (try
     (let [sess (get-session! request)
           sid (get-session-id request)
-          {:keys [code path filename]} (:body request)
+          {:keys [code path filename root]} (:body request)
+          _ (set-session-root! sid root)
           [content label] (cond
                             code [code (or filename "<eval>")]
-                            path [(slurp (resolve-cg-path path)) path]
+                            path [(slurp (session-input sid path)) path]
                             :else (throw (ex-info "Provide 'code' or 'path'" {:status 400})))
           _ (log/info "Loading" label "in session" sid)
           ctx (:sci-ctx sess)

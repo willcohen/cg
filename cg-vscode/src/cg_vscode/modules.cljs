@@ -9,11 +9,12 @@
   (:require ["vscode" :as vscode]
             ["fs" :as fs]
             [cg-vscode.extract :as extract]
+            [cg-vscode.module-file :as module-file]
             ["../../../cg-app/shared/squint/src/cg_gui/doc/modules.mjs" :as doc-modules]))
 
 (defn bb-root-for-document
   "The nearest directory with a bb.edn above the document, else the workspace
-   folder. `bb run` starts there, and module paths resolve against it."
+   folder. Module paths resolve against it."
   [^js document]
   (let [start-path (.-fsPath (.-uri document))
         node-path (js/require "path")]
@@ -28,19 +29,22 @@
         :else
         (recur (.dirname node-path dir))))))
 
+(defn- cg-dir
+  "The cg folder of the checkout that holds the extension, or nil."
+  []
+  (when-let [^js ext (vscode/extensions.getExtension "wcohen.cg-vscode")]
+    (.resolve (js/require "path") (.-extensionPath ext) ".." "cg")))
+
 (defn resolve-module-path
-  "The absolute path of a module path under the bb root of the document, or
-   nil when no file is there."
+  "The absolute path of a module path under the bb root of the document, else
+   in the cg folder, or nil. The JVM session resolves in the same order."
   [^js document path-str]
-  (let [^js node-path (js/require "path")
-        root (or (try (bb-root-for-document document) (catch :default _ nil))
-                 (.dirname node-path (.-fsPath (.-uri document))))
-        candidate (.resolve node-path root path-str)]
-    (when (.existsSync fs candidate) candidate)))
+  (module-file/find-under [(bb-root-for-document document) (cg-dir)] path-str
+                          #(.existsSync fs %)))
 
 (defn read-text-safe!
-  "Reads `path` as UTF-8 text. Returns nil on failure, because a module that
-   cannot be read must not stop the render of the main flow."
+  "Returns nil on failure, because a module that cannot be read must not stop
+   the render of the main flow."
   [path]
   (try (.toString (.readFileSync fs path) "utf8")
        (catch :default _ nil)))
