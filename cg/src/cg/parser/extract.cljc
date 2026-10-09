@@ -744,12 +744,12 @@
         (let [collected
               (reduce (fn [acc [k v]]
                         (cond
-                          (nil? k)
+                          (nil? v)
                           (update acc :diagnostics conj
                                   (diag :op-malformed
                                         (str "op '" op-name "' " port-key-text
                                              " entry is missing a value")
-                                        (w/node->span inner-node)))
+                                        (w/node->span k)))
 
                           (not (w/kwd? k))
                           (update acc :diagnostics conj

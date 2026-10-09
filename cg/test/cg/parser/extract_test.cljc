@@ -808,6 +808,16 @@
            (is (nil? (-> op :outputs first :type))))))))
 
 #?(:clj
+   (deftest an-op-output-without-a-value-emits-diagnostic
+     (testing "an :outputs key with no config fires :op-malformed at the key"
+       (let [flow (parser/extract-models "(defn ^:op f {:outputs {:a}} [x] x)")
+             d (first (filter #(= :op-malformed (:code %)) (:diagnostics flow)))]
+         (is (some? d))
+         (is (re-find #"entry is missing a value" (:message d)))
+         (is (= {:start-line 1 :start-column 25 :end-line 1 :end-column 27}
+                (:location d)))))))
+
+#?(:clj
    (deftest op-duplicate-names-detected
      (testing "two ops with the same name yield :duplicate-operation-name"
        (let [flow (parser/extract-models
