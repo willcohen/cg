@@ -1131,7 +1131,7 @@
             (ds/filter-column dataset id-column uuids))
           (let [g (feature/to-jts featurelike)
                 bool-col (keyword (.toString ^java.util.UUID (random-uuid)))
-                de-9im-fn (fn [row] {bool-col ((de-9im-operation g) (row geom-column))})]
+                de-9im-fn (fn [row] {bool-col (de-9im-operation (row geom-column) g)})]
             (warn-once-no-index! dataset geom-column)
             (-> (tc/select-rows (ds/row-map dataset de-9im-fn) (comp true? bool-col))
                 (ds/drop-columns [bool-col]))))))

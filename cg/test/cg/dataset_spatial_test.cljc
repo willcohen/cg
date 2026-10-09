@@ -83,6 +83,22 @@
   (is (true? (ds/intersects-any? (two-squares) (feature/point 105 5)))
       "with no index, a scan of the rows"))
 
+(defn- small-square []
+  (feature/polygon [[2 2] [4 2] [4 4] [2 4] [2 2]]))
+
+(defn- nested-squares []
+  (ds/maps->dataset [{:id "big" :geometry (square 0 10)}
+                     {:id "small" :geometry (small-square)}]))
+
+(deftest select-contains-and-select-within-test-the-row-against-the-query
+  (doseq [[label d] [["no index" (nested-squares)]
+                     ["index" (ds/add-spatial-index (nested-squares))]]]
+    (testing label
+      (is (= ["small"] (ids (ds/select-within d (small-square)))))
+      (is (= ["big" "small"] (ids (ds/select-within d (square 0 10)))))
+      (is (= ["big" "small"] (ids (ds/select-contains d (small-square)))))
+      (is (= ["big"] (ids (ds/select-contains d (square 0 10))))))))
+
 ;; :footprint holds the squares of :geometry in the opposite order, so a
 ;; point in the first square selects row 1 by :geometry and row 2 by
 ;; :footprint.
