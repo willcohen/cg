@@ -1228,11 +1228,11 @@
   #?(:clj (ensure-cg-workers!))
   (cg-flow/create-pool-flow (:config (model->flow model bindings))))
 
-(defn validate-flow-config
-  "Check the flow config of `model`: each connection names a defined proc,
-  and each source node has data. Gives nil, or throws ex-info."
-  [model bindings]
-  (let [{:keys [config sources]} (model->flow model bindings)
+(defn- validate-flow-def
+  "Check `flow-def`, the model->flow of `model`: each connection names a
+  defined proc, and each source node has data. Gives nil, or throws ex-info."
+  [flow-def model bindings]
+  (let [{:keys [config sources]} flow-def
         {:keys [procs conns]} config]
     (doseq [[[from-pid _] [to-pid _]] conns]
       (when-not (get procs from-pid)
@@ -1281,21 +1281,24 @@
 
     (when-not (model/model? flow-model)
       (throw (ex-info "Invalid model" {:model flow-model})))
-    (validate-flow-config flow-model bindings)
 
     ;; See create-flow: the compute executor must exist before model->flow.
     #?(:clj (ensure-cg-workers!))
-    (cg-flow/run-flow
-     (model->flow flow-model bindings opts)
-     (assoc (select-keys opts [:timeout-ms :return-flow?])
-            :name (:name flow-model)
-            :pids (mapv #(wire-pid flow-model (:id %))
-                        (filter #(= :operation (:type %)) (:nodes flow-model)))
-            :triggers (source-proc-ids flow-model)
-            :complete-data (fn [results]
-                             (merge (row-errors results)
-                                    #?(:clj (when (some? results)
-                                              {:results-preview (results-preview results)}))))))))
+    ;; Build the flow config one time. A table source registers a dataset
+    ;; context, and only the ::flow/stop of a flow that runs unregisters it.
+    (let [flow-def (model->flow flow-model bindings opts)]
+      (validate-flow-def flow-def flow-model bindings)
+      (cg-flow/run-flow
+       flow-def
+       (assoc (select-keys opts [:timeout-ms])
+              :name (:name flow-model)
+              :pids (mapv #(wire-pid flow-model (:id %))
+                          (filter #(= :operation (:type %)) (:nodes flow-model)))
+              :triggers (source-proc-ids flow-model)
+              :complete-data (fn [results]
+                               (merge (row-errors results)
+                                      #?(:clj (when (some? results)
+                                                {:results-preview (results-preview results)})))))))))
 
 ;; cg.dsl loads on first use, because a require of it here makes a cycle.
 #?(:clj (def ^:private cg-context-atom (atom nil)))

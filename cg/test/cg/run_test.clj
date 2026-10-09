@@ -338,6 +338,23 @@
     (dataset/unregister-dataset-context! ctx-id)
     (is (nil? (dataset/get-dataset-context ctx-id)) "Context should be removed")))
 
+(deftest run-model-leaves-no-dataset-context
+  ;; The table source registers a context when model->flow builds it, and
+  ;; unregisters it at ::flow/stop. A flow config that no flow runs keeps
+  ;; its context.
+  (let [d (ds/->>dataset [{:n 1} {:n 2}])
+        before (set (keys @dataset/dataset-context-store))
+        out (run/run-model (table-> :input (rc-incr)) {:input d} {:timeout-ms 15000})
+        added (fn [] (remove before (keys @dataset/dataset-context-store)))
+        ;; flow/stop does not wait for the procs to stop.
+        left (loop [tries 0]
+               (let [ids (added)]
+                 (if (or (empty? ids) (>= tries 50))
+                   ids
+                   (do (Thread/sleep 50) (recur (inc tries))))))]
+    (is (= [2 4] (mapv :doubled (dataset/rows out :as-maps))))
+    (is (= 0 (count left)) "the run unregisters each context that it registers")))
+
 (deftest test-dataset-batching
   (let [n-rows 100
         points (repeatedly n-rows #(f/point (rand 100) (rand 100)))
