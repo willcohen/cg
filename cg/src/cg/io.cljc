@@ -1190,12 +1190,30 @@
                                         :message (or (.-message e) (str e))})
              (throw e)))))
 
+     (defn- page-label [page-idx source-name]
+       (str "parse page " (inc page-idx) " of " source-name))
+
+     (defn- ^:async gdal-page!
+       "read-page! of the page `page-idx`, in a busy span of worker 0."
+       [bytes page-idx source-name]
+       ;; gdal-wasm sends each GDAL call to worker 0.
+       (let [busy (trace/busy-start! 0 "gdal" (page-label page-idx source-name) nil)
+             p    (try
+                    (await (read-page! bytes (zero? page-idx)))
+                    (catch :default e
+                      (trace/busy-end! busy (ex-message e))
+                      (throw e)))]
+         (trace/busy-end! busy)
+         p))
+
      (defn- ^:async produce-pages!
        "Put the pages of `query-url` on `ch` until the last page or a stop, then
         close `ch`. An error goes on `ch` as #js {:error e}, because no proc
         sees an exception of this loop. The producer parses each page to get
-        its row count and the transfer-limit flag, and the parse step uses that
-        parse."
+        its row count and the transfer-limit flag. JSON.parse parses a page,
+        and GDAL parses a page that JSON.parse rejects. The parse step reuses
+        that parse. GDAL reads a JSON page again when it is page 0, for the
+        field types and the CRS, or when esri-json-page gives nil for it."
        [query-url stop pid ch]
        (try
          (loop [offset 0 page-idx 0]
@@ -1203,11 +1221,17 @@
              (let [url  (if (zero? page-idx) query-url (str query-url "&resultOffset=" offset))
                    page (await (fetch-one! url pid))
                    json (.-json page)
-                   n    (if json (.-length (or (.-features json) #js [])) 0)
+                   ;; JSON.parse rejects NaN, and the json-c parser of GDAL
+                   ;; reads it. The row count of the GDAL parse gives the
+                   ;; offset of the next page.
+                   gdal (when-not json
+                          (await (gdal-page! (.-bytes page) page-idx (source-label query-url))))
+                   n    (.-length (or (some-> (or json gdal) (.-features)) #js []))
                    more (if json
                           (true? (.-exceededTransferLimit json))
                           (more-pages? (.-bytes page)))
                    _    (aset page "pageIdx" page-idx)
+                   _    (aset page "gdal" gdal)
                    ;; put-promise gives false when a stop closed ch.
                    put? (await (ca/put-promise ch page))]
                (when (and put? more (pos? n))
@@ -1223,24 +1247,19 @@
         the first page, as the GDAL driver does."
        [st page box source-name]
        (let [page-idx (.-pageIdx page)
-             label    (str "parse page " (inc page-idx) " of " source-name)
              ;; The first page goes through GDAL for the field types and the
              ;; CRS of the layer.
              json     (when-let [j (when (pos? page-idx) (.-json page))]
-                        (let [busy (trace/busy-start! "main" "main" label nil)
+                        (let [busy (trace/busy-start! "main" "main"
+                                                      (page-label page-idx source-name) nil)
                               p    (esri-json-page j box)]
                           (trace/busy-end! busy)
                           p))
-             parsed   (or json
-                          ;; gdal-wasm sends each GDAL call to worker 0.
-                          (let [busy (trace/busy-start! 0 "gdal" label nil)
-                                p    (try
-                                       (await (read-page! (.-bytes page) (zero? page-idx)))
-                                       (catch :default e
-                                         (trace/busy-end! busy (ex-message e))
-                                         (throw e)))]
-                            (trace/busy-end! busy)
-                            p))
+             parsed   (cond
+                        json json
+                        ;; The producer parsed this page with GDAL.
+                        (nil? (.-json page)) (.-gdal page)
+                        :else (await (gdal-page! (.-bytes page) page-idx source-name)))
              feats    (if parsed (.-features parsed) #js [])
              n        (.-length feats)
              fid0     (when (pos? n) (js/Number (.-fid (aget feats 0))))]

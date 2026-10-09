@@ -7,7 +7,8 @@
 ;; The cg.dataset loaders and cg.io/load-source on both runtimes, with tiny.gpkg
 ;; (3 polygons a, b, c in EPSG:4326) and two GeoServices pages (2 + 1
 ;; features). Under /clip/, the two pages hold polygons with holes and parts
-;; on both sides of the box [0 0 10 10]. On cljs GDAL runs in the worker pool, and each body starts the
+;; on both sides of the box [0 0 10 10]. Under /nan/, page 1 has a NaN value.
+;; On cljs GDAL runs in the worker pool, and each body starts the
 ;; pool and awaits a Promise of a dataset.
 (ns cg.loaders-test
   #?(:clj (:require [clojure.test :refer [deftest is testing]]
@@ -58,6 +59,21 @@
 (defn- clip-layer-url [base-url]
   (str/replace base-url "/FeatureServer/0" "/clip/FeatureServer/0"))
 
+(defn- nan-layer-url [base-url]
+  (str/replace base-url "/FeatureServer/0" "/nan/FeatureServer/0"))
+
+(defn- geoservices-body
+  "The text of the fixture file `nm` for a request to `uri`. Under /nan/, page
+   1 has a NaN value. JSON.parse rejects that page, and the json-c parser of
+   GDAL reads it."
+  [nm uri]
+  (let [text #?(:clj (slurp (jio/file geoservices-dir nm))
+                :cljs (fs/readFileSync (node-path/join geoservices-dir nm) "utf8"))]
+    (if (and (str/includes? uri "/nan/") (= "page1.json" nm))
+      (str/replace text "\"exceededTransferLimit\": true,"
+                   "\"exceededTransferLimit\": true, \"maxScale\": NaN,")
+      text)))
+
 #?(:clj
    (defn- with-geoservices-server
      "Serve the GeoServices paging fixtures. Call (f base-layer-url requests).
@@ -71,9 +87,9 @@
                               hdrs (into {}
                                          (for [[k vs] (.getRequestHeaders ex)]
                                            [(.toLowerCase ^String k) (first vs)]))
-                              body (java.nio.file.Files/readAllBytes
-                                    (.toPath (jio/file geoservices-dir
-                                                       (geoservices-fixture-for uri))))]
+                              body (.getBytes ^String (geoservices-body
+                                                       (geoservices-fixture-for uri) uri)
+                                              "UTF-8")]
                           (swap! requests conj {:uri uri :headers hdrs})
                           (.set (.getResponseHeaders ex) "Content-Type" "application/json")
                           (.sendResponseHeaders ex 200 (alength body))
@@ -101,9 +117,7 @@
                           (let [uri (.-url req)]
                             (swap! requests conj {:uri uri :headers (.-headers req)})
                             (.writeHead res 200 #js {"Content-Type" "application/json"})
-                            (.end res (fs/readFileSync
-                                       (node-path/join geoservices-dir
-                                                       (fixture-for uri))))))
+                            (.end res (geoservices-body (fixture-for uri) uri))))
                  server (http/createServer handle)
                  started (fn []
                            (resolve-start
@@ -293,6 +307,15 @@
            (finally
              (await ((:close srv)))))))
 
+     (defn ^:async run-nan-page! []
+       (await (setup!))
+       (let [srv (await (spin-geoservices-server!))]
+         (try
+           (check-paged-result! (await (ds/load-gdal! (nan-layer-url (:base-url srv)) nil))
+                                (:requests srv))
+           (finally
+             (await ((:close srv)))))))
+
      (defn- first-page-requests [requests]
        (count (filter (fn [u] (and (str/includes? u "/query")
                                    (not (str/includes? u "resultOffset"))))
@@ -428,6 +451,15 @@
                                                :clip-extent [0 0 10 10]))
                 (check-unclipped! (ds/load-gdal! (clip-layer-url layer-url)))))
        :cljs (run-clip!))))
+
+(deftest load-gdal-pages-past-a-page-that-json-parse-rejects
+  (testing "a page with NaN and exceededTransferLimit: true is not the last page"
+    (is (str/includes? (geoservices-body "page1.json" "/nan/FeatureServer/0/query") "NaN")
+        "page 1 under /nan/ has the NaN value")
+    #?(:clj (with-geoservices-server
+              (fn [layer-url requests]
+                (check-paged-result! (ds/load-gdal! (nan-layer-url layer-url)) requests)))
+       :cljs (run-nan-page!))))
 
 #?(:cljs
    (deftest the-page-fetch-runs-as-a-flow
