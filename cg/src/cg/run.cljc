@@ -641,22 +641,8 @@
                     (:coll :collection-level) :collection-level
                     (:table :table-level) :table-level
                     :item-level)
-
-        ;; The registry key is a string on both runtimes (squint has no symbol
-        ;; constructor). A bare name gets its namespace from bare-op-namespaces,
-        ;; because a per-row op registers as "<ns>/<op-name>".
-        raw-fn-sym (let [fn-ref (:fn op-node)]
-                     #?(:clj (cond
-                               (keyword? fn-ref) (subs (str fn-ref) 1)
-                               :else (str fn-ref))
-                        :cljs (str fn-ref)))
-        fn-sym (if (str/includes? raw-fn-sym "/")
-                 raw-fn-sym
-                 (if-let [ns-part (feature/get-bare-op-namespace raw-fn-sym)]
-                   (str ns-part "/" raw-fn-sym)
-                   raw-fn-sym))
-
-        op-info (feature/get-operation-info fn-sym)
+        op-key (fusion/node->op-key op-node)
+        op-info (feature/get-operation-info op-key)
         schema (:params op-info)
         op-type (:type op-info :transformer)]
 
@@ -727,7 +713,7 @@
                   (dataset/wrap-dataset (dataset/maps->dataset processed)))))
              :cljs
              (per-row-step (fn [row] (apply-params op-fn row params schema))
-                           (last (str/split fn-sym #"/"))))
+                           (last (str/split op-key #"/"))))
 
           :else
           (flow/lift1->step

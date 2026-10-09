@@ -19,13 +19,15 @@
    twin here, so it runs on cljs only."
   #?(:clj (:require [clojure.test :refer [deftest is]]
                     [cg.run :as run]
+                    [cg.run.fusion :as fusion]
                     [cg.trace :as trace]
-                    cg.feature
+                    [cg.feature :as feature]
                     [cg.macros :refer [table->]]
                     [clojure.core.async :as a]
                     [tech.v3.dataset :as ds])
      :cljs (:require [cljs.test :refer [deftest is]]
                      ["../../../src/cg/run.mjs" :as run]
+                     ["../../../src/cg/run/fusion.mjs" :as fusion]
                      ["../../../src/cg/dataset.mjs" :as dataset]
                      ["../../../src/cg/feature.mjs" :as feature]
                      ["../../../src/cg/trace_js.mjs" :as trace]
@@ -46,6 +48,13 @@
     (is (= 2 (:failed-rows done)))
     (is (= 4 (:total-rows done)))
     (is (= "even n" (:first-error done)))))
+
+;; On JS, a symbol or a keyword compiles to a string, and squint keyword? is
+;; true for each string.
+(deftest node->op-key-gives-the-registry-key-of-each-op-ref
+  (feature/register-bare-op-namespace! "key-probe" "cg.probe")
+  (doseq [op-ref ['cg.probe/key-probe :cg.probe/key-probe "cg.probe/key-probe" "key-probe"]]
+    (is (= "cg.probe/key-probe" (fusion/node->op-key {:fn op-ref})) (pr-str op-ref))))
 
 #?(:clj
    (do
