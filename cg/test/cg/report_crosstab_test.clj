@@ -5,14 +5,13 @@
 ;; SPDX-License-Identifier: Apache-2.0 WITH LLVM-exception
 
 (ns cg.report-crosstab-test
-  "Byte-for-byte parity gate for the conformity crosstab.
+  "Parity gate for the conformity crosstab.
 
-   The reference implementation below is a verbatim copy of the report
-   code in an analysis script as it stood on
-   2026-08-13, with `println` replaced by collecting the lines. The
-   probe prints that table twice: once per district, and once per
-   neighborhood. Absorbing it into a registered op is only allowed to
-   change where the code lives, never a byte of what it prints.
+   The test of the yes/no lines keeps a copy of the probe code, the report
+   code of an analysis script as it stood on 2026-08-13, with `println`
+   replaced by collecting the lines. The registered op can change where
+   the code lives, but not a byte of what it prints. The crosstab tests
+   check the values of the cells.
 
    The fixture is deterministic and needs no cache and no probe run, so
    this gate runs in the suite instead of behind a 26-minute recompute."
@@ -57,9 +56,6 @@
     :c :overall-conformity-alt-c}])
 
 (def ^:private crosstab-spec
-  "The probe's spec, derived from `dims` so the two paths under test
-   are fed the very same columns in the very same order. The probe
-   carries this same shape as a literal."
   {:categories {:numerator :nonconforming
                 :known [:nonconforming :conforming]
                 :unknown :unknown}
@@ -72,7 +68,6 @@
 (def ^:private cats [:conforming :nonconforming :unknown])
 
 (def ^:private fixture-cols
-  "Every column the eight dimensions name, nils dropped."
   (vec (remove nil? (mapcat (juxt :existing :b :c) dims))))
 
 (defn- row
@@ -93,26 +88,24 @@
 (def ^:private fixture-rows (mapv row (range 47)))
 
 (deftest crosstab-cells-carry-the-numbers-not-just-strings
-  (testing "the op result is data the canvas can render, not preformatted text"
-    (let [result (ds/category-crosstab fixture-rows crosstab-spec)
-          lot-cov (first (:rows result))
-          cell (first (:cells lot-cov))]
-      (is (= "Lot Coverage" (:label lot-cov)))
-      (is (= 47 (:n cell)))
-      (is (= (:nonconforming (:counts cell))
-             (count (filter #(= :nonconforming (:lot-coverage-conformity %))
-                            fixture-rows))))
-      (is (number? (:pct-of-known cell)))
-      (is (number? (:pct-unknown cell)))))
+  (let [result (ds/category-crosstab fixture-rows crosstab-spec)]
+    (testing "the op result is data the canvas can render, not preformatted text"
+      (let [lot-cov (first (:rows result))
+            cell (first (:cells lot-cov))]
+        (is (= "Lot Coverage" (:label lot-cov)))
+        (is (= 47 (:n cell)))
+        (is (= (:nonconforming (:counts cell))
+               (count (filter #(= :nonconforming (:lot-coverage-conformity %))
+                              fixture-rows))))
+        (is (number? (:pct-of-known cell)))
+        (is (number? (:pct-unknown cell)))))
 
-  (testing "a nil column yields a nil cell, which renders as the placeholder"
-    ;; Existing zoning does not measure cumulative side yard without the
-    ;; 3-foot minimum, so that dimension has no Existing column.
-    (let [result (ds/category-crosstab fixture-rows crosstab-spec)
-          side (first (filter #(= "Cum Side w/o 3' min" (:label %)) (:rows result)))]
-      (is (some? side))
-      (is (nil? (first (:cells side))))
-      (is (some? (second (:cells side)))))))
+    (testing "a nil column yields a nil cell, which renders as the placeholder"
+      ;; Existing zoning does not measure cumulative side yard without the
+      ;; 3-foot minimum, so that dimension has no Existing column.
+      (let [side (first (filter #(= "Cum Side w/o 3' min" (:label %)) (:rows result)))]
+        (is (nil? (first (:cells side))))
+        (is (some? (second (:cells side))))))))
 
 ;; `cap-tally` counted yes/no/unknown over three boolean columns, which is
 ;; exactly what `category-crosstab` puts in each cell's :counts. Only the

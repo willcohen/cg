@@ -9,8 +9,6 @@
 
    Verifies the dispatch path that unwraps a batch, iterates its rows,
    applies a per-row operation to each row-map, and rebuilds the dataset.
-   Foundation for the fusion path: a fusion group of length 1 must work
-   before chains of 2+ can collapse onto it.
 
    ONE .cljc suite covers both runtimes, but each runtime registers its
    operation its own way. The JVM registers a host defn with ^:op through
@@ -149,7 +147,6 @@
        (if (array? result) result (dataset/rows result)))
 
      (defn ^:async run-per-geometry! []
-       (await (dataset/init-arquero!))
        (register-probe-ops!)
        (let [fc {:type "FeatureCollection"
                  :features [{:type "Feature" :properties {:n 1}
@@ -168,7 +165,6 @@
          (is (every? (fn [r] (some? (:geometry r))) rows))))
 
      (defn ^:async run-per-row! []
-       (await (dataset/init-arquero!))
        (register-probe-ops!)
        (let [d (dataset/->dataset {:n [1 2 3 4]})
              result (await (run/run-model (table-model "cg.probe/double-n")
@@ -176,7 +172,6 @@
          (check-doubled-rows! (result-rows result))))
 
      (defn ^:async run-row-errors! []
-       (await (dataset/init-arquero!))
        (register-probe-ops!)
        (let [events #js []
              l (trace/add-trace-listener (fn [e] (.push events e)))]
@@ -194,7 +189,6 @@
        (run-row-errors!))
 
      (defn ^:async run-no-rows! []
-       (await (dataset/init-arquero!))
        (register-probe-ops!)
        (let [result (await (run/run-model (table-model "cg.probe/double-n")
                                           {:input (dataset/->dataset [])}
@@ -208,4 +202,5 @@
        (run-per-geometry!))))
 
 #?(:cljs (-> (init_wasmts_BANG_)
+             (.then (fn [_] (dataset/init-arquero!)))
              (.then (fn [_] (run_tests_and_exit_BANG_ "cg.run.per-row-dispatch-test")))))

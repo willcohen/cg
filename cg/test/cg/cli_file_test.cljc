@@ -9,7 +9,8 @@
    because a .cg file reads it with run/script-file. boston.cg runs its
    analysis only when run/script-file names it."
   #?(:clj (:require [clojure.test :refer [deftest is]]
-                    [cg.cli :as cli])
+                    [cg.cli :as cli]
+                    [cg.run :as run])
      :cljs (:require [cljs.test :refer [deftest is]]
                      ["node:fs" :as fs]
                      ["node:os" :as os]
@@ -51,7 +52,8 @@
      (is (= 0 (await (cli/run-model-file (checked-file)))))))
 
 (deftest run-model-file-names-the-file-for-the-run
-  #?(:clj (is (= 0 (cli/run-model-file (checked-file))))
+  #?(:clj (do (is (= 0 (cli/run-model-file (checked-file))))
+              (is (nil? (run/script-file)) "nil outside a run"))
      :cljs (run-checked!)))
 
 #?(:cljs (-> (init_wasmts_BANG_)

@@ -158,7 +158,6 @@
   (is (= 3 (ds/row-count d)) "3 features across 2 pages prove the driver paged")
   (is (= ["A" "B" "C"] (sorted-names d "NAME")) "NAME round-trips from both pages")
   (let [q (query-uri requests)]
-    (is (some? q) "the driver issued a query request")
     (is (str/includes? q "f=json") "the query asks for JSON")
     (is (str/includes? q "where=1%3D1") "the default where is 1=1")
     (is (str/includes? q "outFields=*") "the default field list is *")
@@ -225,9 +224,7 @@
 ;; cljs.test in squint waits for it.
 
 (defn- geojson-coords [g]
-  (get #?(:clj (charred/read-json (cio/write-geojson g))
-          :cljs (js/JSON.parse (cio/write-geojson g)))
-       "coordinates"))
+  (get (parse-json (cio/write-geojson g)) "coordinates"))
 
 (defn- check-point-coords! []
   (let [p (geojson-coords (feature/point 1 2))

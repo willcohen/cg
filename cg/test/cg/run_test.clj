@@ -8,11 +8,6 @@
   "Tests for Flow Graph execution engine (cg.run). JVM only: each test here
    needs a host op, SCI, or tech.ml.dataset.
 
-   Covers:
-   - Components (a ^:table op whose body is a model)
-   - Table mode (dataset batching)
-   - Dataset batching and the trace events of a grouped run
-
    The basic run-model tests -- a source operation, a source with a transform,
    and a data binding -- are in cg.run-exec-test, which runs on both runtimes."
   (:require [clojure.test :refer [deftest is testing]]
@@ -24,7 +19,7 @@
             [cg.macros :refer [table->]]
             [sci.core :as sci]
             [tech.v3.dataset :as ds])
-  (:import [org.locationtech.jts.geom Geometry TopologyException]))
+  (:import [org.locationtech.jts.geom Geometry LineString Point Polygon TopologyException]))
 
 (set! *warn-on-reflection* true)
 
@@ -77,13 +72,12 @@
   ;; internally), not treat the table as a single row. The component is named
   ;; by its bare spelling (what the map node carries) and resolves through the
   ;; same bare-name fallback resolve-operation uses.
-  (testing "run-component runs the body once over the supplied table"
-    (let [sub (ds/->>dataset [{:n 1} {:n 2} {:n 3}])
-          out (run/run-component "rc-analyze" {:rows sub} {:timeout-ms 30000})]
-      (is (dataset/dataset? out) "returns a dataset")
-      (is (= 3 (dataset/row-count out)) "row count preserved")
-      (is (= [2 4 6] (mapv :doubled (dataset/rows out :as-maps)))
-          "the body ran per row over the whole table"))))
+  (let [sub (ds/->>dataset [{:n 1} {:n 2} {:n 3}])
+        out (run/run-component "rc-analyze" {:rows sub} {:timeout-ms 30000})]
+    (is (dataset/dataset? out) "returns a dataset")
+    (is (= 3 (dataset/row-count out)) "row count preserved")
+    (is (= [2 4 6] (mapv :doubled (dataset/rows out :as-maps)))
+        "the body ran per row over the whole table")))
 
 (defn- worker-busy-item-ids
   "The :item-id of each worker-busy-end event whose id is in `ids`. Polls,
@@ -220,55 +214,46 @@
 (deftest filter-serializable-runs-in-table-flow
   ;; (filter :col :pred value) is the serializable form, distinct from the
   ;; fn-taking cg.dataset/filter.
-  (testing "(filter :col :in vals) executes in a table-> flow"
-    (let [d (ds/->>dataset [{:zone "a" :n 1} {:zone "b" :n 2} {:zone "c" :n 3}])
-          model (table-> :input (filter :zone :in ["a" "b"]))
-          out (run/run-model model {:input d} {:timeout-ms 15000})]
-      (is (dataset/dataset? out) "returns a dataset")
-      (is (= 2 (dataset/row-count out)) "narrowed to the two matching rows")
-      (is (= #{"a" "b"} (set (mapv :zone (dataset/rows out :as-maps))))
-          "kept exactly the :in rows"))))
+  (let [d (ds/->>dataset [{:zone "a" :n 1} {:zone "b" :n 2} {:zone "c" :n 3}])
+        model (table-> :input (filter :zone :in ["a" "b"]))
+        out (run/run-model model {:input d} {:timeout-ms 15000})]
+    (is (dataset/dataset? out) "returns a dataset")
+    (is (= 2 (dataset/row-count out)) "narrowed to the two matching rows")
+    (is (= #{"a" "b"} (set (mapv :zone (dataset/rows out :as-maps))))
+        "kept exactly the :in rows")))
 
 (deftest map-over-groups-runs-each-chunk-and-preserves-keys
-  (testing "map-over-groups runs the component per group, into keys the results"
-    (let [d   (ds/->>dataset [{:zone "a" :n 1} {:zone "a" :n 2} {:zone "b" :n 3}])
-          model (table-> :input (group-by :zone) (map rc-analyze) (into {}))
-          out (run/run-model model {:input d} {:timeout-ms 60000})]
-      (is (map? out) "into demotes the groups container to a keyed map")
-      (is (= #{"a" "b"} (set (keys out))) "one result per group, keyed by group")
-      (is (dataset/dataset? (get out "a")) "each group's result is a dataset")
-      (is (= 2 (dataset/row-count (get out "a"))) "group a kept its 2 rows")
-      (is (= 1 (dataset/row-count (get out "b"))) "group b kept its 1 row")
-      (is (= [2 4] (sort (mapv :doubled (dataset/rows (get out "a") :as-maps))))
-          "group a's body doubled n per row")
-      (is (= [6] (mapv :doubled (dataset/rows (get out "b") :as-maps)))
-          "group b's body doubled n per row"))))
-
-(deftest map-over-groups-emits-per-group-trace
   ;; The over-groups executor emits per-group lifecycle trace events
   ;; (run-component-groups) so the canvas can light the map node per group.
   ;; Assert one map-group-complete per group, bracketed by a single
   ;; map-groups-start/complete pair, all carrying the map node's pid
   ;; (<model-name>__<node-id>) so the canvas correlates them to the node's
   ;; proc-* events.
-  (testing "a map-over-groups run emits one map-group-complete per group"
-    (let [d      (ds/->>dataset [{:zone "a" :n 1} {:zone "a" :n 2} {:zone "b" :n 3}])
-          model  (table-> :input (group-by :zone) (map rc-analyze) (into {}))
-          _      (trace/clear-recent-events!)
-          _      (run/run-model model {:input d}
-                                {:timeout-ms 60000 :name "trace-test-flow"})
-          mine?  (fn [e] (boolean (some-> (:pid e)
-                                          (str/starts-with? "trace-test-flow__"))))
-          ;; recent-events drains the trace channel asynchronously; poll until
-          ;; the terminal map-groups-complete lands (it is put after every
-          ;; per-group event, so its arrival means the per-group events are in).
-          events (loop [tries 0]
-                   (let [evs (filterv mine? (trace/recent-events))]
-                     (if (or (some #(= "map-groups-complete" (:kind %)) evs)
-                             (>= tries 60))
-                       evs
-                       (do (Thread/sleep 50) (recur (inc tries))))))
-          of-kind (fn [k] (filterv #(= k (:kind %)) events))]
+  (let [d      (ds/->>dataset [{:zone "a" :n 1} {:zone "a" :n 2} {:zone "b" :n 3}])
+        model  (table-> :input (group-by :zone) (map rc-analyze) (into {}))
+        _      (trace/clear-recent-events!)
+        out    (run/run-model model {:input d}
+                              {:timeout-ms 60000 :name "trace-test-flow"})
+        mine?  (fn [e] (boolean (some-> (:pid e)
+                                        (str/starts-with? "trace-test-flow__"))))
+        ;; recent-events drains the trace channel asynchronously; poll until
+        ;; the terminal map-groups-complete lands (it is put after every
+        ;; per-group event, so its arrival means the per-group events are in).
+        events (loop [tries 0]
+                 (let [evs (filterv mine? (trace/recent-events))]
+                   (if (or (some #(= "map-groups-complete" (:kind %)) evs)
+                           (>= tries 60))
+                     evs
+                     (do (Thread/sleep 50) (recur (inc tries))))))
+        of-kind (fn [k] (filterv #(= k (:kind %)) events))]
+    (is (map? out) "into demotes the groups container to a keyed map")
+    (is (= #{"a" "b"} (set (keys out))) "one result per group, keyed by group")
+    (is (dataset/dataset? (get out "a")) "each group's result is a dataset")
+    (is (= [2 4] (sort (mapv :doubled (dataset/rows (get out "a") :as-maps))))
+        "group a's body doubled n per row")
+    (is (= [6] (mapv :doubled (dataset/rows (get out "b") :as-maps)))
+        "group b's body doubled n per row")
+    (testing "a map-over-groups run emits one map-group-complete per group"
       (is (= 2 (count (of-kind "map-group-complete")))
           "one map-group-complete per group")
       (is (= #{"a" "b"} (set (map :group-key (of-kind "map-group-complete"))))
@@ -302,9 +287,7 @@
    (f/polygon [[10 0] [14 0] [14 4] [10 4] [10 0]])
    (f/polygon [[20 0] [24 0] [24 4] [20 4] [20 0]])])
 
-(defn- run-table-op
-  "Run one geometry op in :table mode over a 3-polygon dataset; return the result."
-  [op-fn params]
+(defn- run-table-op [op-fn params]
   (let [test-ds (ds/->dataset {:id [1 2 3]
                                :name ["A" "B" "C"]
                                :geometry table-op-polys})
@@ -317,96 +300,57 @@
                :config {}}]
     (run/run-model model {:data test-ds} {:timeout-ms 10000})))
 
-(defn- table-op-invariants
-  "Routing assertions shared by every per-geometry table-mode op."
-  [result]
-  (is (some? result) "Should return a result")
+(defn- table-op-invariants [result]
   (is (ds/dataset? result) "Result should be a dataset")
   (is (= 3 (ds/row-count result)) "Should preserve row count")
   (is (ds/has-column? result :geometry) "Should have geometry column")
   (is (ds/has-column? result :id) "Should preserve id column")
-  (is (ds/has-column? result :name) "Should preserve name column")
-  (is (every? some? (vec (:geometry result))) "All geometries present"))
+  (is (ds/has-column? result :name) "Should preserve name column"))
 
-(deftest test-table-mode-simple-buffer
-  (testing "Table mode: per-geometry buffer over the geometry column"
-    (let [result (run-table-op 'cg.geo/buffer {:distance 5})]
-      (table-op-invariants result)
-      (is (every? #(instance? org.locationtech.jts.geom.Polygon %) (vec (:geometry result)))
-          "buffer of a polygon is a polygon")
-      (is (every? #(> (.getArea ^org.locationtech.jts.geom.Geometry %) 16.0)
-                  (vec (:geometry result)))
-          "each 4 x 4 square grew"))))
-
-(deftest test-table-mode-simplify
-  (testing "Table mode: per-geometry simplify over the geometry column"
-    (let [result (run-table-op 'cg.geo/simplify {:tolerance 0.5})]
-      (table-op-invariants result)
-      (is (every? #(instance? org.locationtech.jts.geom.Polygon %) (vec (:geometry result)))
-          "simplify of a polygon stays a polygon"))))
-
-(deftest test-table-mode-centroid
-  (testing "Table mode: per-geometry centroid over the geometry column"
-    (let [result (run-table-op 'cg.geo/centroid {})]
-      (table-op-invariants result)
-      (is (every? #(instance? org.locationtech.jts.geom.Point %) (vec (:geometry result)))
-          "centroid of a polygon is a point"))))
-
-(deftest test-table-mode-convex-hull
-  (testing "Table mode: per-geometry convex-hull over the geometry column"
-    (let [result (run-table-op 'cg.geo/convex-hull {})]
-      (table-op-invariants result)
-      (is (every? #(instance? org.locationtech.jts.geom.Polygon %) (vec (:geometry result)))
-          "convex hull of a square is a polygon"))))
-
-(deftest test-table-mode-envelope
-  (testing "Table mode: per-geometry envelope over the geometry column"
-    (let [result (run-table-op 'cg.geo/envelope {})]
-      (table-op-invariants result)
-      (is (every? #(instance? org.locationtech.jts.geom.Polygon %) (vec (:geometry result)))
-          "envelope of a polygon is a rectangular polygon"))))
-
-(deftest test-table-mode-boundary
-  (testing "Table mode: per-geometry boundary over the geometry column"
-    (let [result (run-table-op 'cg.geo/boundary {})]
-      (table-op-invariants result)
-      (is (every? #(instance? org.locationtech.jts.geom.LineString %) (vec (:geometry result)))
-          "boundary of a polygon is its line ring"))))
+(deftest table-mode-maps-a-geometry-op-over-the-geometry-column
+  (doseq [[op params geom-class] [['cg.geo/buffer {:distance 5} Polygon]
+                                  ['cg.geo/simplify {:tolerance 0.5} Polygon]
+                                  ['cg.geo/centroid {} Point]
+                                  ['cg.geo/convex-hull {} Polygon]
+                                  ['cg.geo/envelope {} Polygon]
+                                  ['cg.geo/boundary {} LineString]]]
+    (testing (str op)
+      (let [result (run-table-op op params)]
+        (table-op-invariants result)
+        (is (every? #(instance? geom-class %) (vec (:geometry result))))
+        (when (= 'cg.geo/buffer op)
+          (is (every? #(> (.getArea ^Geometry %) 16.0) (vec (:geometry result)))
+              "each 4 x 4 square grew"))))))
 
 (deftest test-table-mode-context-store
-  (testing "Dataset context store registration and cleanup"
-    (let [points [(f/point 0 0)]
-          test-ds (ds/->dataset {:id [1] :geometry points})
+  (let [points [(f/point 0 0)]
+        test-ds (ds/->dataset {:id [1] :geometry points})
 
-          ctx-id (dataset/register-dataset-context! test-ds {:geom-column :geometry})]
+        ctx-id (dataset/register-dataset-context! test-ds {:geom-column :geometry})]
 
-      (is (uuid? ctx-id) "Should return a UUID")
+    (is (uuid? ctx-id) "Should return a UUID")
 
-      (let [ctx (dataset/get-dataset-context ctx-id)]
-        (is (some? ctx) "Should retrieve context")
-        (is (= [:id :geometry] (:schema ctx)) "Schema should match columns")
-        (is (= :geometry (:geom-column ctx)) "Geometry column should be stored")
-        (is (= 1 (:row-count ctx)) "Row count should be stored"))
+    (let [ctx (dataset/get-dataset-context ctx-id)]
+      (is (= [:id :geometry] (:schema ctx)) "Schema should match columns")
+      (is (= :geometry (:geom-column ctx)) "Geometry column should be stored")
+      (is (= 1 (:row-count ctx)) "Row count should be stored"))
 
-      (dataset/unregister-dataset-context! ctx-id)
-      (is (nil? (dataset/get-dataset-context ctx-id)) "Context should be removed"))))
+    (dataset/unregister-dataset-context! ctx-id)
+    (is (nil? (dataset/get-dataset-context ctx-id)) "Context should be removed")))
 
 (deftest test-dataset-batching
-  (testing "Dataset batching and reassembly"
-    ;; Test with a small dataset - should return as single batch
-    (let [n-rows 100
-          points (repeatedly n-rows #(f/point (rand 100) (rand 100)))
-          test-ds (ds/->dataset {:id (range n-rows)
-                                 :geometry (vec points)})
+  (let [n-rows 100
+        points (repeatedly n-rows #(f/point (rand 100) (rand 100)))
+        test-ds (ds/->dataset {:id (range n-rows)
+                               :geometry (vec points)})
 
-          batches (dataset/dataset->batches test-ds {})]
+        batches (dataset/dataset->batches test-ds {})]
 
-      (is (>= (count batches) 1) "Should create at least one batch")
-      (is (= n-rows (reduce + (map ds/row-count batches)))
-          "Total rows across batches should equal original")
+    (is (= n-rows (reduce + (map ds/row-count batches)))
+        "Total rows across batches should equal original")
 
-      (let [reassembled (dataset/batches->dataset batches)]
-        (is (= n-rows (ds/row-count reassembled))
-            "Reassembled dataset should have all rows")
-        (is (ds/has-column? reassembled :id) "Should preserve id column")
-        (is (ds/has-column? reassembled :geometry) "Should preserve geometry column")))))
+    (let [reassembled (dataset/batches->dataset batches)]
+      (is (= n-rows (ds/row-count reassembled))
+          "Reassembled dataset should have all rows")
+      (is (ds/has-column? reassembled :id) "Should preserve id column")
+      (is (ds/has-column? reassembled :geometry) "Should preserve geometry column"))))

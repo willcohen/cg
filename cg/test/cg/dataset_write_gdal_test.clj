@@ -71,7 +71,6 @@
             (is (nil? (nth (vec (ds/column back "corner")) 2))))
           (testing "geometry survives with its declared CRS"
             (let [geoms (vec (ds/column back :geometry))]
-              (is (= 3 (count (remove nil? geoms))))
               (is (every? #(= "Polygon" (.getGeometryType ^org.locationtech.jts.geom.Geometry %)) geoms))
               (is (= "EPSG:4326" (feature/get-crs (first geoms)))))))))))
 

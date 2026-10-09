@@ -23,35 +23,20 @@
 
 #?(:clj (set! *warn-on-reflection* true))
 
-(defn- twice-step
-  "Sends each batch two times."
-  []
-  (fn
-    ([] {:ins {:in "Batches"} :outs {:out "Each batch two times"}})
-    ([_args] {})
-    ([state _transition] state)
-    ([state _in msg] [state {:out [msg msg]}])))
-
-(defn- pass-step
-  "Sends each batch one time."
-  []
-  (fn
-    ([] {:ins {:in "Batches"} :outs {:out "The same batches"}})
-    ([_args] {})
-    ([state _transition] state)
-    ([state _in msg] [state {:out [msg]}])))
-
-(defn- boom-step
-  "Throws on each batch."
-  []
-  (fn
-    ([] {:ins {:in "Batches"} :outs {:out "Nothing"}})
-    ([_args] {})
-    ([state _transition] state)
-    ([_state _in _msg] (throw (ex-info "boom" {})))))
+(defn- step-of
+  "A step factory. For each batch msg, its step sends the vector (out msg)."
+  [out]
+  (fn []
+    (fn
+      ([] {:ins {:in "Batches"} :outs {:out "Batches"}})
+      ([_args] {})
+      ([state _transition] state)
+      ([state _in msg] [state {:out (out msg)}]))))
 
 (defn- register-ops! []
-  (doseq [[op-name f] [["twice" twice-step] ["pass" pass-step] ["boom" boom-step]]]
+  (doseq [[op-name f] [["twice" (step-of (fn [msg] [msg msg]))]
+                       ["pass" (step-of vector)]
+                       ["boom" (step-of (fn [_] (throw (ex-info "boom" {}))))]]]
     (run/register-bare-op! op-name "cg.eos-test" f)
     (feature/register-operation! (str "cg.eos-test/" op-name)
                                  {:type :step-factory :params []})))
@@ -100,21 +85,17 @@
   {:type :operation :id id :fn (str "cg.eos-test/" op-name)
    :params {} :mode :table :config {}})
 
-(def ^:private twice-model
+(defn- one-op-model [op-name]
   {:nodes [{:type :source :id :input-src :data-ref :input :schema {}}
-           (op-node :op-1 "twice")
+           (op-node :op-1 op-name)
            {:type :sink :id :result :output-binding :result}]
    :edges [{:from :input-src :to :op-1 :type :data-flow}
            {:from :op-1 :to :result :type :data-flow}]
    :config {}})
 
-(def ^:private boom-model
-  {:nodes [{:type :source :id :input-src :data-ref :input :schema {}}
-           (op-node :op-1 "boom")
-           {:type :sink :id :result :output-binding :result}]
-   :edges [{:from :input-src :to :op-1 :type :data-flow}
-           {:from :op-1 :to :result :type :data-flow}]
-   :config {}})
+(def ^:private twice-model (one-op-model "twice"))
+
+(def ^:private boom-model (one-op-model "boom"))
 
 (def ^:private fan-in-model
   {:nodes [{:type :source :id :a-src :data-ref :a :schema {}}
@@ -130,8 +111,7 @@
   "The row count of a table-mode result. The JVM can give the dataset in a
    sequence."
   [result]
-  #?(:clj (ds/row-count (if (sequential? result) (first result) result))
-     :cljs (ds/row-count (if (array? result) (nth result 0) result))))
+  (ds/row-count (if (sequential? result) (first result) result)))
 
 (defn- n-rows [n]
   (ds/->dataset {:n (vec (range n))}))
@@ -202,7 +182,6 @@
        (let [msg (await (-> (run/run-model boom-model {:input (n-rows 3)} {:timeout-ms 10000})
                             (.then (fn [_] nil))
                             (.catch (fn [e] (ex-message e)))))]
-         (is (some? msg) "the run fails")
          (is (re-find #"boom" (str msg)) "the message names the error of the step")))))
 
 (deftest a-step-with-more-batches-out-than-in-completes
@@ -267,7 +246,6 @@
                 (let [msg (try (run/run-model boom-model {:input (n-rows 3)} {:timeout-ms 10000})
                                nil
                                (catch Exception e (ex-message e)))]
-                  (is (some? msg) "the run fails")
                   (is (re-find #"boom" (str msg)) "the message names the error of the step")))
        :cljs (run-boom!))))
 

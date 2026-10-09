@@ -23,10 +23,9 @@
 
 #?(:cljs
    (def wasmts-js-path
-     "The wasmts loader bundle. The path is absolute, because a worker imports
-      it as a module specifier and node reads a relative path as a package
-      name. Paths resolve against process.cwd(). Run the test suites from the
-      module root."
+     "The wasmts loader bundle. wasmts-assets gives a worker the file: URL of
+      this path. Paths resolve against process.cwd(). Run the test suites from
+      the module root."
      (node-path/resolve "node_modules/@wcohen/wasmts/dist/wasmts.js")))
 
 #?(:cljs

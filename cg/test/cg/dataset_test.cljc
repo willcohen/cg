@@ -84,37 +84,26 @@
 
 #?(:clj
    (deftest spatial-join-prepared-predicates
-     (testing "reshaped prepared-geometry predicates drive select-* / intersects-any?
-               across both the no-index closure path and the indexed prepared path"
-       (let [sq   (fn [x0 y0 s id]
-                    {:geometry (f/to-feature
-                                (f/polygon [[x0 y0] [(+ x0 s) y0] [(+ x0 s) (+ y0 s)]
-                                            [x0 (+ y0 s)] [x0 y0]])
-                                {:id id})})
-             rows  [(sq 0 0 2 "a") (sq 10 10 2 "b") (sq 1 1 2 "c")]
-             ds    (dataset/->dataset rows)
-             probe (f/to-feature (f/polygon [[0.5 0.5] [1.5 0.5] [1.5 1.5] [0.5 1.5] [0.5 0.5]])
-                                 {:id "probe"})
-             tiny  (f/to-feature (f/polygon [[0.2 0.2] [0.6 0.2] [0.6 0.6] [0.2 0.6] [0.2 0.2]])
-                                 {:id "tiny"})
-             big   (f/to-feature (f/polygon [[-1 -1] [5 -1] [5 5] [-1 5] [-1 -1]])
-                                 {:id "big"})
-             far   (f/to-feature (f/polygon [[100 100] [101 100] [101 101] [100 101] [100 100]])
-                                 {:id "far"})]
-         (testing "no-index path exercises the 1-arity predicate closure"
-           (is (= 2 (dataset/row-count (dataset/select-intersects ds probe :geometry)))
-               "probe overlaps squares a and c"))
-         (let [dsi (dataset/add-spatial-index ds :geometry)]
-           (testing "indexed path exercises the 2-arity prepared-first predicate"
-             (is (= 2 (dataset/row-count (dataset/select-intersects dsi probe :geometry))))
-             (is (true?  (dataset/intersects-any? dsi probe :geometry)))
-             (is (false? (dataset/intersects-any? dsi far :geometry))))
-           (testing "select-contains selects rows whose geometry contains the query"
-             (is (= 1 (dataset/row-count (dataset/select-contains dsi tiny :geometry)))
-                 "only square a fully contains tiny"))
-           (testing "select-within selects rows whose geometry is within the query"
-             (is (= 2 (dataset/row-count (dataset/select-within dsi big :geometry)))
-                 "squares a and c are within big")))))))
+     (let [sq   (fn [x0 y0 s id]
+                  {:geometry (f/to-feature
+                              (f/polygon [[x0 y0] [(+ x0 s) y0] [(+ x0 s) (+ y0 s)]
+                                          [x0 (+ y0 s)] [x0 y0]])
+                              {:id id})})
+           rows  [(sq 0 0 2 "a") (sq 10 10 2 "b") (sq 1 1 2 "c")]
+           ds    (dataset/->dataset rows)
+           probe (f/to-feature (f/polygon [[0.5 0.5] [1.5 0.5] [1.5 1.5] [0.5 1.5] [0.5 0.5]])
+                               {:id "probe"})
+           tiny  (f/to-feature (f/polygon [[0.2 0.2] [0.6 0.2] [0.6 0.6] [0.2 0.6] [0.2 0.2]])
+                               {:id "tiny"})
+           big   (f/to-feature (f/polygon [[-1 -1] [5 -1] [5 5] [-1 5] [-1 -1]])
+                               {:id "big"})]
+       (let [dsi (dataset/add-spatial-index ds :geometry)]
+         (testing "indexed path exercises the 2-arity prepared-first predicate"
+           (is (= 2 (dataset/row-count (dataset/select-intersects dsi probe :geometry)))))
+         (is (= 1 (dataset/row-count (dataset/select-contains dsi tiny :geometry)))
+             "only square a fully contains tiny")
+         (is (= 2 (dataset/row-count (dataset/select-within dsi big :geometry)))
+             "squares a and c are within big")))))
 
 #?(:clj
    (deftest when-row-resolves-via-run

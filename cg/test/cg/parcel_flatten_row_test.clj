@@ -41,7 +41,7 @@
 
 (deftest flatten-row-gives-one-flat-row
   (let [flat (flatten-row analyzed-row)]
-    (testing "six metrics get their own columns"
+    (testing "six of the eight metrics get their own columns"
       (is (= {:lot-area 4900.0 :street-frontage 70.0
               :envelope-ratio 0.5 :building-coverage-ratio 0.25
               :building-coverage-area 1225.0 :envelope-area 2450.0}

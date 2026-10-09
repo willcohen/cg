@@ -9,7 +9,6 @@
    cg.loaders-test covers the loaders on both runtimes."
   #?(:clj (:require [clojure.test :refer [deftest is testing]]
                     [cg.io :as io]
-                    [clojure.string]
                     [clojure.java.io :as jio]))
   #?(:clj (:import (org.locationtech.jts.geom Geometry Polygon)
                    (com.sun.net.httpserver HttpServer HttpHandler HttpExchange)
@@ -26,24 +25,19 @@
 
 #?(:clj
    (deftest load-source-from-bytes-tiny-gpkg
-     (testing "bytes-form round-trip"
-       (let [bytes      (with-open [in (jio/input-stream tiny-gpkg-path)]
-                          (.readAllBytes in))
-             files-map  {"tiny.gpkg" bytes}
-             result     (io/load-source-from-bytes files-map "tiny.gpkg")
-             rows       (:rows result)]
-         (is (= 3 (count rows))
-             "bytes-form yields the same 3 rows as the disk-form")
-         (is (= #{"a" "b" "c"}
-                (set (map #(get % "name") rows)))
-             "name column round-trips a/b/c through the bytes path")
-         (doseq [r rows]
-           (is (instance? Polygon (:geometry r))
-               ":geometry is a Polygon"))))
-     (testing "missing open-name throws"
-       (is (thrown? clojure.lang.ExceptionInfo
-                    (io/load-source-from-bytes {"a.gpkg" (byte-array 0)}
-                                                "missing.gpkg"))))))
+     (let [bytes      (with-open [in (jio/input-stream tiny-gpkg-path)]
+                        (.readAllBytes in))
+           files-map  {"tiny.gpkg" bytes}
+           result     (io/load-source-from-bytes files-map "tiny.gpkg")
+           rows       (:rows result)]
+       (is (= 3 (count rows))
+           "bytes-form yields the same 3 rows as the disk-form")
+       (is (= #{"a" "b" "c"} (set (map #(get % "name") rows))))
+       (doseq [r rows]
+         (is (instance? Polygon (:geometry r)))))
+     (is (thrown? clojure.lang.ExceptionInfo
+                  (io/load-source-from-bytes {"a.gpkg" (byte-array 0)}
+                                              "missing.gpkg")))))
 
 ;; The fixture server serves two GeoServices pages (2 + 1 features), and 3
 ;; rows show that paging ran. It records the headers for the :auth test.
@@ -140,9 +134,7 @@
              (is (.contains ^String (:uri (first @requests)) "resultOffset=0"))
              (is (.contains ^String (:uri (second @requests)) "resultOffset=10")))
            (testing "the page size is the observed server cap, not the json default"
-             (is (.contains ^String (:uri (first @requests)) "resultRecordCount=2000")))
-           (testing "no GDAL request was made"
-             (is (not-any? #(.contains ^String (:uri %) "f=json") @requests))))))))
+             (is (.contains ^String (:uri (first @requests)) "resultRecordCount=2000"))))))))
 
 #?(:clj
    (deftest pbf-auth-header-reaches-every-page

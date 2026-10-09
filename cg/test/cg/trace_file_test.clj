@@ -73,7 +73,6 @@
         (Thread/sleep 200)
         (let [f (first (filter #(str/starts-with? % "fetch-file-test-") (file-names dir)))
               text (when f (slurp (io/file dir f)))]
-          (is (some? f) "the flow wrote a file with its name")
           (is (str/includes? (str text) "fetch-file-test__fetch") "the fetch events")
           (is (str/includes? (str text) "rows-progress") "the row count"))))))
 

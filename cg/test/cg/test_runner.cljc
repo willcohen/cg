@@ -17,15 +17,7 @@
    outlives run-tests resolving (a worker pool, a PROJ context). Squint's
    ^:async metadata does not propagate to inline fns in argument position,
    so the teardown must be a top-level ^:async defn (or any fn returning a
-   Promise) for its inner await to compile.
-
-   Usage at the bottom of a cljs.test mirror:
-
-     (ns my-test
-       (:require #?(:cljs [cljs.test :as t])
-                 #?(:cljs [cg.test-runner :as tr])))
-
-     #?(:cljs (tr/run-tests-and-exit! \"my-test\"))"
+   Promise) for its inner await to compile."
   #?(:cljs (:require [cljs.test :as cljs-test])))
 
 #?(:clj (set! *warn-on-reflection* true))

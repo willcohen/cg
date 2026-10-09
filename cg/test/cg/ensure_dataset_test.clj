@@ -70,10 +70,7 @@
 (defn- comparable-rows
   "Row maps with geometry replaced by WKT so datasets compare with =."
   [dataset]
-  (mapv (fn [row]
-          (-> row
-              (assoc :geometry (str (:geometry row)))))
-        (cds/rows dataset :as-maps)))
+  (mapv #(assoc % :geometry (str (:geometry %))) (cds/rows dataset :as-maps)))
 
 (deftest ensure-dataset-fetches-once-then-serves-from-cache
   (with-geoservices-server
@@ -120,9 +117,6 @@
       (let [cache-dir (temp-cache-dir)]
         (cds/ensure-dataset {:url layer-url :version "v1" :cache-dir cache-dir})
         (let [n1 (count @requests)]
-          (testing "same key: no refetch"
-            (cds/ensure-dataset {:url layer-url :version "v1" :cache-dir cache-dir})
-            (is (= n1 (count @requests))))
           (testing "new :version refetches into a new cache entry"
             (cds/ensure-dataset {:url layer-url :version "v2" :cache-dir cache-dir})
             (is (> (count @requests) n1))

@@ -86,12 +86,10 @@
   "The rows of a table-mode result as maps. A flow with one sink gives a
    sequence that holds the dataset on the JVM, and the dataset itself on cljs."
   [result]
-  #?(:clj (ds/rows (if (sequential? result) (first result) result) :as-maps)
-     :cljs (let [d (if (array? result) (nth result 0) result)]
-             (if (array? d) d (ds/rows d)))))
+  (let [d (if (sequential? result) (first result) result)]
+    (if (sequential? d) d (ds/rows d :as-maps))))
 
 (defn- check-rows! [rows]
-  (is (= 2 (count rows)) "both rows pass through")
   (is (= ["123456789" "123456789"] (mapv :got-1 rows)) "the first op gets 1 to 9")
   (is (= ["123456789" "123456789"] (mapv :got-2 rows)) "the second op gets 1 to 9"))
 

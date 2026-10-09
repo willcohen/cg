@@ -52,9 +52,7 @@
        (mapv (fn [e] [(:kind e) (:pid e)]))))
 
 #?(:clj
-   (defn- collect-events
-     "Run f with a tap on the trace stream, then drain what it emitted."
-     [f]
+   (defn- collect-events [f]
      (let [ch (a/chan 1024)]
        (trace/tap-trace ch)
        (try

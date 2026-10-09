@@ -22,10 +22,9 @@
                           :clojure.core.async.flow/op :step
                           :clojure.core.async.flow/count 3
                           :clojure.core.async.flow/ex inner})]
-    (testing "message carries proc, op, message count, and exception class"
-      (is (= (str "Flow execution error in :transform-coords-56567 during "
-                  ":step (message 3): java.util.concurrent.TimeoutException")
-             (ex-message e))))
+    (is (= (str "Flow execution error in :transform-coords-56567 during "
+                ":step (message 3): java.util.concurrent.TimeoutException")
+           (ex-message e)))
     (testing "underlying exception is the cause"
       (is (identical? inner (ex-cause e))))
     (testing "full report stays in ex-data"

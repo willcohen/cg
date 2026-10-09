@@ -34,12 +34,6 @@
                              "(require '[cg.geo :as geo])"
                              "(coll-> :polygons (geo/union))"))))
 
-(defn- buffer-model []
-  #?(:clj (item-> :data (geo/buffer 100))
-     :cljs (run/eval-cg (str "(require '[cg.macros :refer [item->]])"
-                             "(require '[cg.geo :as geo])"
-                             "(item-> :data (geo/buffer 100))"))))
-
 (defn- filter-table-model []
   #?(:clj (table-> :buildings (ds/filter (fn [row] (> (:area row) 1000))))
      :cljs (run/eval-cg (str "(require '[cg.macros :refer [table->]])"
@@ -58,6 +52,7 @@
 (defn- check-buffer-simplify-code! [code]
   (is (str/includes? code "item->") "the item-> macro is in the code")
   (is (str/includes? code "geo/buffer") "the buffer operation is in the code")
+  (is (not (str/includes? code ":geo/buffer")) "the operation is a symbol")
   (is (str/includes? code "geo/simplify") "the simplify operation is in the code")
   (is (str/includes? code "parcels") "the data reference survives")
   ;; A parameter that does not reach the code makes the model unrunnable. The
@@ -70,44 +65,32 @@
   (is (str/includes? code ":viewport") "the metadata carries :viewport"))
 
 (deftest test-simple-pipeline
-  (testing "Simple item-> pipeline round-trip"
-    (let [generated (mg/flow-graph->cg-code (buffer-simplify-model))]
-      (check-buffer-simplify-code! generated)
-      #?(:clj
-         (is (= (mg/normalize-code
-                 "(item-> :parcels (geo/buffer 10) (geo/simplify 1.0))")
-                (mg/normalize-code generated))
-             "Generated code should match original after normalization")))))
+  (let [generated (mg/flow-graph->cg-code (buffer-simplify-model))]
+    (check-buffer-simplify-code! generated)
+    #?(:clj
+       (is (= (mg/normalize-code
+               "(item-> :parcels (geo/buffer 10) (geo/simplify 1.0))")
+              (mg/normalize-code generated))
+           "Generated code should match original after normalization"))))
 
 (deftest test-collection-mode
-  (testing "coll-> macro code generation"
-    (let [generated (mg/flow-graph->cg-code (union-model))]
-      (is (str/includes? generated "coll->") "the coll-> macro is in the code")
-      (is (str/includes? generated "geo/union") "the union operation is in the code")
-      #?(:clj
-         (is (= (mg/normalize-code "(coll-> :polygons (geo/union))")
-                (mg/normalize-code generated))
-             "Collection mode should generate coll-> macro")))))
+  (let [generated (mg/flow-graph->cg-code (union-model))]
+    (is (str/includes? generated "coll->") "the coll-> macro is in the code")
+    (is (str/includes? generated "geo/union") "the union operation is in the code")
+    #?(:clj
+       (is (= (mg/normalize-code "(coll-> :polygons (geo/union))")
+              (mg/normalize-code generated))
+           "Collection mode should generate coll-> macro"))))
 
 (deftest test-visual-metadata
-  (testing "Visual metadata extraction and formatting"
-    (check-metadata-code!
-     (mg/flow-graph->cg-code-with-metadata (with-visual (buffer-simplify-model))))))
+  (check-metadata-code!
+   (mg/flow-graph->cg-code-with-metadata (with-visual (buffer-simplify-model)))))
 
 (deftest test-normalize-code
-  (testing "Code normalization for comparison"
-    (let [code1 "(item->  :data  (buffer  10)  (simplify  0.1))"
-          code2 "(item-> :data (buffer 10) (simplify 0.1))"]
-      (is (= (mg/normalize-code code1) (mg/normalize-code code2))
-          "Whitespace variations should normalize to same string"))))
-
-(deftest test-keyword-to-symbol-conversion
-  (testing "Operation names convert from keywords to symbols"
-    (let [generated (mg/flow-graph->cg-code (buffer-model))]
-      (is (str/includes? generated "geo/buffer")
-          "Should generate symbol not keyword")
-      (is (not (str/includes? generated ":geo/buffer"))
-          "Should not have keyword prefix"))))
+  (let [code1 "(item->  :data  (buffer  10)  (simplify  0.1))"
+        code2 "(item-> :data (buffer 10) (simplify 0.1))"]
+    (is (= (mg/normalize-code code1) (mg/normalize-code code2))
+        "Whitespace variations should normalize to same string")))
 
 (deftest test-table-macro-code-generation
   (testing "table-> code generation keeps the macro and the table reference"

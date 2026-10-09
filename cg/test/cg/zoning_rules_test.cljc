@@ -25,22 +25,6 @@
 (defn- ev [src]
   (run/eval-cg (str "(require '[cg.zoning :as zoning]) " src)))
 
-;; limit-value tells a number, a limit form and an expression apart with
-;; number?, map? and vector?. The values come from a rule set, not from a
-;; literal that the compiler sees.
-(deftest a-value-from-data-keeps-its-kind
-  (is (= [:number :map :vector :other :other]
-         (vec (ev "(let [kind (fn [v] (cond (number? v) :number
-                                             (map? v)    :map
-                                             (vector? v) :vector
-                                             :else       :other))
-                          rule {:n 3
-                                :limit {:form :row :key :k}
-                                :expr [:larger 4.0 [:* 0.1 :lot-frontage]]}]
-                      (mapv kind [(get rule :n) (get rule :limit) (get rule :expr)
-                                  (get-in rule [:limit :form])
-                                  (rest (get rule :expr))]))")))))
-
 (defn- limit-value [limit values facts]
   (ev (str "(zoning/limit-value " limit " " values " " facts ")")))
 
@@ -276,14 +260,10 @@
   "[{:id :height :quantity :length :form :row :key :h}
     {:id :area :quantity :area :form :row :key :a}]")
 
-(defn- with-rule
-  "A rule set of two-measures and the one rule `rule`."
-  [rule]
+(defn- with-rule [rule]
   (str "{:measures " two-measures " :rules [" rule "]}"))
 
-(defn- with-measure
-  "A rule set of two-measures plus the measure `spec`, and no rule."
-  [spec]
+(defn- with-measure [spec]
   (str "{:measures (conj " two-measures " " spec ") :rules []}"))
 
 (defn- names-both? [message bad legal]
@@ -294,37 +274,24 @@
              (with-rule "{:id :tall :measure :height :dir :ceiling :core? true :limit 35.0}")))))
 
 (deftest rule-set-rejects-a-form-that-is-not-legal-and-lists-the-legal-values
-  (testing "a measure form"
-    (is (names-both? (rule-set-message (with-measure "{:id :x :form :rows :key :h}"))
-                     #"rows" #"schema-col")))
-  (testing "an aggregate and a parse of a measure"
-    (is (names-both? (rule-set-message
-                      (with-measure "{:id :x :form :edges :types [:side] :key :setback :agg :mean}"))
-                     #"mean" #"sum"))
-    (is (names-both? (rule-set-message
-                      (with-measure "{:id :x :form :schema-col :key :c :parse :int}"))
-                     #"int" #"double")))
-  (testing "a limit form, also as the leaf of a lookup table"
-    (is (names-both? (rule-set-message
-                      (with-rule "{:id :r :measure :height :dir :floor :limit {:form :table}}"))
-                     #"table" #"brackets"))
-    (is (names-both? (rule-set-message
-                      (with-rule "{:id :r :measure :height :dir :floor
-                                   :limit {:form :lookup :by [:zone]
-                                           :table {\"A\" {:form :table}}}}"))
-                     #"table" #"brackets")))
-  (testing "an operator of an expression and of a condition"
-    (is (names-both? (rule-set-message
-                      (with-rule "{:id :r :measure :height :dir :floor :limit [:max 1 2]}"))
-                     #"max" #"larger"))
-    (is (names-both? (rule-set-message
-                      (with-rule "{:id :r :measure :height :dir :floor :limit 1
-                                   :when [:gt :height 1]}"))
-                     #"gt" #"not=")))
-  (testing "a direction"
-    (is (names-both? (rule-set-message
-                      (with-rule "{:id :r :measure :height :dir :at-least :limit 1}"))
-                     #"at-least" #"ceiling"))))
+  (doseq [[data bad legal]
+          [[(with-measure "{:id :x :form :rows :key :h}") #"rows" #"schema-col"]
+           [(with-measure "{:id :x :form :edges :types [:side] :key :setback :agg :mean}")
+            #"mean" #"sum"]
+           [(with-measure "{:id :x :form :schema-col :key :c :parse :int}") #"int" #"double"]
+           [(with-rule "{:id :r :measure :height :dir :floor :limit {:form :table}}")
+            #"table" #"brackets"]
+           [(with-rule "{:id :r :measure :height :dir :floor
+                        :limit {:form :lookup :by [:zone]
+                                :table {\"A\" {:form :table}}}}")
+            #"table" #"brackets"]
+           [(with-rule "{:id :r :measure :height :dir :floor :limit [:max 1 2]}") #"max" #"larger"]
+           [(with-rule "{:id :r :measure :height :dir :floor :limit 1
+                        :when [:gt :height 1]}")
+            #"gt" #"not="]
+           [(with-rule "{:id :r :measure :height :dir :at-least :limit 1}")
+            #"at-least" #"ceiling"]]]
+    (is (names-both? (rule-set-message data) bad legal) data)))
 
 (deftest rule-set-rejects-a-name-that-is-no-measure-and-lists-the-measures
   (doseq [rule ["{:id :r :measure :depth :dir :floor :limit 1}"

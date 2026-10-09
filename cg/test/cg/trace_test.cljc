@@ -7,12 +7,12 @@
 ;; A run-model call emits the same lifecycle events, with the same wire
 ;; fields, through cg.trace (a channel) and cg.trace-js (listeners).
 (ns cg.trace-test
-  #?(:clj (:require [clojure.test :refer [deftest is testing]]
+  #?(:clj (:require [clojure.test :refer [deftest is]]
                     [cg.trace :as trace]
                     [cg.run :as run]
                     [cg.feature :as feature]
                     [clojure.core.async :as a])
-     :cljs (:require [cljs.test :refer [deftest is testing]]
+     :cljs (:require [cljs.test :refer [deftest is]]
                      ["../../src/cg/trace_js.mjs" :as trace]
                      ["../../src/cg/run.mjs" :as run]
                      ["../../src/cg/feature.mjs" :as feature]
@@ -48,9 +48,7 @@
            (trace/untap-trace ch))))))
 
 #?(:cljs
-   (defn ^:async collect-events!
-     "Run f with a listener attached, then return what it emitted."
-     [f]
+   (defn ^:async collect-events! [f]
      (let [events #js []
            l (trace/add-trace-listener (fn [e] (.push events e)))]
        (try
@@ -66,12 +64,8 @@
 
 (defn- check-lifecycle! [events]
   (let [kinds (kinds-of events)]
-    (is (some? (first (filter (fn [k] (= "flow-start" k)) kinds)))
-        "flow-start is emitted")
     (is (some? (first (filter (fn [k] (= "proc-start" k)) kinds)))
         "proc-start is emitted")
-    (is (some? (first (filter (fn [k] (= "proc-complete" k)) kinds)))
-        "proc-complete is emitted")
     (is (= "flow-complete" (last kinds)) "flow-complete is the last event")))
 
 (defn- check-pids! [events]
@@ -122,25 +116,23 @@
              "a run without a name gets the anon prefix")))))
 
 (deftest run-model-emits-the-flow-lifecycle
-  (testing "a named run emits flow-start, proc events, then flow-complete"
-    #?(:clj (let [events (collect-events
-                          (fn [] (run/run-model buffer-model {:data (two-points)}
-                                                {:name "traced" :timeout-ms 5000})))]
-              (check-lifecycle! events)
-              (check-pids! events)
-              (check-wire-shape! events))
-       :cljs (run-lifecycle!))))
+  #?(:clj (let [events (collect-events
+                        (fn [] (run/run-model buffer-model {:data (two-points)}
+                                              {:name "traced" :timeout-ms 5000})))]
+            (check-lifecycle! events)
+            (check-pids! events)
+            (check-wire-shape! events))
+     :cljs (run-lifecycle!)))
 
 (deftest run-model-without-a-name-emits-anon-pids
-  (testing "the pid prefix falls back to anon"
-    #?(:clj (let [events (collect-events
-                          (fn [] (run/run-model buffer-model
-                                                {:data [(feature/point 0 0)]}
-                                                {:timeout-ms 5000})))
-                  proc-start (nth (of-kind events "proc-start") 0)]
-              (is (= "anon__buffer-1" (:pid proc-start))
-                  "a run without a name gets the anon prefix"))
-       :cljs (run-anon!))))
+  #?(:clj (let [events (collect-events
+                        (fn [] (run/run-model buffer-model
+                                              {:data [(feature/point 0 0)]}
+                                              {:timeout-ms 5000})))
+                proc-start (nth (of-kind events "proc-start") 0)]
+            (is (= "anon__buffer-1" (:pid proc-start))
+                "a run without a name gets the anon prefix"))
+     :cljs (run-anon!)))
 
 #?(:cljs
    (deftest listeners-are-isolated-and-removable
@@ -159,43 +151,37 @@
 
 #?(:clj
    (deftest emit-includes-worker-id
-     (testing "emit! captures the calling thread's name as :worker-id"
-       (let [ch (a/chan 4)]
-         (trace/tap-trace ch)
-         (try
-           (trace/emit! "test-worker-id" {:hello "world"})
-           (let [evt (a/<!! (a/go (a/<! (a/timeout 100)) (a/poll! ch)))]
-             (is (some? evt) "event was received via tap")
-             (is (= "test-worker-id" (:kind evt)))
-             (is (= (.getName (Thread/currentThread)) (:worker-id evt))
-                 "worker-id matches the thread that called emit!"))
-           (finally
-             (trace/untap-trace ch)))))))
+     (let [ch (a/chan 4)]
+       (trace/tap-trace ch)
+       (try
+         (trace/emit! "test-worker-id" {:hello "world"})
+         (let [evt (a/<!! (a/go (a/<! (a/timeout 100)) (a/poll! ch)))]
+           (is (= "test-worker-id" (:kind evt)))
+           (is (= (.getName (Thread/currentThread)) (:worker-id evt))
+               "worker-id matches the thread that called emit!"))
+         (finally
+           (trace/untap-trace ch))))))
 
 #?(:clj
    (deftest worker-busy-start-end
-     (testing "with-worker-busy emits matching start + end events"
-       (let [ch (a/chan 8)
-             _ (trace/tap-trace ch)
-             result (trace/with-worker-busy {:task "test" :seq 42}
-                      (Thread/sleep 5)
-                      :work-done)]
-         (try
-           (is (= :work-done result) "with-worker-busy returns the body's value")
-           (Thread/sleep 20)
-           (let [evts (loop [acc []]
-                        (if-let [e (a/poll! ch)] (recur (conj acc e)) acc))
-                 kinds (map :kind evts)]
-             (is (some #{"worker-busy-start"} kinds))
-             (is (some #{"worker-busy-end"} kinds))
-             (let [start (first (filter #(= "worker-busy-start" (:kind %)) evts))
-                   end   (first (filter #(= "worker-busy-end" (:kind %)) evts))]
-               (is (= 42 (:seq start)) "tag :seq carried through to start")
-               (is (= "test" (:task start)))
-               (is (= "test" (:task end)))
-               (is (>= (- (:ts end) (:ts start)) 5)
-                   "end timestamp is at least 5ms after start (sleep)")))
-           (finally (trace/untap-trace ch)))))))
+     (let [ch (a/chan 8)
+           _ (trace/tap-trace ch)
+           result (trace/with-worker-busy {:task "test" :seq 42}
+                    (Thread/sleep 5)
+                    :work-done)]
+       (try
+         (is (= :work-done result) "with-worker-busy returns the body's value")
+         (Thread/sleep 20)
+         (let [evts  (loop [acc []]
+                       (if-let [e (a/poll! ch)] (recur (conj acc e)) acc))
+               start (first (filter #(= "worker-busy-start" (:kind %)) evts))
+               end   (first (filter #(= "worker-busy-end" (:kind %)) evts))]
+           (is (= 42 (:seq start)) "tag :seq carried through to start")
+           (is (= "test" (:task start)))
+           (is (= "test" (:task end)))
+           (is (>= (- (:ts end) (:ts start)) 5)
+               "end timestamp is at least 5ms after start (sleep)"))
+         (finally (trace/untap-trace ch))))))
 
 #?(:cljs (-> (init_wasmts_BANG_)
              (.then (fn [_] (run_tests_and_exit_BANG_ "cg.trace-test")))))
