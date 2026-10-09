@@ -604,17 +604,18 @@
    `f` returns."
   [dataset col-name f]
   #?(:clj (ds/update-column dataset col-name f)
-     :cljs (let [col-str (str col-name)
-                 current-values (column dataset col-name)
+     :cljs (let [raw-ds (unwrap-dataset dataset)
+                 col-str (str col-name)
+                 current-values (column raw-ds col-name)
                  new-values (f current-values)
-                 others (.filter (.columnNames dataset) (fn [c] (not= c col-str)))
+                 others (.filter (.columnNames raw-ds) (fn [c] (not= c col-str)))
                  new-col-table (.table (ensure-arquero!)
                                        {col-str (to-array new-values)})]
              ;; arquero gives a table with no columns 0 rows, and assign
              ;; refuses a column of another length.
              (if (zero? (.-length others))
                new-col-table
-               (.assign (.select dataset others) new-col-table)))))
+               (.assign (.select raw-ds others) new-col-table)))))
 
 (defn add-or-update-column [dataset col-name values]
   #?(:clj (ds/add-or-update-column dataset col-name values)
