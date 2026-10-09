@@ -1116,12 +1116,13 @@
             (de-9im-builder dataset featurelike de-9im-operation (first featurelike-columns))
             (throw (Exception. "More than one featurelike column. Please specify directly.")))))
        ([dataset featurelike de-9im-operation geom-column]
-        (if (get-spatial-index dataset geom-column)
+        (if-let [idx (get-spatial-index dataset geom-column)]
           (let [^Geometry g (feature/to-jts featurelike)
                 query-results (query-spatial-index dataset (.getEnvelopeInternal g) geom-column)
                 de-9im-results (clojure.core/filter #(de-9im-operation (:prepared-geometry %) g) query-results)
-                uuids (into #{} (map (:indexed-id-column (get-spatial-index dataset)) de-9im-results))]
-            (ds/filter-column dataset (:indexed-id-column (get-spatial-index dataset)) uuids))
+                id-column (:indexed-id-column idx)
+                uuids (into #{} (map id-column) de-9im-results)]
+            (ds/filter-column dataset id-column uuids))
           (let [g (feature/to-jts featurelike)
                 bool-col (keyword (.toString ^java.util.UUID (random-uuid)))
                 de-9im-fn (fn [row] {bool-col ((de-9im-operation g) (row geom-column))})]

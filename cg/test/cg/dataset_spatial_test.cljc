@@ -83,6 +83,23 @@
   (is (true? (ds/intersects-any? (two-squares) (feature/point 105 5)))
       "with no index, a scan of the rows"))
 
+;; :footprint holds the squares of :geometry in the opposite order, so a
+;; point in the first square selects row 1 by :geometry and row 2 by
+;; :footprint.
+(defn- swapped-squares []
+  (ds/maps->dataset [{:id 1 :geometry (square 0 10) :footprint (square 100 10)}
+                     {:id 2 :geometry (square 100 10) :footprint (square 0 10)}]))
+
+#?(:clj
+   (deftest two-indexed-geometry-columns
+     (let [d (-> (swapped-squares)
+                 (ds/add-spatial-index :geometry :geometry-id)
+                 (ds/add-spatial-index :footprint :footprint-id))]
+       (is (= [1] (ids (ds/select-intersects d (feature/point 5 5) :geometry))))
+       (is (= [2] (ids (ds/select-intersects d (feature/point 5 5) :footprint)))
+           "the select uses the index of its own column")
+       (is (= [2] (ids (ds/select-within d (square -1 12) :footprint)))))))
+
 (deftest map-geometry-on-an-indexed-dataset
   (let [moved (ds/map-geometry (indexed-squares) (fn [_] (square 1000 10)))]
     (is (= [1 2] (ids moved)))
