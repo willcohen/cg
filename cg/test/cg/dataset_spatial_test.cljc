@@ -124,7 +124,10 @@
        (is (true? (ds/has-spatial-index? d)))
        (is (thrown-with-msg? clojure.lang.ExceptionInfo #"more than one spatial index"
                              (ds/get-spatial-index d))
-           "the 1-arity cannot choose an index"))))
+           "the 1-arity cannot choose an index")
+       (is (thrown-with-msg? clojure.lang.ExceptionInfo #"uses the id column :geometry-id"
+                             (ds/add-spatial-index d :footprint :geometry-id))
+           "a second index cannot take the ids of another index"))))
 
 (deftest map-geometry-on-an-indexed-dataset
   (let [moved (ds/map-geometry (indexed-squares) (fn [_] (square 1000 10)))]

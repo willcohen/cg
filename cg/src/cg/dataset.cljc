@@ -1022,12 +1022,25 @@
      (defn add-spatial-index
        "Builds an HPRtree index on `geom-column` (default :geometry). Returns the
         dataset with `indexed-id-column` (default :indexed-id) and :spatial
-        metadata that refers to the index."
+        metadata that refers to the index. It replaces an index on
+        `geom-column`. It throws when the index of another column uses
+        `indexed-id-column`."
        ([ds]
         (add-spatial-index ds :geometry))
        ([ds geom-column]
         (add-spatial-index ds geom-column :indexed-id))
        ([ds geom-column indexed-id-column]
+        (when-let [other (some #(when (and (= indexed-id-column (:indexed-id-column %))
+                                          (not= geom-column (:geometry-column %)))
+                                  (:geometry-column %))
+                               (:spatial (meta ds)))]
+          ;; The new ids would replace the ids of the other index.
+          (throw (ex-info (str "The spatial index of " other " uses the id column "
+                               indexed-id-column ". Give the index of " geom-column
+                               " another id column.")
+                          {:geometry-column geom-column
+                           :indexed-id-column indexed-id-column
+                           :other-geometry-column other})))
         (let [idx-id (random-uuid)
               n-rows (ds/row-count ds)
               _ (stage! index-label "start" 0 n-rows)
