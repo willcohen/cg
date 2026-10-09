@@ -83,6 +83,14 @@
   (is (true? (ds/intersects-any? (two-squares) (feature/point 105 5)))
       "with no index, a scan of the rows"))
 
+(deftest map-geometry-on-an-indexed-dataset
+  (let [moved (ds/map-geometry (indexed-squares) (fn [_] (square 1000 10)))]
+    (is (= [1 2] (ids moved)))
+    (is (true? (ds/intersects-any? moved (feature/point 1005 5)))
+        "the new geometries answer")
+    (is (false? (ds/intersects-any? moved (feature/point 5 5)))
+        "the index of the old geometries does not answer")))
+
 #?(:cljs (-> (init_wasmts_BANG_)
              (.then (fn [_] (ds/init-arquero!)))
              (.then (fn [_] (run_tests_and_exit_BANG_ "cg.dataset-spatial-test")))))

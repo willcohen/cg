@@ -1022,9 +1022,7 @@
        ([ds geom-column]
         (add-spatial-index ds geom-column :indexed-id))
        ([ds geom-column indexed-id-column]
-        (let [idx-id (if (has-spatial-index? ds geom-column)
-                       (:spatial-index-uuid (:spatial (meta ds)))
-                       (random-uuid))
+        (let [idx-id (random-uuid)
               n-rows (ds/row-count ds)
               _ (stage! index-label "start" 0 n-rows)
               index (HPRtree.)
@@ -1040,12 +1038,15 @@
               ds-with-id (ds/add-or-update-column ds indexed-id-column indexed-id-vec)]
           (swap! dataset-context-store assoc idx-id index)
           (stage! index-label "done" n-rows n-rows)
+          ;; get-spatial-index reads the first entry of a column. Remove the
+          ;; entry of the old index, or a reindex answers with old geometries.
           (vary-meta ds-with-id assoc
-                     :spatial (into []
-                                    (conj (:spatial (meta ds-with-id))
-                                          {:spatial-index-uuid idx-id
-                                           :geometry-column geom-column
-                                           :indexed-id-column indexed-id-column}))))))
+                     :spatial (conj (into []
+                                          (remove #(= geom-column (:geometry-column %)))
+                                          (:spatial (meta ds-with-id)))
+                                    {:spatial-index-uuid idx-id
+                                     :geometry-column geom-column
+                                     :indexed-id-column indexed-id-column})))))
 
      (defn query-spatial-index
        "Returns the index payloads whose envelopes meet `envelope`."
