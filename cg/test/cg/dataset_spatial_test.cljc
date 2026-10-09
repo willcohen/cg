@@ -90,6 +90,12 @@
   (ds/maps->dataset [{:id 1 :geometry (square 0 10) :footprint (square 100 10)}
                      {:id 2 :geometry (square 100 10) :footprint (square 0 10)}]))
 
+(deftest has-spatial-index?-with-one-argument-reads-the-geometry-column
+  (is (false? (ds/has-spatial-index? (two-squares))))
+  (is (true? (ds/has-spatial-index? (indexed-squares))))
+  (is (false? (ds/has-spatial-index? (ds/add-spatial-index (swapped-squares) :footprint)))
+      "an index on another column only"))
+
 #?(:clj
    (deftest two-indexed-geometry-columns
      (let [d (-> (swapped-squares)
@@ -98,7 +104,11 @@
        (is (= [1] (ids (ds/select-intersects d (feature/point 5 5) :geometry))))
        (is (= [2] (ids (ds/select-intersects d (feature/point 5 5) :footprint)))
            "the select uses the index of its own column")
-       (is (= [2] (ids (ds/select-within d (square -1 12) :footprint)))))))
+       (is (= [2] (ids (ds/select-within d (square -1 12) :footprint))))
+       (is (true? (ds/has-spatial-index? d)))
+       (is (thrown-with-msg? clojure.lang.ExceptionInfo #"more than one spatial index"
+                             (ds/get-spatial-index d))
+           "the 1-arity cannot choose an index"))))
 
 (deftest map-geometry-on-an-indexed-dataset
   (let [moved (ds/map-geometry (indexed-squares) (fn [_] (square 1000 10)))]

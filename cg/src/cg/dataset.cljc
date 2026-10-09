@@ -971,12 +971,16 @@
        (:spatial (meta ds)))
 
      (defn get-spatial-index
+       "The :spatial entry of the index of `ds` on `geom-column`, or nil. The
+        1-arity gives the one index of `ds`, and throws when `ds` has more
+        than one index."
        ([ds]
         (let [s (get-spatial-indices ds)]
           (case (count s)
             0 nil
             1 (first s)
-            (Exception. "More than one index."))))
+            (throw (ex-info "The dataset has more than one spatial index. Give the geometry column."
+                            {:geometry-columns (mapv :geometry-column s)})))))
        ([ds geom-column]
         (let [i (first (clojure.core/filter #(= (:geometry-column %) geom-column)
                                             (get-spatial-indices ds)))]
@@ -987,8 +991,10 @@
             i))))
 
      (defn has-spatial-index?
+       "True when `ds` has an index on `geom-column` (default :geometry, as
+        on the JS runtime)."
        ([ds]
-        (not (nil? (get-spatial-index ds))))
+        (has-spatial-index? ds :geometry))
        ([ds geom-column]
         (not (nil? (get-spatial-index ds geom-column)))))
 
