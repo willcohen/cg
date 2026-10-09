@@ -70,11 +70,15 @@ COMMANDS:
       threading-macro binding of the file (item->, coll->, table->), or the
       binding that --model names. The default timeout is 60000 ms.
 
-  show-model <file> [--format edn|json]
-      Print the Flow Graph of each model of the file.
+  show-model <file> [--binding NAME]
+      Print the name, the node count, the edge count and the operations of
+      each model of the file. With --binding, print the Flow Graph of the
+      model NAME only.
 
-  generate <file> [--format edn|code]
-      Write the .cg source again from the models of the file.
+  generate <file> [--binding NAME] [--output FILE]
+      Write the .cg source again from the models of the file. With
+      --binding, use the model NAME only. Print the source, or with
+      --output, write it to FILE.
 
   validate <file>
       Make sure that code -> model -> code gives the code again.
