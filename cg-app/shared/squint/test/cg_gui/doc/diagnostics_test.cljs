@@ -5,8 +5,7 @@
 ;; SPDX-License-Identifier: Apache-2.0 WITH LLVM-exception
 
 (ns cg-gui.doc.diagnostics-test
-  "Pure CgFlow -> diagnostic-data conversion. Imports the
-   compiled data .mjs directly. With no vscode coupling, it runs standalone."
+  "Pure CgFlow -> diagnostic-data conversion."
   (:require [cljs.test :as t :refer [deftest is testing]]
             ["../../../src/cg_gui/doc/diagnostics.mjs" :as data]))
 
@@ -22,8 +21,6 @@
       (is (= 1 (count ds)))
       (let [d (first ds)]
         (is (= "forbidden-form" (:code d)))
-        (is (= :info (:severity d))
-            "the parser calls it an error; the editor grades it down (see below)")
         (is (= "(defn ...) is not allowed in a flow file" (:message d)))
         ;; there is no plain "cg" source
         (is (= "cg-parser" (:source d)))

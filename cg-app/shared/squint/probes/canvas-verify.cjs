@@ -288,8 +288,7 @@ async function consoleHoldsStill(page, check) {
   check('the console holds still at 700 px', flips <= 1, `flips=${flips}`);
 }
 
-// cg/run-ended has one shape for the two hosts: {outcome, count?, exitCode?}.
-// A backend run gives outcome and count; the bb run subprocess gives exitCode.
+// cg/run-ended has one shape for the two hosts: {outcome, count?}.
 async function runEndStatus(page, check) {
   await h.sendFlow(page, SIMPLE);
   const status = () => page.evaluate(() => {
@@ -315,8 +314,8 @@ async function runEndStatus(page, check) {
   check('a backend run that ends with a count shows "ok, 3 result(s)"',
     counted === 'ok, 3 result(s)', counted);
 
-  const exited = await endWith({ outcome: 'error', exitCode: 1 });
-  check('a subprocess run shows its exit code', exited === 'exited 1', exited);
+  const failed = await endWith({ outcome: 'error' });
+  check('a run that ends with an error shows "failed"', failed === 'failed', failed);
 
   const bare = await endWith({ outcome: 'success' });
   check('a backend run with no count shows "ok"', bare === 'ok', bare);
@@ -963,8 +962,7 @@ async function opGhost(page, check) {
 
   // With no module label the op goes under the "Ops" tab.
   await tab(page, 'Ops').click();
-  await h.withRandom(page, 0, () =>
-    page.locator('.cg-toolbar-op', { hasText: 'prepare-parcel' }).first().click());
+  await page.locator('.cg-toolbar-op', { hasText: 'prepare-parcel' }).first().click();
   const card = await page.waitForSelector('.react-flow__node[data-id="ghost-1"]', { timeout: 5000 })
     .then(() => page.evaluate(() => {
       const w = document.querySelector('.react-flow__node[data-id="ghost-1"]');
@@ -1193,8 +1191,7 @@ async function chevronAndIcons(page, check) {
 
   await page.click('.cg-toolbar-toggle');
   await page.locator('.cg-toolbar-tab').filter({ hasText: /^Parcel \(/ }).click();
-  await h.withRandom(page, 0.5, () =>
-    page.locator('.cg-toolbar-op').filter({ hasText: /^prepare-parcel$/ }).click());
+  await page.locator('.cg-toolbar-op').filter({ hasText: /^prepare-parcel$/ }).click();
   const ghostOpen = await waitExpanded(page, 'ghost-1', GHOST_BODY, true);
   const ghostBefore = await cardState(page, 'ghost-1', GHOST_BODY);
   await clickChevron('ghost-1');

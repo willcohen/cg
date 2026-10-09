@@ -103,8 +103,7 @@
     (cond
       (and on? (nil? timer)) (reset! turn-timer (js/setInterval next-turn! turn-ms))
       (and (not on?) timer) (do (js/clearInterval timer)
-                                (reset! turn-timer nil))
-      :else nil)))
+                                (reset! turn-timer nil)))))
 
 (defn reset-run! []
   (reset! live rs/idle-run)
@@ -128,7 +127,5 @@
           (keep-turns!)
           (publish-soon! m))))))
 
-(defn listen!
-  "Folds the messages of the window bus into run-state."
-  []
+(defn listen! []
   (.addEventListener js/window "message" on-bus-message))

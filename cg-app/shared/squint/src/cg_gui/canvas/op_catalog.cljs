@@ -54,3 +54,10 @@
                       #js {:name "coll->" :desc "collection-level flow"}
                       #js {:name "table->" :desc "dataset flow"}
                       #js {:name "layers->" :desc "scope iteration (not yet)"}]}])
+
+(defn ui-op
+  "An OperationDecl (JS) -> the #js {name, desc} that an op button takes."
+  [op]
+  #js {:name (aget op "name")
+       :desc (str (.-length (or (aget op "inputs") #js [])) " in / "
+                  (.-length (or (aget op "outputs") #js [])) " out")})

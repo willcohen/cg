@@ -21,15 +21,8 @@
   "The built-in ops of all tabs plus the loaded user ops of the CgFlow, each as
    #js {:name :desc?}."
   [operations]
-  (let [acc #js []]
-    (.forEach catalog/builtins
-              (fn [tab] (.forEach (aget tab "ops") (fn [op] (.push acc op)))))
-    (.forEach (or operations #js [])
-              (fn [op]
-                (.push acc #js {:name (aget op "name")
-                                :desc (str (.-length (or (aget op "inputs") #js [])) " in / "
-                                           (.-length (or (aget op "outputs") #js [])) " out")})))
-    acc))
+  (.concat (.flatMap catalog/builtins (fn [tab] (aget tab "ops")))
+           (.map (or operations #js []) catalog/ui-op)))
 
 (defn- subseq-match?
   "True when each char of `query` is in `nm` in order, case-insensitive. An
@@ -46,10 +39,8 @@
           (= (.charAt q qi) (.charAt n ni)) (recur (inc qi) (inc ni))
           :else (recur qi (inc ni)))))))
 
-(defn- jitter [] (+ 200 (js/Math.floor (* (js/Math.random) 120))))
-
 (defn Palette
-  "props: {operations, onAddGhost (fn [name x y]), onClose (fn [])}."
+  "props: {operations, onAddGhost (fn [name]), onClose (fn [])}."
   [^js props]
   (let [operations   (aget props "operations")
         on-add-ghost (aget props "onAddGhost")
@@ -61,7 +52,7 @@
                               (fn [op] (subseq-match? query (aget op "name"))))
         n-results    (.-length results)
         insert! (fn [op]
-                  (when op (on-add-ghost (aget op "name") (jitter) (jitter)))
+                  (when op (on-add-ghost (aget op "name")))
                   (on-close))]
     (useEffect (fn [] (when-let [el (.-current input-ref)] (.focus el)) js/undefined) #js [])
     (useEffect (fn [] (when (>= selected n-results) (set-selected 0)) js/undefined)

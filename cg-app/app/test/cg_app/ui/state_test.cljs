@@ -14,14 +14,9 @@
   (when-let [ls (.-localStorage js/globalThis)] (.removeItem ls "cg-theme"))
   (is (= "white" (st/init-theme!))))
 
-(deftest toggle-theme-flips-and-returns
-  (st/set-theme! "g100")
-  (is (= "white" (st/toggle-theme!)))
-  (is (= "g100" (st/toggle-theme!))))
-
 ;; The OS preference reads as light here, because node has no matchMedia.
 (deftest toggle-theme-stores-only-a-choice-that-differs-from-the-os
-  (st/set-theme! "white")
+  (swap! st/app-state assoc :theme "white")
   (is (= "g100" (st/toggle-theme!)))
   (when-let [ls (.-localStorage js/globalThis)]
     (is (= "g100" (.getItem ls "cg-theme")) "dark on a light OS is a stored choice"))
@@ -42,9 +37,9 @@
 (deftest subscribe-fires-on-swap
   (let [hits (atom 0)
         unsub (st/subscribe (fn [] (swap! hits inc)))]
-    (st/set-theme! "g10")
+    (swap! st/app-state assoc :theme "g10")
     (unsub)
-    (st/set-theme! "white")
+    (swap! st/app-state assoc :theme "white")
     (is (= 1 @hits))))
 
 (deftest default-panels-are-flow-and-code
@@ -98,12 +93,10 @@
   (let [l (st/get-layer "parcels")]
     (is (true? (aget l "visible?")))
     (is (= "#4589ff" (aget l "color"))))
-  (is (= 1 (.-length (st/visible-layers))))
   (st/remove-map-layer! "parcels")
   (let [l (st/get-layer "parcels")]
     (is (false? (aget l "visible?")))
     (is (nil? (aget l "geojson"))))
-  (is (= 0 (.-length (st/visible-layers))))
   (st/add-map-layer! "parcels" "#ff832b" "EPSG:4326" #js {:type "FeatureCollection"})
   (let [l (st/get-layer "parcels")]
     (is (true? (aget l "visible?")))

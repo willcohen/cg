@@ -5,19 +5,16 @@
 ;; SPDX-License-Identifier: Apache-2.0 WITH LLVM-exception
 
 (ns cg-app.ui.loader
-  "Loads the cg module. Do not console.log a module object, because
-   JavaScriptCore in the macOS app throws on it.")
+  "Loads the cg module, and gives the URLs and text of the files that the page
+   loads. Do not console.log a module object, because JavaScriptCore in the
+   macOS app throws on it.")
 
 (defonce cg-module (atom nil))
 
 (defn ^:async load-cg-module!
-  "Resolves to the cg module. Imports it on the first call. Derefs after
-   reset!, because squint reset! returns undefined."
+  "Resolves to the cg module. Imports it on the first call."
   []
-  (when (nil? @cg-module)
-    (let [m (await (js* "import(~{})" "@wcohen/cg"))]
-      (reset! cg-module m)))
-  @cg-module)
+  (or @cg-module (reset! cg-module (await (js* "import(~{})" "@wcohen/cg")))))
 
 (defn asset-url
   "The URL of a file in an npm package. The page's importmap decides where
@@ -25,17 +22,12 @@
   [specifier]
   (.resolve js/import.meta specifier))
 
-(defn module-url
-  "The page-relative URL of the module at load path `path`. Relative, because
-   the demo is served under a sub-path."
-  [path]
-  (str "modules/" path))
-
 (defn ^:async fetch-module-text
-  "The text of the .cg module at `path`, from module-url. The path resolves
-   against the cg root, as the JVM does."
+  "The text of the .cg module at `path`. The path resolves against the cg
+   root, as the JVM does. The URL is relative to the page, because the demo
+   page is under a sub-path."
   [path]
-  (let [resp (await (js/fetch (module-url path)))]
+  (let [resp (await (js/fetch (str "modules/" path)))]
     (when-not (.-ok resp)
       (throw (js/Error. (str "load-module " path ": HTTP " (.-status resp)))))
     (await (.text resp))))

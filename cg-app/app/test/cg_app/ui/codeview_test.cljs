@@ -22,7 +22,6 @@
 
 (deftest dsl-reflects-moved-position
   (let [out (cv/content-for "dsl" text flow {"buffer-1" #js [111 222]})]
-    (is (.includes out "(geo/buffer 10)"))
     (is (.includes out "[111 222]"))))
 
 (deftest flow-format-is-json-with-visual

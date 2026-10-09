@@ -85,9 +85,7 @@
       (execution/bus-post! #js {:type "cg/run-model"
                                 :model (or run-model (run-js/model-binding-name flow))}))))
 
-(defn- select-model!
-  "Makes `model-name` the model that Run runs."
-  [model-name]
+(defn- select-model! [model-name]
   (state/set-run-model! model-name)
   (execution/bus-post! #js {:type "cg/run-model" :model model-name}))
 
@@ -132,8 +130,7 @@
       (post-flow!)
       ;; A session sync failure must not stop the load.
       (when (true? (:backend-available @state/app-state))
-        (-> (session/load-session-code! text filename)
-            (.catch (fn [e] (js/console.warn "session sync failed:" e))))))
+        (session/load-session-code! text filename)))
     (catch :default e
       (state/set-load-error! (or (.-message e) (str e))))))
 
@@ -168,8 +165,7 @@
       (when flow
         (post-flow!)
         (when (true? (:backend-available @state/app-state))
-          (-> (session/load-session-code! text (:name loaded-file))
-              (.catch (fn [e] (js/console.warn "session sync failed:" e)))))))))
+          (session/load-session-code! text (:name loaded-file)))))))
 
 (defonce ^:private !last-edit (atom nil))
 
@@ -308,16 +304,12 @@
     (.setAttribute root "data-carbon-theme" theme)
     (.setAttribute root "data-theme" (state/theme-mode theme))))
 
-(defn- toggle-or-select!
-  "Toggles panel `k`. On a phone, shows only panel `k`."
-  [bp k]
+(defn- toggle-or-select! [bp k]
   (if (viewport/phone? bp)
     (state/select-panel! k)
     (state/toggle-panel! k)))
 
-(defn- show-panel!
-  "Shows panel `k`. On a phone, shows only panel `k`."
-  [bp k]
+(defn- show-panel! [bp k]
   (cond
     (viewport/phone? bp) (state/select-panel! k)
     (not (true? (aget (state/panels) k))) (state/toggle-panel! k)))
@@ -368,10 +360,7 @@
   #js [#js ["flow" "Flow"] #js ["code" "Code"] #js ["status" "Status"]
        #js ["map" "Map"] #js ["results" "Results"]])
 
-(defn- PanelToggles
-  "The panel toggles: a group in the header, or the tab bar at the bottom of a
-   phone."
-  [^js props]
+(defn- PanelToggles [^js props]
   #jsx [:nav {:className (.-className props) :aria-label "Panels"
               :data-testid (.-testid props)}
         (.map panel-defs
@@ -606,8 +595,7 @@
       ;; From the native shell (File > Save). save! posts cg/file-save-request
       ;; back, because the web side owns the overlay codec.
       (= t "cg/save") (save-file!)
-      (= t "cg/open-defop") (js/console.log "cg/open-defop: the app shell has no editor to open an op in")
-      :else nil)))
+      (= t "cg/open-defop") (js/console.log "cg/open-defop: the app shell has no editor to open an op in"))))
 
 (defn- inject-icon-sprite! []
   (when-not (.getElementById js/document "cg-icon-sprite")

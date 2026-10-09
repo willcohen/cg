@@ -12,9 +12,7 @@
   (when (exists? js/acquireVsCodeApi)
     (js/acquireVsCodeApi)))
 
-(defn post!
-  "Send a JS-object message to the extension host."
-  [msg]
+(defn post! [msg]
   (if vscode
     (.postMessage vscode msg)
     (.postMessage (.-parent js/window) msg "*")))

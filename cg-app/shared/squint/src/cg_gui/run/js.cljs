@@ -18,8 +18,6 @@
   (or (aget mod fname)
       (when-let [n (aget mod nsname)] (aget n fname))))
 
-(defn- metadata-mod [mod] (when mod (aget mod "metadata")))
-
 (defn ^:async ensure-wasmts!
   "Waits for the globalThis.wasmts global of a host script tag. Resolves true or
    throws after the timeout. Call it with nil; the recursion passes the deadline."
@@ -136,7 +134,7 @@
   "Runs `model-name`, or the last threading-macro binding of `flow`, through
    cg.run/run-file. Returns #js {:count :results :name :layers}."
   [mod text flow on-trace read-module model-name file-name]
-  (let [md (metadata-mod mod)
+  (let [md (when mod (aget mod "metadata"))
         split-fn (and md (aget md "split_code_and_metadata"))
         run-file (lookup2 mod "run" "run_file")
         add-listener (lookup2 mod "trace_js" "add_trace_listener")
@@ -189,7 +187,7 @@
          (when (fn? cols) (str " :columns " (pr-str (vec (.call cols v)))))
          "}")))
 
-(defn repl-value-text
+(defn- repl-value-text
   "The REPL text of a value. A dataset gives its size, because its rows can be
    too many to print."
   [v]
@@ -229,12 +227,6 @@
             (or (aget r "cells")
                 (and (aget r "counts") (aget r "rows"))
                 (and (aget r "columns") (aget r "rows")))))))
-
-(defn- numrows-dataset? [r]
-  (and (some? r)
-       (not (js/Array.isArray r))
-       (some? (aget r "numRows"))
-       (not (report-shaped? r))))
 
 (defn- geometry-rows?
   "True when a run result is an array of row maps with a geometry column, the
@@ -278,7 +270,7 @@
                            (and (= 1 (.-length r)) (primitive? (aget r 0))) "scalar"
                            :else "collection")
     (report-shaped? r) "report"
-    (numrows-dataset? r) "dataset"
+    (some? (aget r "numRows")) "dataset"
     :else "scalar"))
 
 (defn scalar-value

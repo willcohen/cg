@@ -83,5 +83,4 @@
                                             :entry entry
                                             :currentCrs (.-currentCrs props)
                                             :onSelect (.-onSelect props)
-                                            :onClose (.-onClose props)}]))]
-                :else nil)]]])))
+                                            :onClose (.-onClose props)}]))])]]])))

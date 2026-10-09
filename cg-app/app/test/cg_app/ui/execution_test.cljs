@@ -34,8 +34,7 @@
   (is (= [] (vec (rc/model-names #js {})))))
 
 (defn- mock-module
-  "Mocks the cg module surface that execute-js! uses, with a trace_js listener
-   registry. __listener_count lets tests check that a listener is removed."
+  "__listener_count lets tests check that a listener is removed."
   [!runs run-result]
   (let [!listeners (atom [])
         emit-1 (fn [evt] (doseq [f @!listeners] (f evt)))]
@@ -256,11 +255,11 @@
     (is (= "jvm" (:runtime e)))
     (is (string? (:message e)))))
 
+(aset js/globalThis "wasmts" #js {:geom #js {}})   ; satisfy ensure-wasmts!
+
 (deftest ^:async execute!-js-backend-through-loader-module
-  (aset js/globalThis "wasmts" #js {:geom #js {}})   ; satisfy ensure-wasmts!
-  (let [!evals (atom [])
-        !posts (stub-window!)]
-    (reset! loader/cg-module (mock-module !evals #js [1 2]))
+  (let [!posts (stub-window!)]
+    (reset! loader/cg-module (mock-module (atom []) #js [1 2]))
     (load-fixture! "js")
     (await (ex/execute!))
     (let [e (:exec @state/app-state)]
@@ -272,7 +271,6 @@
     (is (= 2 (aget (nth @!posts 3) "count")))))
 
 (deftest ^:async execute!-runs-the-selected-model
-  (aset js/globalThis "wasmts" #js {:geom #js {}})
   (let [!runs (atom [])]
     (stub-window!)
     (reset! loader/cg-module (mock-module !runs #js [1]))
@@ -295,7 +293,6 @@
       (is (= "other" (aget (aget (:body @!req) "opts") "name"))))))
 
 (deftest ^:async execute!-routes-a-scalar-result-to-the-badge
-  (aset js/globalThis "wasmts" #js {:geom #js {}})
   (let [!posts (stub-window!)]
     (reset! loader/cg-module (mock-module (atom []) 42))
     ;; a report from an earlier run must not survive under this one

@@ -54,9 +54,7 @@
                (mapcat (fn [op] (map (fn [bn] (body-node-id op bn)) (:nodes (:body-graph op))))
                        (:operations flow)))))
 
-(defn- placed
-  "`node` with :visual {:pos p} when `positions` has `id`."
-  [node positions id]
+(defn- placed [node positions id]
   (if-let [p (get positions id)]
     (assoc node :visual {:pos p})
     node))
@@ -132,8 +130,5 @@
                         (aget location "start-line")
                         (aget location "end-line")
                         rendered))
-      (let [nodes    (reduce (fn [m [id pos]] (assoc m id {":pos" (vec pos)}))
-                             {}
-                             (js/Object.entries positions))
-            rendered (str (edn/render-overlay {":nodes" nodes}) "\n")]
-        (str (str/trimr text) "\n\n" rendered)))))
+      (str (str/trimr text) "\n\n"
+           (edn/render-overlay (update-overlay-positions {} positions)) "\n"))))

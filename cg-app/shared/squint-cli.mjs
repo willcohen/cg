@@ -28,7 +28,7 @@ export const runEach = (mjsFiles) => {
   let failed = 0;
   for (const mjs of mjsFiles) {
     console.log(`\n=== ${mjs} ===`);
-    if (spawnSync('node', [mjs], { stdio: 'inherit' }).status !== 0) failed++;
+    if (spawnSync(process.execPath, [mjs], { stdio: 'inherit' }).status !== 0) failed++;
   }
   if (failed > 0) {
     console.error(`\n${failed} test file(s) failed`);

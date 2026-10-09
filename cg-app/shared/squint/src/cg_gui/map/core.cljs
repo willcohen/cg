@@ -16,9 +16,7 @@
 
 (defonce ^:private cached-base-style (atom nil))
 
-(defn- ^:async fetch-base-style
-  "Fetch and cache the maptiler-basic style JSON."
-  []
+(defn- ^:async fetch-base-style []
   (when (nil? @cached-base-style)
     (let [resp (await (js/fetch style-url))]
       (when-not (.-ok resp)
@@ -65,19 +63,11 @@
   [var-name]
   (aget @!layer-info var-name))
 
-(defn- cgdata-layer-ids
-  "The ids of the data layers (cgdata-*) on the map."
-  [m]
+(defn- cgdata-layer-ids [m]
   (.filter (.getLayersOrder m) (fn [id] (.startsWith id "cgdata-"))))
 
 (defn- hide-identify! [panel]
   (set! (.-display (.-style panel)) "none"))
-
-(defn- clear-children! [el]
-  (loop []
-    (when (.-firstChild el)
-      (.removeChild el (.-firstChild el))
-      (recur))))
 
 (defn- build-identify-panel!
   "Creates the hidden identify panel in the map container and returns
@@ -91,34 +81,26 @@
         header (js/document.createElement "div")
         title (js/document.createElement "span")
         close (js/document.createElement "span")
-        body  (js/document.createElement "div")
-        ps    (.-style panel)]
+        body  (js/document.createElement "div")]
     (set! (.-className panel) "cg-identify")
-    (set! (.-position ps) "absolute")
-    (set! (.-right ps) "8px")
-    (set! (.-top ps) "8px")
-    (set! (.-zIndex ps) "3")
-    (set! (.-width ps) "320px")
-    (set! (.-maxHeight ps) "calc(100% - 16px)")
-    (set! (.-overflowY ps) "auto")
-    (set! (.-padding ps) "6px 8px")
-    (set! (.-fontSize ps) "12px")
-    (set! (.-borderRadius ps) "4px")
-    (set! (.-background ps) "var(--cg-surface-raised, var(--vscode-editor-background, #ffffff))")
-    (set! (.-color ps) "var(--cg-ink, var(--vscode-foreground, #1a1a1a))")
-    (set! (.-border ps) "1px solid var(--cg-line-soft, var(--vscode-panel-border, #cccccc))")
-    (set! (.-boxShadow ps) "0 1px 4px rgba(0,0,0,0.25)")
-    (set! (.-display ps) "none")
+    ;; Two literals: squint keeps the key order of a literal with 8 keys or less.
+    (js/Object.assign
+     (.-style panel)
+     #js {:position "absolute" :right "8px" :top "8px" :zIndex "3"
+          :width "320px" :maxHeight "calc(100% - 16px)" :overflowY "auto" :padding "6px 8px"}
+     #js {:fontSize "12px" :borderRadius "4px"
+          :background "var(--cg-surface-raised, var(--vscode-editor-background, #ffffff))"
+          :color "var(--cg-ink, var(--vscode-foreground, #1a1a1a))"
+          :border "1px solid var(--cg-line-soft, var(--vscode-panel-border, #cccccc))"
+          :boxShadow "0 1px 4px rgba(0,0,0,0.25)"
+          :display "none"})
     (set! (.-className header) "cg-identify-header")
-    (set! (.-display (.-style header)) "flex")
-    (set! (.-justifyContent (.-style header)) "space-between")
-    (set! (.-alignItems (.-style header)) "center")
-    (set! (.-marginBottom (.-style header)) "4px")
+    (js/Object.assign (.-style header) #js {:display "flex" :justifyContent "space-between"
+                                            :alignItems "center" :marginBottom "4px"})
     (set! (.-textContent title) "Identify")
     (set! (.-fontWeight (.-style title)) "700")
     (set! (.-textContent close) "×")
-    (set! (.-cursor (.-style close)) "pointer")
-    (set! (.-padding (.-style close)) "0 4px")
+    (js/Object.assign (.-style close) #js {:cursor "pointer" :padding "0 4px"})
     (.addEventListener close "click" (fn [_e] (hide-identify! panel) (on-close)))
     (.appendChild header title)
     (.appendChild header close)
@@ -128,10 +110,7 @@
     (.appendChild container panel)
     #js {:panel panel :body body}))
 
-(defn- feature-card
-  "The card of one clicked feature, from the :popup of its layer spec and the
-   colors of its layer style."
-  [var-name props]
+(defn- feature-card [var-name props]
   (let [info (layer-info var-name)]
     (popup/card-element
      (popup/card-model var-name props
@@ -142,7 +121,7 @@
   "Fills the identify panel with one card for each clicked feature, at most 12
    and no duplicates (same var and properties), then shows the panel."
   [panel body feats]
-  (clear-children! body)
+  (.replaceChildren body)
   (let [seen #js {}
         cap  (js/Math.min (.-length feats) 12)]
     (loop [i 0]
@@ -322,12 +301,6 @@
   [var]
   (aget single-palette (mod (js/Math.abs (str-hash var)) (.-length single-palette))))
 
-(defn humanize
-  "A column name or a value as display text. \"final-grade\" gives \"Final
-   grade\"."
-  [s]
-  (popup/humanize s))
-
 (defn shade
   "The #rrggbb color `c` mixed with black: `k` 0 gives `c` and 1 gives black.
    Any other color text comes back with no change."
@@ -411,11 +384,6 @@
     (when (false? shown-counts) (aset style "counts" false))
     style))
 
-(defn default-style
-  "The layer style with no sink spec."
-  [var fc]
-  (spec->style var fc nil))
-
 (defn- categorical? [style]
   (= "categorical" (aget style "mode")))
 
@@ -432,7 +400,7 @@
           counts (or (aget style "category-counts") #js {})
           rows   (.map (js/Object.keys cc)
                        (fn [k]
-                         #js {:layer-var var :label (humanize k) :value k
+                         #js {:layer-var var :label (popup/humanize k) :value k
                               :swatch-color (aget cc k) :count (aget counts k)}))
           blank  (uncolored-count style)]
       (when (pos? blank)
@@ -443,25 +411,21 @@
               :swatch-color (aget style "color")
               :count (aget style "feature-count")}]))
 
-(defn legend-entries
-  "The legend rows of a styled layer as #js {layer-var label value swatch-color
-   count}: one for each category in color order, then \"No value\" when needed.
-   A style with counts false gives no count."
+(defn layer-legend
+  "The legend of a styled layer: #js {var, layer-type, title, rows}. The title
+   is the color-by column as display text, or nil for a layer of one color. A
+   row is #js {layer-var label value swatch-color count}: one for each category
+   in color order, then \"No value\" when needed. A style with counts false
+   gives rows with no count."
   [var style]
   (let [rows (legend-rows var style)]
     (when (false? (aget style "counts"))
       ;; squint emits `return return delete` for a js-delete in tail position.
       (.forEach rows (fn [r] (js-delete r "count") nil)))
-    rows))
-
-(defn layer-legend
-  "The legend of a styled layer: #js {var, layer-type, title, rows}. The title
-   is the color-by column as display text, or nil for a layer of one color."
-  [var style]
-  #js {:var var
-       :layer-type (aget style "layer-type")
-       :title (when (categorical? style) (humanize (aget style "category-property")))
-       :rows (legend-entries var style)})
+    #js {:var var
+         :layer-type (aget style "layer-type")
+         :title (when (categorical? style) (popup/humanize (aget style "category-property")))
+         :rows rows}))
 
 (defn legends
   "The legend (layer-legend) of each visible layer of a layer table that has
@@ -647,16 +611,12 @@
 ;; The fill paint goes under the basemap buildings, because a blend mode does
 ;; not exist in MapLibre and a footprint must show through a parcel color.
 ;; Its outline and highlight stay above them.
-(defn- fill-insert-before
-  "The id of the layer under which the paint of a fill goes."
-  [m]
+(defn- fill-insert-before [m]
   (first-layer-id m (fn [layer] (or (building-layer? layer)
                                     (line-var-layer? m layer)
                                     (symbol-layer? layer)))))
 
-(defn- add-var-layers!
-  "Adds the layers of a var for its style, in draw order."
-  [m var-name style geojson]
+(defn- add-var-layers! [m var-name style geojson]
   (let [source-id (str "cgsrc-" var-name)
         id        (fn [prefix] (str prefix var-name))
         kind      (aget style "layer-type")
@@ -698,9 +658,7 @@
     (aset @!layer-info var-name #js {:spec (aget l "spec") :style style :signature signature})
     (apply-min-zoom! m var-name (truncated-layer? l))))
 
-(defn- remove-var!
-  "Removes the layers, the source and the record of a var."
-  [m var-name]
+(defn- remove-var! [m var-name]
   (remove-var-layers! m var-name)
   (when (.getSource m (str "cgsrc-" var-name))
     (.removeSource m (str "cgsrc-" var-name)))

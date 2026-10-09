@@ -78,14 +78,22 @@
   #jsx [:div {:style #js {:padding "3px 10px" :fontSize "12px" :opacity "0.75"}}
         (aget (.-varInfo props) "name")])
 
+(defn- VarGroup [^js props]
+  (let [vars (.-vars props)]
+    (when (pos? (.-length vars))
+      #jsx [c/Accordion
+            [c/AccordionItem {:title (str (.-title props) " (" (.-length vars) ")")}
+             (.map vars
+                   (fn [v]
+                     #jsx [VarListItem {:key (or (aget v "qualified") (aget v "name"))
+                                        :varInfo v}]))]])))
+
 (defn Sidebar [^js props]
   (let [st (state/use-app-state)
         vars (:session-vars st)
         backend-up (true? (:backend-available st))
         groups (layers/group-vars vars)
-        datasets (aget groups "datasets")
-        functions (aget groups "functions")
-        values (aget groups "values")]
+        datasets (aget groups "datasets")]
     #jsx [:div {:className "cg-sidebar" :data-testid "sidebar"
                 :data-overlay (str (true? (.-overlay props)))}
           [:h3 {:style #js {:fontSize "11px" :textTransform "uppercase"
@@ -111,17 +119,5 @@
                            #jsx [DatasetTile {:key (or (aget v "qualified") (aget v "name"))
                                               :varInfo v :idx i
                                               :backendUp backend-up}]))]])
-          (when (pos? (.-length functions))
-            #jsx [c/Accordion
-                  [c/AccordionItem {:title (str "Functions (" (.-length functions) ")")}
-                   (.map functions
-                         (fn [v]
-                           #jsx [VarListItem {:key (or (aget v "qualified") (aget v "name"))
-                                              :varInfo v}]))]])
-          (when (pos? (.-length values))
-            #jsx [c/Accordion
-                  [c/AccordionItem {:title (str "Values (" (.-length values) ")")}
-                   (.map values
-                         (fn [v]
-                           #jsx [VarListItem {:key (or (aget v "qualified") (aget v "name"))
-                                              :varInfo v}]))]])]))
+          [VarGroup {:title "Functions" :vars (aget groups "functions")}]
+          [VarGroup {:title "Values" :vars (aget groups "values")}]]))

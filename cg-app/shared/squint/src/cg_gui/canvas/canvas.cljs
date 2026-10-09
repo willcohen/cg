@@ -55,31 +55,25 @@
   "Writes one --cg-pulse-opacity on <html> each frame, for all running nodes to
    pulse in one phase. Returns the stop fn."
   [t0]
-  (let [tick  (atom nil)
-        live? (atom true)]
+  (let [live? (atom true)]
     (.add (.. js/document -documentElement -classList) "cg-pulse-locked")
-    (reset! tick
-            (fn rec [ts]
-              (when @live?
-                (let [n (.-length (.querySelectorAll js/document ".cg-node.running"))]
-                  (if (and (pos? n) (<= n pulse-max-running))
-                    (let [phase (/ (mod (- ts t0) pulse-period-ms) pulse-period-ms)
-                          o     (+ 0.5 (* 0.5 (js/Math.cos (* phase 2 js/Math.PI))))]
-                      (set-root-var! "--cg-pulse-opacity" o))
-                    (set-root-var! "--cg-pulse-opacity" 1)))
-                (js/requestAnimationFrame rec))))
-    (js/requestAnimationFrame @tick)
+    (js/requestAnimationFrame
+     (fn rec [ts]
+       (when @live?
+         (let [n (.-length (.querySelectorAll js/document ".cg-node.running"))]
+           (if (and (pos? n) (<= n pulse-max-running))
+             (let [phase (/ (mod (- ts t0) pulse-period-ms) pulse-period-ms)
+                   o     (+ 0.5 (* 0.5 (js/Math.cos (* phase 2 js/Math.PI))))]
+               (set-root-var! "--cg-pulse-opacity" o))
+             (set-root-var! "--cg-pulse-opacity" 1)))
+         (js/requestAnimationFrame rec))))
     (fn stop! []
       (reset! live? false)
       (.remove (.. js/document -documentElement -classList) "cg-pulse-locked")
       (.removeProperty (.. js/document -documentElement -style) "--cg-pulse-opacity"))))
 
 (defn- use-phase-lock-pulse []
-  (useEffect
-   (fn []
-     (let [stop! (pulse-loop (.now js/performance))]
-       (fn cleanup [] (stop!))))
-   #js []))
+  (useEffect (fn [] (pulse-loop (.now js/performance))) #js []))
 
 (defn- ghost-id?
   "True for a ghost: a webview-local node dropped from the toolbar, with id
@@ -87,28 +81,21 @@
   [id]
   (.startsWith (str id) "ghost-"))
 
-(defn- reveal!
-  "Data keys keep their hyphens, because the data is clj->js output."
-  [^js node]
-  (let [d (.-data node)]
-    (host/reveal-location! (aget d "call-site-location")
-                           (aget d "source-path"))))
-
 (defn on-node-click
   "A plain click selects the node and makes its model of `flow` the one Run runs.
    Cmd or Ctrl click reveals the source span, which moves the editor selection."
   [^js e ^js node ^js flow]
-  (if (or (.-metaKey e) (.-ctrlKey e))
-    (reveal! node)
-    (let [d (.-data node)
-          m (when d (aget d "model-name"))]
-      ;; Ghosts, loader cards and op body steps carry a model-name too, and
-      ;; the cg-app host does not check the name it gets.
-      (when (and m
-                 (some (fn [b] (and (= "threading_macro" (aget b "body-shape"))
-                                    (= m (aget b "name"))))
-                       (or (and flow (aget flow "bindings")) #js [])))
-        (host/post! #js {:type "cg/select-model" :model m})))))
+  (let [d (.-data node)]
+    (if (or (.-metaKey e) (.-ctrlKey e))
+      (host/reveal-location! (aget d "call-site-location") (aget d "source-path"))
+      (let [m (aget d "model-name")]
+        ;; Ghosts, loader cards and op body steps carry a model-name too, and
+        ;; the cg-app host does not check the name it gets.
+        (when (and m
+                   (some (fn [b] (and (= "threading_macro" (aget b "body-shape"))
+                                      (= m (aget b "name"))))
+                         (or (and flow (aget flow "bindings")) #js [])))
+          (host/post! #js {:type "cg/select-model" :model m}))))))
 
 (defn on-node-context-menu [^js e _node]
   (.preventDefault e))
@@ -116,9 +103,7 @@
 (defn on-node-double-click
   "apply-collapse gives :on-dive only to a divable node."
   [_e ^js node]
-  (let [d (.-data node)
-        f (when d (aget d "on-dive"))]
-    (when f (f))))
+  (when-let [f (aget (.-data node) "on-dive")] (f)))
 
 (defn- span-covers?
   [loc line]
@@ -133,7 +118,7 @@
   (.reduce nodes
            (fn [best ^js n]
              (let [d   (.-data n)
-                   loc (when d (aget d "call-site-location"))]
+                   loc (aget d "call-site-location")]
                (if (and (span-covers? loc line) (not (aget d "source-path")))
                  (let [span (- (aget loc "end-line") (aget loc "start-line"))]
                    (if (or (not best) (< span (aget best "span")))
@@ -149,8 +134,7 @@
   (if (.every nodes (fn [^js n] (= (if (.-selected n) true false)
                                    (= id (aget n "id")))))
     nodes
-    (.map nodes (fn [^js n]
-                  (js/Object.assign #js {} n #js {:selected (= id (aget n "id"))})))))
+    (.map nodes (fn [^js n] (assoc n "selected" (= id (aget n "id")))))))
 
 (defn- apply-reveal!
   "Selects the node that covers `line`, expands its container, and pans to it
@@ -162,13 +146,7 @@
       (let [id  (aget hit "id")
             pid (aget hit "parent")]
         (when pid
-          (set-expanded-overrides
-           (fn [ov]
-             (if (aget ov pid)
-               ov
-               (let [next (js/Object.assign #js {} ov)]
-                 (aset next pid true)
-                 next)))))
+          (set-expanded-overrides (fn [ov] (if (aget ov pid) ov (assoc ov pid true)))))
         (js/setTimeout
          (fn []
            (when-let [inst (.-current rf)]
@@ -182,7 +160,7 @@
   [_e ^js node]
   (let [d          (.-data node)
         id         (.-id node)
-        model-name (when d (aget d "model-name"))]
+        model-name (aget d "model-name")]
     ;; A ghost is not in the .cg file. The position of a body step is relative
     ;; to its parent, because the step has extent="parent".
     (when-not (ghost-id? id)
@@ -208,11 +186,7 @@
                      (identical? pr (aget d "progress"))
                      (= rm (true? (aget d "run-model?"))))
               n
-              (js/Object.assign #js {} n
-                                #js {:data (js/Object.assign
-                                            #js {} d
-                                            #js {:state st :progress pr
-                                                 :run-model? rm})}))))))
+              (assoc n "data" (assoc d "state" st "progress" pr "run-model?" rm)))))))
 
 (defn- expanded-now?
   "The chevron state for a call-site id. With no entry in `overrides`, a parsed
@@ -230,7 +204,7 @@
     (.forEach nodes
               (fn [n]
                 (let [d (.-data n)]
-                  (when (and d (aget d "has-body?"))
+                  (when (aget d "has-body?")
                     (let [id (aget n "id")]
                       (when-not (expanded-now? overrides id)
                         (aset collapsed id true)))))))
@@ -242,48 +216,34 @@
     #js {:nodes
          (.map nodes
                (fn [n]
-                 (let [id (aget n "id")
-                       d  (.-data n)]
-                   (cond
-                     (and d (aget d "has-body?"))
-                     (let [coll? (aget collapsed id)
-                           nd    (js/Object.assign
-                                  #js {} n
-                                  #js {:data (js/Object.assign
-                                              #js {} d
-                                              #js {:expanded? (not coll?)
-                                                   :on-toggle-expand (fn [] (toggle id))})})]
+                 (let [id    (aget n "id")
+                       d     (.-data n)
+                       body? (aget d "has-body?")
+                       coll? (and body? (aget collapsed id))
+                       extra (cond
+                               body?
+                               #js {:expanded? (not coll?)
+                                    :on-toggle-expand (fn [] (toggle id))}
+
+                               (aget d "divable?")
+                               ;; The name is an argument, because a step with
+                               ;; branches names one op for each branch.
+                               #js {:on-dive
+                                    (fn [nm]
+                                      (dive (or nm (aget (or (aget d "dive-names") #js []) 0))))})]
+                   (if (or extra (aget hidden id))
+                     (let [nd (js/Object.assign #js {} n)]
+                       (when extra (aset nd "data" (js/Object.assign #js {} d extra)))
                        (when coll? (aset nd "style" nil))
                        (when (aget hidden id) (aset nd "hidden" true))
                        nd)
-
-                     (and d (aget d "divable?"))
-                     (let [nd (js/Object.assign
-                               #js {} n
-                               #js {:data (js/Object.assign
-                                           #js {} d
-                                           ;; The name is an argument, because a
-                                           ;; step with branches names one
-                                           ;; op for each branch.
-                                           #js {:on-dive
-                                                (fn [nm]
-                                                  (dive (or nm
-                                                            (aget (or (aget d "dive-names")
-                                                                      #js [])
-                                                                  0))))})})]
-                       (when (aget hidden id) (aset nd "hidden" true))
-                       nd)
-
-                     (aget hidden id)
-                     (js/Object.assign #js {} n #js {:hidden true})
-
-                     :else n))))
+                     n))))
          :edges
          (.map edges
                (fn [e]
                  (if (or (aget hidden (aget e "source"))
                          (aget hidden (aget e "target")))
-                   (js/Object.assign #js {} e #js {:hidden true})
+                   (assoc e "hidden" true)
                    e)))}))
 
 (defn- size-for-layout
@@ -293,11 +253,9 @@
   (.map flow-nodes
         (fn [n]
           (let [d (.-data n)]
-            (if (and d (aget d "has-body?")
+            (if (and (aget d "has-body?")
                      (not (expanded-now? overrides (aget n "id"))))
-              (let [nn (js/Object.assign #js {} n)]
-                (aset nn "style" nil)
-                nn)
+              (assoc n "style" nil)
               n)))))
 
 (def ^:private fit-opts #js {:padding 0.15 :minZoom 0.05 :maxZoom 1.5})
@@ -335,7 +293,7 @@
 
 (defn- node-title [^js n]
   (let [d (.-data n)]
-    (.toLowerCase (str (when d (aget d "label")) " " (when d (aget d "head"))))))
+    (.toLowerCase (str (aget d "label") " " (aget d "head")))))
 
 (defn- find-nodes
   "The shown nodes whose title has `q`, ignoring case; a title that starts
@@ -380,7 +338,7 @@
                   (if (pos? n) (str (inc (mod i n)) "/" n) "none")])]))
 
 (defn- minimap-color [^js node]
-  (case (when (.-data node) (aget (.-data node) "state"))
+  (case (aget (.-data node) "state")
     "running"  "var(--cg-run, #0066cc)"
     "complete" "var(--cg-complete, #137a3d)"
     "error"    "var(--cg-error, #b42318)"
@@ -500,16 +458,13 @@
   (boolean (and flow (pos? (.-length (or (aget flow "bindings") #js []))))))
 
 (defn- run-end-status
-  "The console status for a cg/run-ended message. The bb run subprocess
-   reports an exit code; a backend run reports a result count."
+  "The console status for a cg/run-ended message."
   [^js m]
-  (let [code (aget m "exitCode")
-        n    (aget m "count")]
+  (let [n (aget m "count")]
     (cond
-      (some? code)                 (str "exited " code)
       (= "error" (aget m "outcome")) "failed"
-      (some? n)                    (str "ok, " n " result(s)")
-      :else                        "ok")))
+      (some? n)                      (str "ok, " n " result(s)")
+      :else                          "ok")))
 
 (defn App []
   (let [[received set-received]     (useState nil)
@@ -543,10 +498,7 @@
         dive-up-to (fn [n] (set-dive (fn [prev] (.slice prev 0 n))))
         toggle-expand (fn [id]
                         (set-expanded-overrides
-                         (fn [prev]
-                           (let [nxt (js/Object.assign #js {} prev)]
-                             (aset nxt id (not (expanded-now? prev id)))
-                             nxt))))
+                         (fn [prev] (assoc prev id (not (expanded-now? prev id))))))
         rf (useRef nil)
         ;; A cg/reveal-line that arrives before the nodes exist puts its line
         ;; here. The reseed effect uses it.
@@ -584,14 +536,12 @@
                     (let [n     (inc (.-current ghost-counter))
                           gid   (str "ghost-" n)
                           ops   (when received (aget received "operations"))
-                          piece (convert/ghost-piece gid fn-name 0 0 ops)
+                          piece (convert/ghost-piece gid fn-name ops)
                           head  (aget (aget piece "nodes") 0)]
                       (set! (.-position head) (place head))
                       (set! (.-current ghost-counter) n)
                       (set-nodes (fn [prev] (.concat prev (aget piece "nodes"))))
                       (set-ghost-edges (fn [prev] (.concat prev (aget piece "edges"))))))
-        add-ghost (fn [fn-name x y]
-                    (add-piece fn-name (fn [_] #js {:x x :y y})))
         place-ghost (fn [fn-name]
                       (let [inst (.-current rf)
                             pane (.-current pane-ref)
@@ -678,10 +628,7 @@
 
                    (= t "cg/run-output")
                    (let [chunk (or (aget m "text") "")]
-                     (set-run (fn [prev]
-                                (js/Object.assign
-                                 #js {} prev
-                                 #js {:text (str (aget prev "text") chunk)}))))
+                     (set-run (fn [prev] (assoc prev "text" (str (aget prev "text") chunk)))))
 
                    ;; The flow-* rows are aggregate and have no node.
                    (= t "cg/trace-event")
@@ -690,17 +637,9 @@
                          st   (when evt (tstate/node-state (aget evt "kind")))
                          pr   (when evt (tstate/node-progress evt))]
                      (when (and st pid)
-                       (set-trace-state
-                        (fn [prev]
-                          (let [next (js/Object.assign #js {} prev)]
-                            (aset next pid st)
-                            next))))
+                       (set-trace-state (fn [prev] (assoc prev pid st))))
                      (when (and pr pid)
-                       (set-progress-state
-                        (fn [prev]
-                          (let [next (js/Object.assign #js {} prev)]
-                            (aset next pid pr)
-                            next)))))
+                       (set-progress-state (fn [prev] (assoc prev pid pr)))))
 
                    ;; A hit in a collapsed container selects the container and
                    ;; does not expand it, because an expand on each caret move
@@ -741,16 +680,10 @@
                    (apply-theme! (aget m "mode"))
 
                    (= t "cg/run-ended")
-                   (set-run (fn [prev]
-                              (js/Object.assign
-                               #js {} prev
-                               #js {:status (run-end-status m)})))
+                   (set-run (fn [prev] (assoc prev "status" (run-end-status m))))
 
                    (= t "cg/run-error")
-                   (set-run (fn [prev]
-                              (js/Object.assign
-                               #js {} prev
-                               #js {:status (str "failed: " (aget m "message"))})))
+                   (set-run (fn [prev] (assoc prev "status" (str "failed: " (aget m "message")))))
 
                    :else nil)))]
          (.addEventListener js/window "message" on-msg)
@@ -761,22 +694,17 @@
      (fn []
        (let [on-key
              (fn [^js e]
-               (when (= "/" (.-key e))
+               (cond
+                 (= "/" (.-key e))
                  (let [ae  (.-activeElement js/document)
                        tag (when ae (.-tagName ae))
                        editable? (or (= tag "INPUT") (= tag "TEXTAREA")
                                      (and ae (.-isContentEditable ae)))]
                    (when-not editable?
                      (.preventDefault e)
-                     (set-palette-open true)))))]
-         (.addEventListener js/window "keydown" on-key)
-         (fn [] (.removeEventListener js/window "keydown" on-key))))
-     #js [])
-    (useEffect
-     (fn []
-       (let [on-key
-             (fn [^js e]
-               (when (and (= "Escape" (.-key e)) (not palette-open))
+                     (set-palette-open true)))
+
+                 (and (= "Escape" (.-key e)) (not palette-open))
                  (set-dive (fn [prev]
                              (if (> (.-length prev) 0)
                                (.slice prev 0 (dec (.-length prev)))
@@ -810,17 +738,13 @@
                                  ;; Carry the selection across the reseed by
                                  ;; id, because `positioned` comes from
                                  ;; convert and has no selection.
-                                 sel   (let [s #js {}]
-                                          (.forEach prev
-                                                    (fn [n]
-                                                      (when (.-selected n)
-                                                        (aset s (aget n "id") true))))
-                                          s)
+                                 sel    (js/Set. (.map (.filter prev (fn [n] (.-selected n)))
+                                                       (fn [n] (aget n "id"))))
                                  laid   (.map (patch-node-states positioned trace-state
                                                                  progress-state run-model)
                                               (fn [n]
-                                                (if (aget sel (aget n "id"))
-                                                  (js/Object.assign #js {} n #js {:selected true})
+                                                (if (.has sel (aget n "id"))
+                                                  (assoc n "selected" true)
                                                   n)))]
                              (if dive-name
                                (do (when (> (.-length ghosts) 0)
@@ -916,7 +840,7 @@
                                        (when-let [inst (.-current rf)]
                                          (let [pos (.screenToFlowPosition
                                                     inst #js {:x (.-clientX e) :y (.-clientY e)})]
-                                           (add-ghost op-name (.-x pos) (.-y pos)))))))
+                                           (add-piece op-name (fn [_] pos)))))))
                          ;; Only a pan or zoom by the reader has an event.
                          :onMoveStart (fn [e _]
                                         (when e (set! (.-current auto-fit) false)))
@@ -975,7 +899,6 @@
                                :narrow (< row-w (+ minimap-min-px console/default-pane-width))}]]
             (when palette-open
               #jsx [palette/Palette {:operations (when received (aget received "operations"))
-                                     ;; place-ghost ignores the palette's random x and y.
                                      :onAddGhost place-ghost
                                      :onClose (fn [] (set-palette-open false))}])])))
 

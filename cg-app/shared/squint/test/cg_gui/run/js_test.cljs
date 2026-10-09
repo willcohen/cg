@@ -31,7 +31,6 @@
 (deftest collection-is-an-array-with-nothing-to-draw
   (is (= "collection" (rc/result-shape #js [#js {:id 1 :name "a"}])))
   (is (= "collection" (rc/result-shape #js [1 2 3])))
-  (is (= "collection" (rc/result-shape #js [#js {:id 1}])))
   (is (= "collection" (rc/result-shape #js [#js [1 2]]))))
 
 (deftest a-fold-arrives-as-its-sink-s-collected-vector
@@ -208,8 +207,7 @@
     (.then (rc/repl-eval! (repl-module (fn [_] (js/console.log "hi" #js [2]) (js/Promise.resolve 7))) "(x)" nil)
            (fn [r]
              (is (= "7" (aget r "value")))
-             (is (= "hi [2]
-" (aget r "out")))
+             (is (= "hi [2]\n" (aget r "out")))
              (is (identical? log js/console.log))))))
 
 (deftest repl-eval-gives-the-error

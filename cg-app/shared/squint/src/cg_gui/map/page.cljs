@@ -74,7 +74,7 @@
 (defn- timeout [ms msg]
   (js/Promise. (fn [_ rej] (js/setTimeout (fn [] (rej (js/Error. msg))) ms))))
 
-(defn ^:async start-map!
+(defn- ^:async start-map!
   "The map, or a failure after 25 s, because a basemap can fail to answer."
   [post]
   (let [m (await (js/Promise.race
@@ -143,7 +143,7 @@
       (popup/append! box (.map legends (fn [lg] (legend-section m layers lg))))
       (set! (.-hidden box) (zero? (.-length legends))))))
 
-(defn ^:async draw! [map-ready layers]
+(defn- ^:async draw! [map-ready layers]
   (let [m (await (when-styled (await map-ready)))]
     (mc/sync-layers! m layers)
     (render-legend! m layers)))
@@ -154,7 +154,7 @@
 
 ;; The run ends before the draw, and the next run does not wait for the draw,
 ;; because a basemap that does not answer holds the draw for 25 s.
-(defn ^:async run-cg! [ctx ^js m]
+(defn- ^:async run-cg! [ctx ^js m]
   (status! (str "running " (or (.-model m) ".cg") "..."))
   (reset! !in-run true)
   (try
@@ -178,7 +178,7 @@
     (finally
       (reset! !in-run false))))
 
-(defn ^:async repl-eval! [ctx ^js m]
+(defn- ^:async repl-eval! [ctx ^js m]
   (let [r (await (run-js/repl-eval! (:mod ctx) (.-code m) (:read-module ctx)))]
     (aset r "type" "cg/repl-result")
     (aset r "id" (.-id m))
@@ -189,7 +189,7 @@
          (fn [_] (status! (str (.-length layers) " layer(s) from the JVM session")))
          (fn [e] (draw-failed! ctx e))))
 
-(defn ^:async boot!
+(defn- ^:async boot!
   "Gives the context of a run."
   [^js opts]
   (let [post (.-post opts)

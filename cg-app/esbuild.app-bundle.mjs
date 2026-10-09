@@ -5,9 +5,6 @@
 // SPDX-License-Identifier: Apache-2.0 WITH LLVM-exception
 
 import * as esbuild from 'esbuild';
-import { mkdirSync } from 'fs';
-
-mkdirSync('shared/ui/public', { recursive: true });
 
 // gdal-wasm 0.0.1 imports ffi-wasm by subpath. ffi-wasm ships one bundle
 // that exports each of those subpaths: the bundles import the one
@@ -41,12 +38,10 @@ const sharedConfig = {
     'comlink',
     'web-tree-sitter',
   ],
-  loader: { '.js': 'js', '.mjs': 'js' },
   keepNames: true,
   treeShaking: false,
   metafile: true,
   sourcemap: true,
-  minify: false,
   minifyWhitespace: true,
   minifySyntax: true,
   target: ['es2020'],
@@ -70,31 +65,22 @@ const browserBundleConfig = {
   outfile: 'shared/ui/public/cg-bundled-browser.mjs',
 };
 
-async function build() {
-  try {
-    console.log('Building CG app bundles...');
-    console.log('  Input:    ../cg/dist/cg.mjs');
-    console.log('  Outputs:  shared/ui/public/cg-bundled-node.mjs');
-    console.log('            shared/ui/public/cg-bundled-browser.mjs');
-    console.log('');
+console.log('Building CG app bundles...');
+console.log('  Input:    ../cg/dist/cg.mjs');
+console.log('  Outputs:  shared/ui/public/cg-bundled-node.mjs');
+console.log('            shared/ui/public/cg-bundled-browser.mjs');
+console.log('');
 
-    const [nodeResult, browserResult] = await Promise.all([
-      esbuild.build(nodeBundleConfig),
-      esbuild.build(browserBundleConfig),
-    ]);
+const [nodeResult, browserResult] = await Promise.all([
+  esbuild.build(nodeBundleConfig),
+  esbuild.build(browserBundleConfig),
+]);
 
-    console.log('--- node bundle ---');
-    console.log(await esbuild.analyzeMetafile(nodeResult.metafile));
-    console.log('--- browser bundle ---');
-    console.log(await esbuild.analyzeMetafile(browserResult.metafile));
+console.log('--- node bundle ---');
+console.log(await esbuild.analyzeMetafile(nodeResult.metafile));
+console.log('--- browser bundle ---');
+console.log(await esbuild.analyzeMetafile(browserResult.metafile));
 
-    console.log('\n✓ Bundles complete.');
-    console.log('  cg-vscode → cg-bundled-node.mjs (extension host is Node)');
-    console.log('  cg-app webview → cg-bundled-browser.mjs');
-  } catch (error) {
-    console.error('Build failed:', error);
-    process.exit(1);
-  }
-}
-
-build();
+console.log('\n✓ Bundles complete.');
+console.log('  cg-vscode → cg-bundled-node.mjs (extension host is Node)');
+console.log('  cg-app webview → cg-bundled-browser.mjs');

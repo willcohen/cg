@@ -8,7 +8,8 @@
   "The Carbon Labs Resizer between the side-by-side panels. Each set of shown
    panels keeps its own widths, in memory and in localStorage."
   (:require ["react" :refer [useLayoutEffect useRef]]
-            ["@carbon-labs/react-resizer" :refer [Resizer]]))
+            ["@carbon-labs/react-resizer" :refer [Resizer]]
+            [cg-app.ui.runtime :as rt]))
 
 (def min-width 200)
 (def ^:private storage-key "cg-panel-sizes")
@@ -70,20 +71,15 @@
   (when-let [w (when sizes (aget sizes k))]
     #js {:flex (str w " 1 0px")}))
 
-(defn- storage [] (aget js/globalThis "localStorage"))
-
 (defn- read-stored []
   (try
-    (let [v (some-> (storage) (.getItem storage-key) (js/JSON.parse))]
+    (let [v (some-> (rt/storage) (.getItem storage-key) (js/JSON.parse))]
       (if (and v (= "object" (js* "typeof ~{}" v)) (not (array? v))) v #js {}))
     (catch :default _ #js {})))
 
 (defonce ^:private !sizes (atom nil))
 
-(defn- all-sizes []
-  ;; reset! returns undefined in squint, not the new value.
-  (when (nil? @!sizes) (reset! !sizes (read-stored)))
-  @!sizes)
+(defn- all-sizes [] (or @!sizes (reset! !sizes (read-stored))))
 
 (defn sizes-for
   "The widths that the reader gave the panels of set `k`, or nil."
@@ -91,7 +87,7 @@
   (aget (all-sizes) k))
 
 (defn- persist! []
-  (try (some-> (storage) (.setItem storage-key (js/JSON.stringify (all-sizes))))
+  (try (some-> (rt/storage) (.setItem storage-key (js/JSON.stringify (all-sizes))))
        (catch :default _ nil)))
 
 (defn set-sizes!

@@ -61,7 +61,7 @@
                :flow-stage (when (:flow run) label))))))
 
 (defn- new-step [pid]
-  #js {:pid pid :label (step-label pid) :state "waiting" :runs 0 :done-runs 0 :ms 0})
+  #js {:pid pid :label (step-label pid) :state "waiting" :runs 0 :ms 0})
 
 (defn- with-step
   "`run` with the step of `pid` replaced by (f step). Adds a step that no
@@ -87,12 +87,8 @@
   [run evt now]
   (with-step run (aget evt "pid")
     (fn [step]
-      (aset step "state" "running")
-      (aset step "runs" (inc (aget step "runs")))
-      (aset step "since" (event-time evt now))
-      (aset step "done" nil)
-      (aset step "total" nil)
-      step)))
+      (js/Object.assign step #js {:state "running" :runs (inc (aget step "runs"))
+                                  :since (event-time evt now) :done nil :total nil}))))
 
 (defn- on-proc-end [run evt now state]
   (with-step run (aget evt "pid")
@@ -102,16 +98,11 @@
         (aset step "state" state)
         (aset step "ms" (+ (aget step "ms") ms))
         (aset step "since" nil)
-        (when (= "done" state)
-          (aset step "done-runs" (inc (aget step "done-runs"))))
         step))))
 
 (defn- on-rows [run evt]
   (with-step run (aget evt "pid")
-    (fn [step]
-      (aset step "done" (aget evt "done"))
-      (aset step "total" (aget evt "total"))
-      step)))
+    (fn [step] (js/Object.assign step #js {:done (aget evt "done") :total (aget evt "total")}))))
 
 (defn- on-snapshot
   "The queue lengths of each step, from a flow-snapshot. The source and the
@@ -122,9 +113,7 @@
               (fn [p]
                 (when-let [step (aget steps (aget p "pid"))]
                   (aset steps (aget p "pid")
-                        (js/Object.assign #js {} step
-                                          #js {:in-queued (aget p "in-queued")
-                                               :out-queued (aget p "out-queued")})))))
+                        (js/Object.assign #js {} step #js {:in-queued (aget p "in-queued")})))))
     (assoc run :steps steps)))
 
 (defn- on-failure [run evt]
@@ -211,11 +200,10 @@
 (defn- on-def
   "A def event of the loader card of a def. The status bar shows the open def
    and the rows of its fetches. A def is not a step of a flow."
-  [run evt now]
+  [run evt]
   (case (aget evt "kind")
     "def-start" (assoc run :def #js {:key (str "def " (aget evt "pid"))
                                      :name (aget evt "name")
-                                     :since (event-time evt now)
                                      :done nil})
     "def-progress" (if-let [d (:def run)]
                      (assoc run :def (js/Object.assign #js {} d #js {:done (aget evt "done")}))
@@ -224,7 +212,7 @@
 
 (defn- on-trace [run evt now]
   (case (aget evt "kind")
-    ("def-start" "def-progress" "def-complete" "def-error") (on-def run evt now)
+    ("def-start" "def-progress" "def-complete" "def-error") (on-def run evt)
     "stage"             (on-stage run evt)
     "flow-start"        (on-flow-start run evt now)
     "proc-start"        (on-proc-start run evt now)
@@ -252,7 +240,7 @@
    run."
   [run now]
   (assoc (flow-ended run #js {} now "error")
-         :ended now :stages #js [] :workers (idle-workers run)))
+         :ended now :def nil :stages #js [] :workers (idle-workers run)))
 
 (defn- stage-start? [evt]
   (and (= "stage" (aget evt "kind")) (= "start" (aget evt "state"))))

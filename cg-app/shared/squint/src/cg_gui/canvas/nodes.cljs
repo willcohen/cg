@@ -5,8 +5,9 @@
 ;; SPDX-License-Identifier: Apache-2.0 WITH LLVM-exception
 
 (ns cg-gui.canvas.nodes
-  "The custom React Flow node and edge. CnNode always renders the body Handles,
-   because React Flow drops an edge to a missing handle. Read :data with aget."
+  "The custom React Flow node and edge. CnNode always renders its top and
+   bottom Handles, because React Flow drops an edge to a missing handle. Read
+   :data with aget."
   (:require ["react" :refer [Fragment useState]]
             ["@xyflow/react" :refer [Handle Position BaseEdge EdgeLabelRenderer
                                      getBezierPath getSmoothStepPath useInternalNode]]
@@ -127,14 +128,6 @@
 
         :else nil))))
 
-(defn- with-key
-  "A copy of `o` with `k` set to `v`. Uses aset, because of a squint defect
-   with a computed key in an object literal."
-  [o k v]
-  (let [n (js/Object.assign #js {} o)]
-    (aset n k v)
-    n))
-
 (defn ReportParams [^js props]
   (let [d        (.-data props)
         op       (aget d "report-op")
@@ -148,12 +141,12 @@
                                     :editType "EditReportSpec"
                                     :model (aget d "model-name")
                                     :payload #js {:nodeId node-id :spec nxt}}))
-        upd      (fn [k v] (commit! (with-key spec k v)))
+        upd      (fn [k v] (commit! (assoc spec k v)))
         entries  (or (aget spec list-key) #js [])
         set-label (fn [i txt]
                     (upd list-key
                          (.map entries (fn [e j]
-                                         (if (= i j) (with-key e "label" txt) e)))))
+                                         (if (= i j) (assoc e "label" txt) e)))))
         set-rule  (fn [i txt]
                     ;; Build the entry from the label and the parsed rule,
                     ;; because old fragment keys must not stay. Invalid text
@@ -251,21 +244,18 @@
   (let [d         (.-data props)
         selected  (.-selected props)
         st        (state-str d)
-        ;; canvas.cljs sets this from rows-progress trace events.
+        ;; canvas.cljs sets this from the rows-progress and def-progress events.
         progress  (aget d "progress")
         running?  (= st "running")
-        stat-text (or (aget d "stat")
-                      (when (and progress running?) (tstate/progress-text progress))
+        stat-text (or (when (and progress running?) (tstate/progress-text progress))
                       (aget default-stat-text st) st)
         ;; :label first: a builder puts the display text in :label and the
         ;; bare symbol in :head.
         head      (or (aget d "label") (aget d "head"))
-        val       (aget d "val")
-        src-line  (aget d "source-line")
         ;; A card that did not run shows no status: "ready" on each card
         ;; says nothing. A body row of a block is source, and a chip is compact.
         footer?   (and (not (or (aget d "block-body?") (aget d "chip?")))
-                       (or (not= st "idle") (some? (aget d "stat"))))
+                       (not= st "idle"))
         ;; The chevron and the body handles key on :has-body?, the same field
         ;; that apply-collapse uses.
         has-body? (aget d "has-body?")
@@ -327,22 +317,17 @@
              (.map side (fn [p i] (side-port-row p i (or (aget d "wire-reach") 0)))))
            (when-let [fields (aget d "fields")]
              #jsx [ParamFields {:name (aget d "head") :fields fields}])
-           (when-let [ports (aget d "ports")]
-             (when-not in-thread? (ports-block ports)))
+           (when-let [ports (aget d "ports")] (ports-block ports))
            (when (aget d "report-spec")
              #jsx [ReportParams {:data d}])
-           (when val  #jsx [:div {:className "cg-val"} val])
            (when footer?
              #jsx [:div {:className "cg-stat"} [:span] stat-text])
            (when-let [pct (and footer? progress running? (tstate/progress-pct progress))]
              #jsx [:div {:className "cg-progress"}
                    [:div {:className "cg-progress-fill"
                           :style #js {:width pct}}]])
-           (when src-line
-             #jsx [:span {:className "cg-source-link"} (str "L" src-line " →")])
            (when divable?
-             #jsx [:span {:className (str "cg-dive-btn"
-                                          (when has-body? " with-chevron"))
+             #jsx [:span {:className "cg-dive-btn"
                           :data-testid "dive-btn"
                           :title (if many-dives?
                                    (str "Goes " (.-length dive-names) " ways: "
@@ -463,14 +448,11 @@
   "The edge for the `groups` level: the default bezier with a `×N` badge at the
    midpoint. React Flow puts the cg-edge-groups class on the wrapping <g>."
   [^js props]
-  (let [res  (getBezierPath
-              #js {:sourceX (.-sourceX props) :sourceY (.-sourceY props)
-                   :sourcePosition (.-sourcePosition props)
-                   :targetX (.-targetX props) :targetY (.-targetY props)
-                   :targetPosition (.-targetPosition props)})
-        path (aget res 0)
-        lx   (aget res 1)
-        ly   (aget res 2)]
+  (let [[path lx ly] (getBezierPath
+                      #js {:sourceX (.-sourceX props) :sourceY (.-sourceY props)
+                           :sourcePosition (.-sourcePosition props)
+                           :targetX (.-targetX props) :targetY (.-targetY props)
+                           :targetPosition (.-targetPosition props)})]
     #jsx [Fragment
           [BaseEdge {:id (.-id props) :path path :markerEnd (.-markerEnd props)}]
           [EdgeLabelRenderer

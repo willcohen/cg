@@ -16,9 +16,7 @@ import * as sass from 'sass';
 import { entries, imports, jsd } from '../importmap.mjs';
 import { fileURLToPath } from 'node:url';
 import { dirname, join } from 'node:path';
-import {
-  existsSync, mkdirSync, rmSync, copyFileSync, readFileSync, writeFileSync, readdirSync,
-} from 'node:fs';
+import { mkdirSync, rmSync, copyFileSync, readFileSync, writeFileSync, readdirSync } from 'node:fs';
 
 const here = dirname(fileURLToPath(import.meta.url)); // cg-app/app
 const cgApp = join(here, '..');
@@ -27,7 +25,6 @@ const cg = join(repo, 'cg');
 const out = join(repo, 'docs');
 
 const fail = (msg) => { console.error('build:demo: ' + msg); process.exit(1); };
-
 
 // Imports of Node built-ins sit behind Node checks and never run in a browser.
 const nodeOnly = /^(node:|fs$|fs\/promises$|module$|path$|url$|worker_threads$)/;
@@ -56,7 +53,6 @@ const externalsOf = (metafile) => {
   return s;
 };
 
-mkdirSync(out, { recursive: true });
 // vendor/ held gdal-wasm before it was on npm.
 for (const stale of ['cg-app.mjs', 'cg-wasmts-handler.mjs', 'index.html', 'css', 'examples',
                      'modules', 'vendor']) {
@@ -71,7 +67,6 @@ const result = await esbuild.build({
   target: ['es2022'],
   jsx: 'automatic',
   jsxImportSource: 'react',
-  loader: { '.js': 'js', '.mjs': 'js', '.jsx': 'jsx' },
   define: { 'process.env.NODE_ENV': '"production"' },
   // cg's own build keeps every top-level form (cg/esbuild.config.mjs).
   treeShaking: false,

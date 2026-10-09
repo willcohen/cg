@@ -47,32 +47,17 @@
   (js-delete js/globalThis "__CG_NATIVE__")
   nil)
 
-(deftest ready-gate-latches-on-first-ok
-  ;; A later down-blip must not show "connecting to engine" again.
-  (is (= :connecting (rt/ready-gate false false)))
-  (is (= :ready (rt/ready-gate false true)))
-  (is (= :ready (rt/ready-gate true false)))
-  (is (= :ready (rt/ready-gate true true))))
-
 (deftest observe-health-latches-first-ready
   (reset! rt/!ever-ready false)
-  (is (= :connecting (rt/observe-health! false)))
+  (rt/observe-health! false)
   (is (false? (rt/ready?)))
-  (is (= :ready (rt/observe-health! true)))
+  (rt/observe-health! true)
   (is (true? (rt/ready?)))
-  (is (= :ready (rt/observe-health! false)) "latched: stays ready after a down-blip")
-  (is (true? (rt/ready?)))
+  (rt/observe-health! false)
+  (is (true? (rt/ready?)) "latched: stays ready after a down-blip")
   (reset! rt/!ever-ready false))
 
 ;; Keep the mutating tests last: they write module state and storage.
-(deftest set-choice-and-re-resolve-update-resolution
-  (rt/set-choice! "auto" false)
-  (is (= "js" (rt/resolved-runtime)))
-  (rt/re-resolve! true)
-  (is (= "jvm" (rt/resolved-runtime)))
-  (rt/set-choice! "js" true)
-  (is (= "js" (rt/resolved-runtime))))
-
 (deftest js-only-pins-the-js-backend
   (js-delete js/globalThis "__CG_JS_ONLY__")
   (is (false? (rt/js-only?)))

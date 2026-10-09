@@ -269,14 +269,6 @@ async function drag(page, id, dx, dy, grip) {
   await page.waitForTimeout(200);
 }
 
-// Math.random fixes the jittered drop position of a toolbar op.
-async function withRandom(page, value, f) {
-  await page.evaluate((v) => { window.__random = Math.random; Math.random = () => v; }, value);
-  try { return await f(); } finally {
-    await page.evaluate(() => { Math.random = window.__random; });
-  }
-}
-
 const near = (a, b, tol = 1.5) =>
   typeof a === 'number' && typeof b === 'number' && Math.abs(a - b) <= tol;
 
@@ -285,5 +277,5 @@ const moved = (a, b) => !!(a && b && (Math.abs(a.x - b.x) > 5 || Math.abs(a.y - 
 module.exports = {
   run, send, sendFlow, sendTrace, postedSince, postedCount, edits, waitForEditCount,
   nodeIds, hasNode, waitForNodes, nodePos, zoom, nodeClass, statText, settle,
-  press, drag, withRandom, near, moved,
+  press, drag, near, moved,
 };

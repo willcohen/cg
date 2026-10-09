@@ -42,8 +42,7 @@
   "True for a node with an overlay position (:pinned? in :data, from convert).
    ELK must not move it, and its edges do not go into the layout."
   [n]
-  (let [d (aget n "data")]
-    (boolean (and d (aget d "pinned?")))))
+  (boolean (aget (aget n "data") "pinned?")))
 
 (defn- node-size
   "#js [w h] for ELK. Call-sites carry a body-sized :style; everything else gets
@@ -57,8 +56,7 @@
 (defn- collapsed?
   "canvas.cljs drops the :style of a closed container before the layout."
   [n]
-  (let [d (aget n "data")]
-    (boolean (and d (aget d "has-body?") (not (aget n "style"))))))
+  (boolean (and (aget (aget n "data") "has-body?") (not (aget n "style")))))
 
 (defn- with-collapsed-width
   "On the node and not in :style, because canvas.cljs drops the :style of a
@@ -76,10 +74,8 @@
 (def ^:private band-inset 10)
 (def ^:private band-head 22)
 
-(defn- frame?
-  [n]
-  (let [d (aget n "data")]
-    (boolean (and d (aget d "thread-frame?")))))
+(defn- frame? [n]
+  (boolean (aget (aget n "data") "thread-frame?")))
 
 (defn- step-box
   [n]
@@ -178,7 +174,7 @@
               (fn [n]
                 (let [p (aget n "parentId")
                       d (aget n "data")]
-                  (when (and p d (aget d "in-thread?"))
+                  (when (and p (aget d "in-thread?"))
                     (when-not (aget kids p) (aset kids p #js []))
                     (.push (aget kids p) n)))))
     (let [done #js {}]
@@ -209,9 +205,7 @@
                                              (aset m (aget n "id") p))))
                    m)
         tops     (.filter nodes (fn [n] (and (top-level? n) (not (pinned? n)))))
-        chips    (.filter tops (fn [n]
-                                 (let [d (aget n "data")]
-                                   (boolean (and d (aget d "chip?"))))))
+        chips    (.filter tops (fn [n] (boolean (aget (aget n "data") "chip?"))))
         compact? (and (> (.-length tops) 0)
                       (>= (* 2 (.-length chips)) (.-length tops)))
         top-ids  (let [s #js {}]

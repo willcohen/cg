@@ -75,8 +75,7 @@
   "Probes every `interval-ms`, also while the backend is available."
   [interval-ms]
   (stop-health-loop!)
-  (reset! !loop-id (js/setInterval (fn [] (probe-now!)) (or interval-ms default-interval-ms)))
-  @!loop-id)
+  (reset! !loop-id (js/setInterval (fn [] (probe-now!)) (or interval-ms default-interval-ms))))
 
 (defn ^:async set-runtime!
   "`auto` probes immediately. An explicit choice resolves against the last
