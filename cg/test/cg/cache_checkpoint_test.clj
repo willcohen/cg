@@ -14,6 +14,7 @@
   (:require [clojure.set :as set]
             [clojure.test :refer [deftest is testing use-fixtures]]
             [cg.dataset :as dataset]
+            [cg.feature :as f]
             [cg.run :as run])
   (:import [java.io File]
            [java.nio.file Files]
@@ -78,7 +79,8 @@
       (is (= (plain-rows miss) (plain-rows hit))))
     (testing "the file is a GeoPackage, and the geometry and its CRS come back"
       (let [g (:geometry (first (dataset/rows hit :as-maps)))]
-        (is (= "Point" (.getGeometryType ^org.locationtech.jts.geom.Geometry g)))))
+        (is (= "Point" (.getGeometryType ^org.locationtech.jts.geom.Geometry g)))
+        (is (= "EPSG:4326" (f/get-crs g)) "a result with no CRS is stored as EPSG:4326")))
     (testing "the file and its sidecar carry the hash of the key"
       (let [names (set (.list (File. dir)))]
         (is (= 2 (count names)))

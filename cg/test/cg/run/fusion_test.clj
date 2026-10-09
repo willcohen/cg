@@ -35,7 +35,7 @@
       (is (every? (fn [r] (or (contains? r :a) (contains? r :error))) results)
           "all rows touched op1 (or short-circuited via :error)")
       (is (nil? (-> results second :error)) "row 1 has no :error")
-      (is (nil? (-> results last :c :error)) "row 2 has no :error")
+      (is (nil? (-> results last :error)) "row 2 has no :error")
       (finally (.shutdown exec)))))
 
 (deftest apply-row-chain-diag-names-the-row-by-its-id-keys

@@ -535,7 +535,7 @@
       (is (= :conforming (get (edge 1) :edge-setback-conformity)) "12 ft against 11 ft")
       (is (= :unknown (get (edge 2) :edge-setback-conformity)) "a side edge has no rule")
       (is (= 40.0 (get (edge 0) :edge-length))))
-    (is (= 28.0 (get out :main-building-height 28.0)) "the op keeps the other keys of the row")))
+    (is (= 11.0 (get out :min-front)) "the op keeps the other keys of the row")))
 
 #?(:cljs (-> (init_wasmts_BANG_)
              (.then (fn [_] (run/load-module zoning)))

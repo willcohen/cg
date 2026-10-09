@@ -87,7 +87,8 @@
   ;; The delta chain resets at every ring. Carrying it across rings puts the
   ;; hole about 1.2e8 units away, and only a multi-ring feature shows it.
   (let [got (check-parity "polygon-donut")
-        multi (filter #(> (count (re-seq #"\(\(" (str (:geometry %)))) 0) (:rows got))]
+        ;; WKT puts "), (" between two rings of a polygon.
+        multi (filter #(re-find #"\), \(" (str (:geometry %))) (:rows got))]
     (is (seq multi))
     (is (some #(> (n-points %) 30) (:rows got))
         "the donut feature carries both rings")))
