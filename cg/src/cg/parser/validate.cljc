@@ -5,11 +5,10 @@
 ;; SPDX-License-Identifier: Apache-2.0 WITH LLVM-exception
 
 (ns cg.parser.validate
-  "Whole-file checks of an extracted CgFlow: duplicate names, name collisions,
-   declared inputs and component names. Must stay free of eval: do not
-   require cg.dsl, cg.macros, cg.run or cg.codegen."
-  (:require [cg.parser.extract :as extract]
-            [clojure.string :as str]))
+  "Whole-file checks of an extracted CgFlow: duplicate names, name collisions
+   and component names. Must stay free of eval: do not require cg.dsl,
+   cg.macros, cg.run or cg.codegen."
+  (:require [clojure.string :as str]))
 
 #?(:clj (set! *warn-on-reflection* true))
 
@@ -79,25 +78,6 @@
                                (:location op)))))))]
     (vec (concat binding-collisions op-collisions))))
 
-(defn- check-inputs-declared
-  "When the file declares :inputs, the source keyword of each template
-   Binding (`:is-template`) must be in it. With no :inputs, a template can
-   use any keyword. A Binding whose source is not a keyword is not checked."
-  [cg-flow]
-  (let [declared (:inputs cg-flow)]
-    (if (empty? declared)
-      []
-      (let [declared-names (into #{} (map :name declared))]
-        (->> (extract/threading-macro-bindings cg-flow)
-             (filter :is-template)
-             (remove (fn [b] (contains? declared-names (:input b))))
-             (mapv (fn [b]
-                     (diag :input-not-declared
-                           (str "binding '" (:name b)
-                                "' uses input :" (:input b)
-                                " which is not in the file's ^:inputs declaration")
-                           (:location b)))))))))
-
 (defn- component-bearing-ops
   "Each op that can carry a :component: the :ops of bindings and sinks, and
    the body-graph nodes of operations. extract puts the name on :component
@@ -142,7 +122,6 @@
                       (check-duplicate-bindings cg-flow)
                       (check-duplicate-operations cg-flow)
                       (check-name-collisions cg-flow)
-                      (check-inputs-declared cg-flow)
                       (check-map-components cg-flow)
                       (or (check-single-overlay cg-flow) []))]
     (update cg-flow :diagnostics into extra)))
