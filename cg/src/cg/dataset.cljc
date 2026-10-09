@@ -9,7 +9,7 @@
 ;; Geometry on JavaScript.
 
 (ns cg.dataset
-  (:refer-clojure :exclude [filter group-by partition-by reduce])
+  (:refer-clojure :exclude [concat filter group-by partition-by reduce])
   (:require [cg.feature :as feature]
             [cg.geo :as geo]
             [cg.io :as cio]
@@ -229,6 +229,10 @@
    (filter-ds dataset pred))
   ([dataset column predicate value]
    (filter-ds dataset (serializable-row-pred column predicate value))))
+
+(def filter-by-column
+  "The fn of the DSL alias ds/filter-by-column. See `filter`."
+  filter)
 
 (defn filter-ds
   "`pred` receives a map of column name to value for each row."
@@ -640,6 +644,12 @@
              (.reduce (.slice as 1)
                       (fn [acc ds] (.concat acc ds))
                       (aget as 0)))))
+
+(defn concat
+  "Concatenates the rows of `dataset` and of each dataset in `more`. The fn
+   of the DSL name ds/concat."
+  [dataset & more]
+  (concat-datasets (into [dataset] more)))
 
 (defn rename-columns
   "Renames columns. `rename-map` is {old-name new-name}."
@@ -2381,14 +2391,15 @@
                              {:type :extractor
                               :params [{:name :reducer_kind :required true :type :keyword}]})
 
-;; The bare DSL `filter` resolves here. :params describe the form
-;; `(filter :col :predicate value)`; the dataset is the threaded receiver.
-;; The parser contract is on cg.dataset/filter-column.
-(feature/register-operation! "cg.dataset/filter"
-                             {:type :transformer
-                              :params [{:name :column :required true :type :keyword}
-                                       {:name :predicate :required true :type :keyword}
-                                       {:name :value :required true :type :any}]})
+;; The bare DSL `filter` and the alias ds/filter-by-column resolve here.
+;; :params describe the form `(filter :col :predicate value)`; the dataset is
+;; the threaded receiver. The parser contract is on cg.dataset/filter-column.
+(doseq [op-name ["cg.dataset/filter" "cg.dataset/filter-by-column"]]
+  (feature/register-operation! op-name
+                               {:type :transformer
+                                :params [{:name :column :required true :type :keyword}
+                                         {:name :predicate :required true :type :keyword}
+                                         {:name :value :required true :type :any}]}))
 
 (feature/register-operation! "cg.dataset/filter-column"
                              {:type :transformer

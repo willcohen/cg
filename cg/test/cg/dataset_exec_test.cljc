@@ -6,7 +6,8 @@
 
 ;; The table-> path from a GeoJSON string to a reprojected dataset, on both
 ;; runtimes. The JVM expands transform-crs into three steps and cljs into one,
-;; and the shared assertions hold on both.
+;; and the shared assertions hold on both. The last tests run ds/concat and
+;; ds/filter-by-column from cg code.
 (ns cg.dataset-exec-test
   #?(:clj (:require [clojure.test :refer [deftest is testing]]
                     [clojure.string :as str]
@@ -124,8 +125,7 @@
      (await (ds/init-arquero!))))
 
 (deftest table-flow-reprojects-4326-to-2249
-  (testing "a table-> transform-crs flow reprojects the geometry column"
-    (after (run-flow (ds/geojson->dataset (wgs84-geojson two-points))) check-reprojected!)))
+  (after (run-flow (ds/geojson->dataset (wgs84-geojson two-points))) check-reprojected!))
 
 ;; arquero gives a table with no columns 0 rows, so a dataset with only the
 ;; geometry column once failed in the step that puts the column back.
@@ -133,8 +133,7 @@
   (ds/select-columns (ds/geojson->dataset (wgs84-geojson two-points)) [:geometry]))
 
 (deftest table-flow-reprojects-a-geometry-only-dataset
-  (testing "a dataset whose only column is the geometry reprojects"
-    (after (run-flow (geometry-only-dataset)) check-reprojected!)))
+  (after (run-flow (geometry-only-dataset)) check-reprojected!))
 
 ;; A geometry with a z takes the WasmTS path of the workers on the JS runtime.
 (def ^:private three-d-geojson
@@ -167,8 +166,7 @@
     (is (str/includes? msg #?(:clj "\"geometry\"" :cljs "shape")) msg)))
 
 (deftest transform-crs-throws-without-a-geometry-column
-  (testing "a dataset with rows and no geometry column throws and names its columns"
-    (after (error-message #(run-flow (misnamed-geometry-dataset))) check-names-the-columns!)))
+  (after (error-message #(run-flow (misnamed-geometry-dataset))) check-names-the-columns!))
 
 ;; A layer from a city server can hold a row with no geometry.
 #?(:clj
@@ -180,6 +178,35 @@
        (is (= 3 (count geoms)) "the row with no geometry stays")
        (is (nil? (nth geoms 2)))
        (is (> (abs (geo/x (nth geoms 0))) 1000.0) "the other rows are reprojected"))))
+
+;; The parser accepts ds/concat and ds/filter-by-column, so each name must
+;; find a fn at run time.
+(def ^:private ds-prelude
+  "(require '[cg.macros :refer [table->]])
+   (require '[cg.dataset :as ds])
+   ")
+
+(defn- ids [d]
+  (mapv (fn [r] (get r :id)) (ds/rows d :as-maps)))
+
+(deftest ds-concat-runs-in-plain-code
+  (is (= [1 2] (ids (run/eval-cg
+                     (str ds-prelude
+                          "(ds/concat (ds/maps->dataset [{:id 1}])"
+                          " (ds/maps->dataset [{:id 2}]))"))))))
+
+(deftest ds-filter-by-column-runs-in-plain-code
+  (is (= [2] (ids (run/eval-cg
+                   (str ds-prelude
+                        "(ds/filter-by-column (ds/maps->dataset [{:id 1 :area 500}"
+                        " {:id 2 :area 2000}]) :area :gt 1000)"))))))
+
+(deftest ds-filter-by-column-runs-as-a-rung
+  (after (run/run-model (run/eval-cg (str ds-prelude
+                                          "(table-> :rows (ds/filter-by-column :area :gt 1000))"))
+                        {:rows (ds/maps->dataset [{:id 1 :area 500} {:id 2 :area 2000}])}
+                        {:timeout-ms 30000})
+         (fn [result] (is (= [2] (ids (result-dataset result)))))))
 
 #?(:cljs (-> (setup!)
              (.then (fn [_] (run_tests_and_exit_BANG_ "cg.dataset-exec-test")))))
