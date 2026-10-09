@@ -71,6 +71,27 @@
       (rt/init!)
       nil)))
 
+(deftest blocked-storage-gives-the-defaults
+  ;; With site data blocked, the localStorage getter of the browser throws
+  ;; SecurityError. init! must not throw, because it runs before the first
+  ;; render.
+  (let [d (js/Object.getOwnPropertyDescriptor js/globalThis "localStorage")]
+    (js/Object.defineProperty
+     js/globalThis "localStorage"
+     #js {:configurable true
+          :get (fn [] (throw (js/DOMException. "blocked" "SecurityError")))})
+    (try
+      (is (= "auto" (rt/init!)))
+      (is (= "http://localhost:3000" (rt/backend-url)))
+      (is (= "js" (rt/set-choice! "js" false)))
+      (is (= "http://127.0.0.1:4000" (rt/set-backend-url! "http://127.0.0.1:4000")))
+      (finally
+        (if d
+          (js/Object.defineProperty js/globalThis "localStorage" d)
+          (js-delete js/globalThis "localStorage"))
+        (rt/init!)
+        nil))))
+
 (.then (js/Promise.resolve (t/run-tests))
        (fn [results]
          (let [fail (or (get results "fail") 0)
