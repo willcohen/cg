@@ -12,9 +12,8 @@
 
 (defonce ^:private listeners (js/Set.))
 
-;; A mutable box, not an atom: squint's reset! returns undefined, and this
-;; counter must give the stamped value.
-(defonce ^:private counter #js {:n 0})
+(defonce ^:private seq-n (atom 0))
+(defonce ^:private busy-n (atom 0))
 
 (defn add-trace-listener
   "Register `f` to get each trace event, and return `f`. An exception from `f`
@@ -33,8 +32,7 @@
   "Stamp the event `data` of string `kind` with `:v`, `:seq`, `:ts` and
   `:worker-id`, call each listener with it, and return it."
   [kind data]
-  (let [n (inc (aget counter "n"))
-        _ (aset counter "n" n)
+  (let [n (swap! seq-n inc)
         evt (merge {:v trace-wire-version
                     :seq n
                     :ts (js/Date.now)
@@ -62,8 +60,7 @@
   "Emit worker-busy-start for work on `worker` (a pool index or \"main\")
   and give the tag for busy-end!."
   [worker handler label pid]
-  (let [n (inc (or (aget counter "busy") 0))
-        _ (aset counter "busy" n)
+  (let [n (swap! busy-n inc)
         tag (cond-> {:worker-id (str worker)
                      :handler handler
                      :label label

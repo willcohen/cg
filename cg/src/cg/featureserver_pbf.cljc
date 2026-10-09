@@ -1,7 +1,8 @@
 ;; The GDAL driver reads JSON only, and a PBF fetch cannot go through it.
 (ns cg.featureserver-pbf
   "Decoder for the FeatureServer `f=pbf` query response (FeatureCollectionPBuffer).
-   Gives the {:rows :source-crs} that cg.io/walk-dataset-jvm! returns."
+   Gives the {:rows :source-crs} that cg.io/walk-dataset-jvm! returns.
+   load-pages fetches the pages of a layer as a flow."
   #?(:clj (:require [cg.feature :as feature]
                     [cg.geo :as geo]
                     [cg.run.eos :as eos]
@@ -124,8 +125,7 @@
                      (recur i (assoc acc :field-type (aget cur 0))))
                  (recur (skip-payload b i wt cur) acc)))))))
 
-     ;; Value is a oneof. The index into the field list is positional: the nth
-     ;; value of a feature belongs to the nth field of the result header.
+     ;; Value is a oneof.
      (defn- read-value
        [^bytes b start end ^longs cur]
        (let [end (long end)]
@@ -147,9 +147,7 @@
                                                 (bit-shift-left (bit-and (aget b (+ i 3)) 0xff) 24)))))
                  3 (recur (+ i 8) (read-double b i))
                  4 (let [i (read-varint! b i cur)] (recur i (int (zigzag (aget cur 0)))))
-                 5 (let [i (read-varint! b i cur)] (recur i (aget cur 0)))
-                 6 (let [i (read-varint! b i cur)] (recur i (aget cur 0)))
-                 7 (let [i (read-varint! b i cur)] (recur i (aget cur 0)))
+                 (5 6 7) (let [i (read-varint! b i cur)] (recur i (aget cur 0)))
                  8 (let [i (read-varint! b i cur)] (recur i (zigzag (aget cur 0))))
                  9 (let [i (read-varint! b i cur)] (recur i (not (zero? (aget cur 0)))))
                  10 (let [i (read-varint! b i cur)] (recur i nil))
@@ -220,8 +218,7 @@
            (.createMultiPolygon gf (into-array Polygon polys)))))
 
      (defn- parts->geometry
-       "Build the JTS geometry for the geometryType of the layer from `lengths` and `coords`.
-        A Point arrives as one part of one vertex."
+       "A Point arrives as one part of one vertex."
        [geom-type parts]
        (case (int geom-type)
          0 (.createPoint gf ^Coordinate (aget ^objects (first parts) 0))
@@ -390,36 +387,33 @@
            wkt  {:authority nil :code nil :projjson (geo/crs->projjson wkt)}
            :else nil)))
 
-     (defn scan-page
+     (defn- field-span
+       "The [start end] of the payload of the first field `fnum` in b[start, end),
+        or nil."
+       [^bytes b start end fnum ^longs cur]
+       (let [end (long end)]
+         (loop [i (long start)]
+           (if (>= i end)
+             nil
+             (let [i (read-varint! b i cur)
+                   key (aget cur 0)]
+               (if (= fnum (field-number key))
+                 (let [i (read-varint! b i cur)] [i (+ i (aget cur 0))])
+                 (recur (skip-payload b i (wire-type key) cur))))))))
+
+     (defn- scan-page
        "Scan one `f=pbf` response: the header fields of its feature result and
         the byte span of each feature. The scan reads no feature, so the fetch
         gets the row count and the transfer-limit flag of a page at low cost."
        [^bytes body]
        (let [cur (long-array 1)
-             top-end (alength body)
              ;; FeatureCollectionPBuffer.queryResult is field 2, and
              ;; QueryResult.featureResult is field 1.
-             qr (loop [i 0]
-                  (if (>= i top-end)
-                    nil
-                    (let [i (read-varint! body i cur)
-                          key (aget cur 0)]
-                      (if (= 2 (field-number key))
-                        (let [i (read-varint! body i cur)] [i (+ i (aget cur 0))])
-                        (recur (skip-payload body i (wire-type key) cur))))))
-             [qs qe] qr
-             fr (loop [i (long qs)]
-                  (if (>= i (long qe))
-                    nil
-                    (let [i (read-varint! body i cur)
-                          key (aget cur 0)]
-                      (if (= 1 (field-number key))
-                        (let [i (read-varint! body i cur)] [i (+ i (aget cur 0))])
-                        (recur (skip-payload body i (wire-type key) cur))))))
-             [fs fe] fr]
+             [qs qe] (field-span body 0 (alength body) 2 cur)
+             [fs fe] (field-span body qs qe 1 cur)]
          (scan-feature-result body fs fe cur)))
 
-     (defn decode-scan
+     (defn- decode-scan
        "Decode the features of `body` from its `scan` (see scan-page). Gives
         {:rows :source-crs :exceeded-transfer-limit?}. See decode-page for
         `opts`."
@@ -609,8 +603,8 @@
             (cg-flow/run-flow {:config {:procs procs :conns [[[:parse :out] [:rows :in]]]}
                                :result-atom result
                                :completed completed}
-                              ;; The loop before the flow had no time limit,
-                              ;; and each request has its retries.
+                              ;; The fetch has no time limit, because each
+                              ;; request has its own retries.
                               {:name flow-name
                                :pids [fetch-pid parse-pid]
                                :timeout-ms Long/MAX_VALUE})

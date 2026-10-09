@@ -24,9 +24,7 @@
   #{:feature :collection :dataset :groups :map})
 
 (def ^:private type-str->kw
-  "A static string -> keyword lookup for the type names of an OperationDecl.
-   It replaces a runtime (keyword <string>), which squint-cljs/core does not
-   have."
+  "A static string -> keyword lookup for the type names of an OperationDecl."
   {"feature" :feature
    "dataset" :dataset
    "number"  :number
@@ -351,13 +349,10 @@
           (:operations cg-flow))))
 
 (defn merge-signatures
-  "Merge a base registry (usually `built-ins`) with one or more extras maps.
-   A later map wins on a collision, as with `merge`."
-  ([base] base)
-  ([base extras]
-   (merge (or base {}) (or extras {})))
-  ([base extras & more]
-   (reduce merge-signatures (merge-signatures base extras) more)))
+  "Merge a base registry (usually `built-ins`) with an extras map. The extras
+   map wins on a collision, as with `merge`."
+  [base extras]
+  (merge (or base {}) (or extras {})))
 
 (defn registry-for
   "The signature registry that a CgFlow sees: `built-ins` with the

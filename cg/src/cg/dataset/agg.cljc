@@ -14,9 +14,7 @@
 #?(:clj (set! *warn-on-reflection* true))
 
 #?(:clj
-   (defn count
-     "Row count of a sub-dataset."
-     [sub-ds]
+   (defn count [sub-ds]
      (ds/row-count sub-ds)))
 
 #?(:clj
@@ -37,17 +35,13 @@
    (defn min
      "Minimum of the `over` column. nil on empty sub-dataset."
      [sub-ds over]
-     (let [vals (ds/column sub-ds over)]
-       (when (seq vals)
-         (reduce clojure.core/min vals)))))
+     (ds/reduce (ds/column sub-ds over) :min)))
 
 #?(:clj
    (defn max
      "Maximum of the `over` column. nil on empty sub-dataset."
      [sub-ds over]
-     (let [vals (ds/column sub-ds over)]
-       (when (seq vals)
-         (reduce clojure.core/max vals)))))
+     (ds/reduce (ds/column sub-ds over) :max)))
 
 #?(:clj
    (do
@@ -55,19 +49,8 @@
                             {:type :transformer
                              :role :reducer
                              :params []})
-     (f/register-operation! "cg.dataset.agg/sum"
-                            {:type :transformer
-                             :role :reducer
-                             :params [{:name :over :required true :type :keyword}]})
-     (f/register-operation! "cg.dataset.agg/mean"
-                            {:type :transformer
-                             :role :reducer
-                             :params [{:name :over :required true :type :keyword}]})
-     (f/register-operation! "cg.dataset.agg/min"
-                            {:type :transformer
-                             :role :reducer
-                             :params [{:name :over :required true :type :keyword}]})
-     (f/register-operation! "cg.dataset.agg/max"
-                            {:type :transformer
-                             :role :reducer
-                             :params [{:name :over :required true :type :keyword}]})))
+     (doseq [op ["sum" "mean" "min" "max"]]
+       (f/register-operation! (str "cg.dataset.agg/" op)
+                              {:type :transformer
+                               :role :reducer
+                               :params [{:name :over :required true :type :keyword}]}))))

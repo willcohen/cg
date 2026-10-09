@@ -35,7 +35,7 @@
 #?(:clj (set! *warn-on-reflection* true))
 
 #?(:clj (declare add-spatial-index))
-#?(:cljs (declare add-column column))
+#?(:cljs (declare add-column column unwrap-dataset))
 
 (defn stage!
   "Emits a \"stage\" trace event for long work that is not a flow step.
@@ -110,33 +110,14 @@
 
 #?(:cljs
    (do
-     (defn ->FlowDataset
-       ([dataset] (->FlowDataset dataset {}))
-       ([dataset metadata-map]
-        #js {:__flow_dataset true
-             :dataset dataset
-             :metadata (or metadata-map {})}))
+     (defn ->FlowDataset [dataset metadata-map]
+       #js {:__flow_dataset true
+            :dataset dataset
+            :metadata (or metadata-map {})})
 
      (defn wrapped-dataset? [x]
        (and (some? x)
-            (true? (.-__flow_dataset x))))
-
-     (defn unwrap-dataset
-       "Returns the dataset inside a FlowDataset. Returns any other input
-        unchanged."
-       [wrapped]
-       (if (wrapped-dataset? wrapped)
-         (.-dataset wrapped)
-         wrapped))
-
-     (defn wrap-bundle
-       "Wraps a map in a plain JS object, because flow iterates over the
-        entries of a bare map."
-       [m]
-       #js {:__flow_bundle true :data m})
-
-     (defn unwrap-bundle [fb]
-       (.-data fb))))
+            (true? (.-__flow_dataset x))))))
 
 (defn dataset?
   "True when `x` is a dataset: a tech.ml.dataset on the JVM, an Arquero table
@@ -177,14 +158,17 @@
           (map vals objs))))))
 
 #?(:cljs
+   (defn- rows->column-map [cols row-maps]
+     (into {} (map (fn [col] [col (mapv #(get % col) row-maps)])) cols)))
+
+#?(:cljs
    (defn- coerce-column-map
      "Converts a plain JS object or a seq of row maps to a map of columns,
       one level deep, because a deep js->clj fails on a WasmTS geometry Proxy."
      [m]
      (cond
        (sequential? m)
-       (into {} (map (fn [col] [col (mapv #(get % col) m)]))
-             (distinct (mapcat keys m)))
+       (rows->column-map (distinct (mapcat keys m)) m)
        (map? m) m
        (and m (= "Object" (.. m -constructor -name)))
        (clojure.core/reduce (fn [acc k] (assoc acc k (aget m k)))
@@ -257,20 +241,6 @@
                           (rows raw-ds :as-maps))]
              (.reify raw-ds (vec indices)))))
 
-(defn filter-column
-  "Keeps the rows whose value in column `col-name` satisfies `pred`."
-  [dataset col-name pred]
-  #?(:clj (ds/filter-column dataset col-name pred)
-     :cljs (let [raw-ds (unwrap-dataset dataset)
-                 col-str (str col-name)
-                 col-vals (.array raw-ds col-str)
-                 indices (into []
-                               (keep-indexed
-                                (fn [idx val]
-                                  (when (pred val) idx)))
-                               col-vals)]
-             (.reify raw-ds indices))))
-
 (defn geojson->dataset
   "Converts a GeoJSON string to a dataset. On the JVM, builds a spatial index
    unless `generate-index?` is false. CLJS builds no index."
@@ -300,14 +270,7 @@
                                (feature/set-crs geometry crs)
                                (assoc (:properties f) :geometry geometry)))
                            features)]
-        (if (empty? row-maps)
-          (->dataset {})
-          (let [cols (keys (first row-maps))
-                col-map (into {}
-                              (map (fn [col]
-                                     [col (mapv #(get % col) row-maps)])
-                                   cols))]
-            (->dataset col-map)))))))
+        (->dataset (rows->column-map (keys (first row-maps)) row-maps))))))
 
 #?(:clj
    (defn- rows-result->dataset
@@ -326,15 +289,7 @@
        (doseq [r rows]
          (when (and crs-str (.-geometry r))
            (feature/set-crs (.-geometry r) crs-str)))
-       (if (zero? (.-length rows))
-         (->dataset {})
-         (let [cols    (.keys js/Object (aget rows 0))
-               col-map (into {}
-                             (map (fn [col]
-                                    [col (mapv (fn [row] (aget row col))
-                                               rows)])
-                                  cols))]
-           (->dataset col-map))))))
+       (->dataset (rows->column-map (keys (first rows)) rows)))))
 
 (defn ^:async vector-source->dataset
   "Reads a vector source through cg.io/load-source into a dataset whose
@@ -566,18 +521,6 @@
                                    raw-ds
                                    new-cols)))))
 
-(defn read-json
-  "Parses a JSON string. The JVM uses charred with :key-fn (default keyword).
-   CLJS uses JSON.parse and ignores :key-fn."
-  #_{:clj-kondo/ignore [:unused-binding]}
-  [json-str & {:keys [key-fn] :or {key-fn keyword}}]
-  #?(:clj (charred/read-json json-str :key-fn key-fn)
-     :cljs (.parse js/JSON json-str)))
-
-(defn write-json [data]
-  #?(:clj (charred/write-json-str data)
-     :cljs (.stringify js/JSON data)))
-
 (defn- value-name
   "A keyword as its name, any other value as it is. The JS runtime holds a
    keyword as a string already, and squint `name` cuts a string at a slash."
@@ -709,17 +652,6 @@
                               rename-map)]
              (.rename raw-ds js-map))))
 
-(defn order-by
-  "Sorts the dataset by a column. `direction` is :asc (default) or :desc."
-  ([dataset col-name] (order-by dataset col-name :asc))
-  ([dataset col-name direction]
-   #?(:clj (tc/order-by dataset col-name (if (= direction :desc) :desc :asc))
-      :cljs (let [raw-ds (unwrap-dataset dataset)
-                  col-str (str col-name)]
-              (if (= direction :desc)
-                (.orderby raw-ds (.desc (ensure-arquero!) col-str))
-                (.orderby raw-ds col-str))))))
-
 (defn head
   ([dataset] (head dataset 5))
   ([dataset n]
@@ -774,9 +706,9 @@
                      :supported #{:count :distinct-count :first :last
                                   :sum :min :max :mean :median}}))))
 
-(defn group-by-column
-  "Groups dataset rows by the values of a column. Returns a map of
-   {group-value -> sub-dataset}."
+(defn partition-by
+  "Groups dataset rows by the values of a column, for `aggregate`. Returns
+   {group-value -> sub-dataset}. `grouped?` identifies this shape at run time."
   [dataset col-name]
   #?(:clj (let [col-vals (vec (get dataset col-name))
                 indices-by-val (clojure.core/group-by (fn [i] (nth col-vals i)) (range (ds/row-count dataset)))]
@@ -787,19 +719,8 @@
                  col-str (str col-name)
                  row-maps (rows raw-ds :as-maps)
                  groups (clojure.core/group-by (fn [row] (get row col-str (get row col-name))) row-maps)]
-             (into {} (map (fn [[k rows]]
-                             [k (->dataset (clojure.core/reduce (fn [acc row]
-                                                                  (reduce-kv (fn [m k v]
-                                                                               (update m k (fnil conj []) v))
-                                                                             acc row))
-                                                                {} rows))]))
+             (into {} (map (fn [[k rows]] [k (->dataset rows)]))
                    groups))))
-
-(defn partition-by
-  "Groups dataset rows by the values of a column, for `aggregate`. Returns
-   {group-value -> sub-dataset}. `grouped?` identifies this shape at run time."
-  [dataset col-name]
-  (group-by-column dataset col-name))
 
 (defn group-by
   "Same as `partition-by`, under a name that does not clash with
@@ -878,18 +799,15 @@
           :preview preview
           :metadata metadata-map}))))
 
-#?(:clj
-   (do
-     (defn unwrap-dataset
-       "Returns the dataset inside a FlowDataset. Returns any other input
-        unchanged."
-       [wrapped]
-       (if (instance? FlowDataset wrapped)
-         (.-dataset ^FlowDataset wrapped)
-         wrapped))
+#?(:clj (defn wrapped-dataset? [x] (instance? FlowDataset x)))
 
-     (defn wrapped-dataset? [x]
-       (instance? FlowDataset x))))
+(defn unwrap-dataset
+  "Returns the dataset inside a FlowDataset. Returns any other input
+   unchanged."
+  [wrapped]
+  (if (wrapped-dataset? wrapped)
+    (.-dataset #?(:clj ^FlowDataset wrapped :cljs wrapped))
+    wrapped))
 
 (defn fd-meta
   "Returns the metadata of a FlowDataset. On CLJS, returns nil for any other
@@ -933,16 +851,11 @@
 
 ;; The context of each dataset in a flow, by context id:
 ;; {:schema [col ...] :geom-column :geometry :row-count n
-;;  :spatial-index <HPRtree or STRtree, optional>}
-;; spatial-index-store is the same atom: on the JVM, add-spatial-index also
-;; puts each HPRtree here, by index UUID.
+;;  :spatial-index <HPRtree or STRtree, optional>
+;;  :candidates-fn <fn, JS, optional>}
+;; On the JVM, add-spatial-index also puts each HPRtree here, by index UUID.
 
 (def dataset-context-store (atom {}))
-
-(def spatial-index-store dataset-context-store)
-
-(defn reset-dataset-context-store! []
-  (reset! dataset-context-store {}))
 
 (defn get-dataset-context [ctx-id]
   (get @dataset-context-store ctx-id))
@@ -977,14 +890,10 @@
                    :cljs (str (random-uuid)))
          geom-col (get opts :geom-column :geometry)
          build-index? (get opts :build-index? true)
-         schema #?(:clj (vec (ds/column-names ds))
-                   :cljs (column-names ds))
-         row-cnt #?(:clj (ds/row-count ds)
-                    :cljs (row-count ds))
+         schema (vec (column-names ds))
+         row-cnt (row-count ds)
 
-         spatial-index (when (and build-index?
-                                  #?(:clj (ds/has-column? ds geom-col)
-                                     :cljs (has-column? ds geom-col)))
+         spatial-index (when (and build-index? (has-column? ds geom-col))
                          #?(:clj
                             (let [idx (org.locationtech.jts.index.hprtree.HPRtree.)]
                               (doseq [row (ds/rows ds :as-maps)]
@@ -1072,7 +981,7 @@
                                             (get-spatial-indices ds)))]
           (when (and (some? (:spatial-index-uuid i))
                      (= HPRtree
-                        (type (get @spatial-index-store
+                        (type (get @dataset-context-store
                                    (:spatial-index-uuid i)))))
             i))))
 
@@ -1117,41 +1026,30 @@
                        (random-uuid))
               n-rows (ds/row-count ds)
               _ (stage! index-label "start" 0 n-rows)
-              generate-spatial-index-fn
-              (fn [ds geom-column indexed-id-column idx-id]
-                (let [index (HPRtree.)
-                      rows (ds/rows ds :as-maps)
-                      ;; After a reproject, apply-coords-step flags the
-                      ;; batch for a new index.
-                      indexed-id-vec (vec (repeatedly (count rows) random-uuid))
-                      _ (doseq [[row id] (map vector rows indexed-id-vec)]
-                          (let [featurelike (row geom-column)]
-                            (when (not (nil? featurelike))
-                              (let [^Geometry jts-geom (feature/to-jts featurelike)]
-                                (.insert index
-                                         (.getEnvelopeInternal jts-geom)
-                                         {indexed-id-column id
-                                          :prepared-geometry (as-prepared featurelike)})))))
-                      ds-with-id (ds/add-or-update-column ds indexed-id-column indexed-id-vec)]
-                  {:dataset ds-with-id
-                   :spatial-index-uuid idx-id
-                   :geometry-column geom-column
-                   :indexed-id-column indexed-id-column
-                   :index index}))
-              spatial-index (generate-spatial-index-fn ds geom-column
-                                                       indexed-id-column
-                                                       idx-id)]
-          (swap! spatial-index-store merge {idx-id (:index spatial-index)})
+              index (HPRtree.)
+              rows (ds/rows ds :as-maps)
+              indexed-id-vec (vec (repeatedly (count rows) random-uuid))
+              _ (doseq [[row id] (map vector rows indexed-id-vec)]
+                  (when-some [featurelike (row geom-column)]
+                    (let [^Geometry jts-geom (feature/to-jts featurelike)]
+                      (.insert index
+                               (.getEnvelopeInternal jts-geom)
+                               {indexed-id-column id
+                                :prepared-geometry (as-prepared featurelike)}))))
+              ds-with-id (ds/add-or-update-column ds indexed-id-column indexed-id-vec)]
+          (swap! dataset-context-store assoc idx-id index)
           (stage! index-label "done" n-rows n-rows)
-          (vary-meta (:dataset spatial-index) assoc
+          (vary-meta ds-with-id assoc
                      :spatial (into []
-                                    (conj (:spatial (meta (:dataset spatial-index)))
-                                          (dissoc spatial-index :dataset :index)))))))
+                                    (conj (:spatial (meta ds-with-id))
+                                          {:spatial-index-uuid idx-id
+                                           :geometry-column geom-column
+                                           :indexed-id-column indexed-id-column}))))))
 
      (defn query-spatial-index
        "Returns the index payloads whose envelopes meet `envelope`."
        [dataset envelope geom-column]
-       (let [^HPRtree idx (get @spatial-index-store
+       (let [^HPRtree idx (get @dataset-context-store
                                (:spatial-index-uuid (get-spatial-index dataset geom-column)))]
          (.query idx envelope)))
 
@@ -1181,9 +1079,7 @@
         (let [generate-index? (get opts :generate-index? true)
               warn-on-error? (get opts :warn-on-error? true)]
           (try
-            (let [content (slurp path)]
-              (log/info "Loaded:" path)
-              (geojson->dataset content generate-index?))
+            (geojson->dataset (slurp path) generate-index?)
             (catch Exception e
               (if warn-on-error?
                 (do
@@ -1252,7 +1148,7 @@
        ([dataset] (index-candidates-fn dataset :geometry))
        ([dataset geom-column]
         (if-let [idx (get-spatial-index dataset geom-column)]
-          (let [^HPRtree tree (get @spatial-index-store (:spatial-index-uuid idx))]
+          (let [^HPRtree tree (get @dataset-context-store (:spatial-index-uuid idx))]
             (fn [featurelike]
               (.query tree (.getEnvelopeInternal ^Geometry (feature/to-jts featurelike)))))
           (do (warn-once-no-index! dataset geom-column) nil))))
@@ -1318,24 +1214,17 @@
          ([] {:params {}
               :ins {:in "Dataset batch"}
               :outs {:out "Coord bundle"}})
-         ([_args]
-          (log/info "extract-coords-step: initialized")
-          {})
+         ([_args] {})
          ([state _lifecycle] state)
          ([state _in-name wrapped-batch]
-          (log/info "extract-coords-step: received batch, type=" (type wrapped-batch) "nil?=" (nil? wrapped-batch))
           (let [batch (unwrap-dataset wrapped-batch)
                 _ (check-geometry-column! batch :geometry)
                 geom-col (batch :geometry)
                 geoms (vec geom-col)
-                _ (log/info "extract-coords-step: heap-JTS path, extracting coords from"
-                            (count geoms) "geometries")
                 result (clojure.core/reduce
                         (fn [acc geom]
                           (if (nil? geom)
-                            {:all-coords (:all-coords acc)
-                             :boundaries (conj (:boundaries acc) 0)
-                             :geoms (conj (:geoms acc) nil)}
+                            (-> acc (update :boundaries conj 0) (update :geoms conj nil))
                             (let [^Geometry g (feature/geometry geom)
                                   {:keys [coords count]} (geo/extract-geometry-coords g)]
                               {:all-coords (into (:all-coords acc) coords)
@@ -1343,8 +1232,6 @@
                                :geoms (conj (:geoms acc) g)})))
                         {:all-coords [] :boundaries [] :geoms []}
                         geoms)]
-            (log/info "extract-coords-step: emitting bundle with"
-                      (count (:all-coords result)) "coords")
             [state {:out [(wrap-bundle (assoc result
                                               :batch batch
                                               :table-rows (:cg.dataset/table-rows (fd-meta wrapped-batch))))]}]))))
@@ -1394,9 +1281,7 @@
          ([] {:params {}
               :ins {:in "Transformed bundle"}
               :outs {:out "Dataset batch"}})
-         ([_args]
-          (log/info "apply-coords-step: initialized")
-          {})
+         ([_args] {})
          ([state _lifecycle] state)
          ([state _in-name wrapped-bundle]
           (let [{:keys [transformed-coords boundaries geoms batch]} (unwrap-bundle wrapped-bundle)
@@ -1417,8 +1302,6 @@
                 updated-batch (-> (ds/add-or-update-column batch :geometry new-geoms)
                                   (vary-meta dissoc :spatial)
                                   (vary-meta assoc :cg.dataset/needs-reindex true))]
-            (log/info "apply-coords-step: heap-JTS path, emitting batch with"
-                      (count new-geoms) "reprojected geometries")
             [state {:out [(wrap-dataset updated-batch)]}]))))
 
      (feature/register-operation! "cg.dataset/extract-coords-step"
@@ -1593,18 +1476,6 @@
             (boolean (some (fn [fg] (and (some? fg) (geo/intersects? fg g)))
                            (column dataset geom-column)))))))
 
-     (defn query-spatial-index
-       "Returns the index payloads whose envelopes meet the WasmTS `envelope`.
-        Throws when the dataset has no spatial index."
-       ([ds envelope]
-        (query-spatial-index ds envelope :geometry))
-       ([ds envelope _geom-column]
-        (let [ctx-id (get-in (fd-meta ds) [:spatial :context-id])]
-          (if ctx-id
-            (query-context-index ctx-id envelope)
-            (throw (ex-info "Dataset has no spatial index"
-                            {:columns (column-names ds)}))))))
-
      (defn dataset->batches
        "Splits a dataset into a seq of datasets of at most :batch-size rows
         (default 1000). A dataset of no rows is one empty batch, as on the
@@ -1668,25 +1539,6 @@
                        pj)
                      (finally
                        (swap! *transformer-builds dissoc k)))))))))
-
-     (defn- geoms->wkb-array
-       [geoms]
-       (let [n (count geoms)
-             out (js/Array. n)]
-         (loop [i 0 gs geoms]
-           (if (>= i n)
-             out
-             (let [wkb (cio/write-wkb (first gs))]
-               (aset out i wkb)
-               (recur (inc i) (rest gs)))))))
-
-     (defn- wkb-array->geoms
-       [wkb-array]
-       (let [n (.-length wkb-array)]
-         (loop [i 0 acc (transient [])]
-           (if (>= i n)
-             (persistent! acc)
-             (recur (inc i) (conj! acc (cio/read-wkb (aget wkb-array i))))))))
 
      (defn- ^:async each-index
        "Call `(f i)` for each i below `n` on this thread, with a turn of the
@@ -1811,7 +1663,7 @@
                  (await (ffi/worker-call
                          the-pool "net.willcohen.wasmts" "extractCoords"
                          #js [#js {:batchId batch-id
-                                   :geomsWkb (geoms->wkb-array geoms)}]
+                                   :geomsWkb (mapv cio/write-wkb geoms)}]
                          worker-idx))
                  coords (await (proj-coords (.-coords extract-result)
                                             source-crs target-crs pid))
@@ -1822,7 +1674,7 @@
                                    :transformedCoords coords
                                    :boundaries (.-boundaries extract-result)}]
                          worker-idx))
-                 new-geoms (wkb-array->geoms (.-wkb apply-result))]
+                 new-geoms (mapv cio/read-wkb (.-wkb apply-result))]
              (release-fn)
              (trace/busy-end! busy)
              new-geoms)
@@ -2232,10 +2084,11 @@
   #?(:clj spec :cljs (eval-boundary->plain spec)))
 
 (defn- report-rows
-  "The rows of `data` as a vector of row maps. `data` is a dataset or a seq
-   of row maps."
-  [data]
-  (if (dataset? data) (vec (rows data :as-maps)) (vec data)))
+  "The rows of `data` that pass the :where of `spec`, as a vector of row
+   maps. `data` is a dataset or a seq of row maps."
+  [data spec]
+  (let [rows* (if (dataset? data) (vec (rows data :as-maps)) (vec data))]
+    (if-let [w (:where spec)] (filterv (where->pred w) rows*) rows*)))
 
 (defn- spec-value-fn
   [spec]
@@ -2261,8 +2114,7 @@
    {:scope :label :total :cells}); without, a single category-tally map."
   [data spec]
   (let [spec   (plain-spec spec)
-        rows*  (report-rows data)
-        rows*  (if-let [w (:where spec)] (filterv (where->pred w) rows*) rows*)
+        rows*  (report-rows data spec)
         vf     (spec-value-fn spec)
         wf     (when (= :value (:weight spec)) vf)
         cats   (mapv (fn [b] [(:label b) (num-frag->pred b)]) (:buckets spec))]
@@ -2286,8 +2138,7 @@
    Returns the presence-tally map {:counts {class n} :rows [...]}."
   [data spec]
   (let [spec      (plain-spec spec)
-        rows*     (report-rows data)
-        rows*     (if-let [w (:where spec)] (filterv (where->pred w) rows*) rows*)
+        rows*     (report-rows data spec)
         vf        (spec-value-fn spec)
         summaries (modal-group-summaries rows*
                                          (fn [r] (get r (:group spec)))
@@ -2374,8 +2225,7 @@
    is nil when there are no rows."
   [data spec]
   (let [spec  (plain-spec spec)
-        rows* (report-rows data)
-        rows* (if-let [w (:where spec)] (filterv (where->pred w) rows*) rows*)
+        rows* (report-rows data spec)
         cats  (:categories spec)
         known (vec (:known cats))
         n     (count rows*)
@@ -2518,8 +2368,6 @@
                                        {:name :predicate :required true :type :keyword}
                                        {:name :value :required true :type :any}]})
 
-;; This registration holds the parser contract of `filter` and has no runtime
-;; :params. At run time `filter` resolves to cg.dataset/filter above.
 (feature/register-operation! "cg.dataset/filter-column"
                              {:type :transformer
                               :dsl-name "filter"

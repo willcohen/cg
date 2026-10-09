@@ -375,8 +375,6 @@
 
 (deftest test-table-mode-context-store
   (testing "Dataset context store registration and cleanup"
-    (dataset/reset-dataset-context-store!)
-
     (let [points [(f/point 0 0)]
           test-ds (ds/->dataset {:id [1] :geometry points})
 

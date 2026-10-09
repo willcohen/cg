@@ -111,7 +111,7 @@ npm install @wcohen/cg
 npx cg run node_modules/@wcohen/cg/examples/simple.cg
 ```
 
-`bin/cg.mjs` shows the setup that the bundle needs in Node.js. It starts wasmts and sets `globalThis.nodeFs` before it imports the bundle.
+`bin/cg.mjs` shows the setup that the bundle needs in Node.js. It starts wasmts and sets `globalThis.nodeFs` before it imports the bundle. The `run` command then starts the worker pool, because a reprojection step needs it.
 
 ## Modules
 

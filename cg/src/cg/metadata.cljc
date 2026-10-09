@@ -8,9 +8,8 @@
   "Parse the visual metadata of a .cg file (EDN after a ^:cgproj tag, read as
   data and never evaluated) and merge it into Flow Graphs. The keys under
   :nodes are not node ids: see find-node-key-for-metadata."
-  (:require [clojure.string :as str]
-            #?(:clj [clojure.edn :as edn]
-               :cljs ["squint-cljs" :as squint-compiler])))
+  (:require [cg.util :as util]
+            [clojure.string :as str]))
 
 #?(:clj (set! *warn-on-reflection* true))
 
@@ -22,37 +21,12 @@
     (let [code (subs file-content 0 idx)
           metadata-start (+ idx (count "^:cgproj"))
           metadata-str (str/trim (subs file-content metadata-start))
-          ;; The JVM reads the metadata with the EDN reader, with no eval.
-          ;; squint has no EDN reader: compile the text as an expression and
-          ;; eval it. :elide-imports and :elide-exports give JS that eval can
-          ;; run with no module errors.
-          metadata (if (empty? metadata-str)
-                    {}
-                    #?(:clj (edn/read-string metadata-str)
-                       :cljs (let [result-state ((.-compileStringEx squint-compiler)
-                                                 metadata-str
-                                                 #js {:context "expr"
-                                                      :elide-imports true
-                                                      :elide-exports true})
-                                   compiled (.-javascript result-state)]
-                               ;; An indirect eval runs in the global scope,
-                               ;; where the squint_core import of this module
-                               ;; is not visible. EDN compiles to plain JS
-                               ;; literals and does not need it.
-                               ((js* "(0, eval)") compiled))))]
+          metadata (if (empty? metadata-str) {} (util/read-edn-string metadata-str))]
       ;; A squint map is a plain JS object. No clj->js is necessary.
       {:code (str/trim code)
        :metadata metadata})
     {:code (str/trim file-content)
      :metadata {}}))
-
-(defn merge-visual-into-node
-  "Return node with visual-metadata under :visual. A nil visual-metadata
-  gives node as it is."
-  [node visual-metadata]
-  (if visual-metadata
-    (assoc node :visual visual-metadata)
-    node))
 
 (defn find-node-key-for-metadata
   "The key in metadata-nodes that matches node, or nil: the data ref name of a
@@ -69,12 +43,9 @@
                                     [as-keyword as-string])
                              :cljs (let [s (str val)] [s s]))))
         candidate-keys (case node-type
-                         :source (to-candidates (:data-ref node))
-                         "source" (to-candidates (:data-ref node))
-                         :operation (to-candidates (:id node))
-                         "operation" (to-candidates (:id node))
-                         :sink (to-candidates (:output-binding node))
-                         "sink" (to-candidates (:output-binding node))
+                         (:source "source") (to-candidates (:data-ref node))
+                         (:operation "operation") (to-candidates (:id node))
+                         (:sink "sink") (to-candidates (:output-binding node))
                          [])]
     (some #(when (contains? metadata-nodes %) %) candidate-keys)))
 
@@ -82,79 +53,46 @@
   "Merge the metadata map {:nodes {...} :viewport {...}} into a Flow Graph.
   Each matching node gets its :visual data, and :viewport goes into :config."
   [graph metadata]
-  (let [graph-clj graph
-        metadata-clj metadata
+  (let [metadata-nodes (:nodes metadata {})
+        viewport (:viewport metadata)]
+    (assoc graph
+           :nodes (mapv (fn [node]
+                          (if-let [visual (some->> (find-node-key-for-metadata node metadata-nodes)
+                                                   (get metadata-nodes))]
+                            (assoc node :visual visual)
+                            node))
+                        (:nodes graph))
+           :config (if viewport
+                     (assoc-in (:config graph) [:viewport] viewport)
+                     (:config graph)))))
 
-        metadata-nodes (:nodes metadata-clj {})
-        viewport (:viewport metadata-clj)
-
-        updated-nodes (mapv (fn [node]
-                             (if-let [node-key (find-node-key-for-metadata node metadata-nodes)]
-                               (merge-visual-into-node node (get metadata-nodes node-key))
-                               node))
-                           (:nodes graph-clj))
-
-        updated-config (if viewport
-                        (assoc-in (:config graph-clj) [:viewport] viewport)
-                        (:config graph-clj))
-
-        result (assoc graph-clj
-                      :nodes updated-nodes
-                      :config updated-config)]
-
-    result))
-
-(defn has-position?
-  "Check if a node has a visual position"
-  [node]
-  #?(:clj (boolean (get-in node [:visual :pos]))
-     :cljs (and node
-                (.-visual node)
-                (.-pos (.-visual node)))))
-
-(defn default-node-spacing
-  "Default spacing between nodes in pixels"
-  []
-  150)
+(defn has-position? [node]
+  (boolean (get-in node [:visual :pos])))
 
 (defn auto-layout-nodes
   "Give a position to each node that has none. A node with a position stays
   as it is. Each other node goes at x = index * spacing, y = 100."
   [graph]
-  (let [graph-clj graph
-        nodes (:nodes graph-clj)
-        spacing (default-node-spacing)
-
-        nodes-with-positions
-        (reduce (fn [acc [idx node]]
-                 (if (has-position? node)
-                   (conj acc node)
-                   (let [x (* idx spacing)
-                         y 100
-                         visual (assoc (:visual node {}) :pos [x y])]
-                     (conj acc (assoc node :visual visual)))))
-               []
-               (map-indexed vector nodes))
-
-        result (assoc graph-clj :nodes nodes-with-positions)]
-
-    result))
+  (let [spacing 150] ; px
+    (assoc graph :nodes
+           (vec (map-indexed (fn [idx node]
+                               (if (has-position? node)
+                                 node
+                                 (assoc node :visual (assoc (:visual node {}) :pos [(* idx spacing) 100]))))
+                             (:nodes graph))))))
 
 (defn load-cg-with-metadata
   "Merge the visual metadata of a .cg file into each Flow Graph that
   extract-models-fn extracts. Returns {:models :metadata :code}."
   [file-content extract-models-fn]
   (let [{:keys [code metadata]} (split-code-and-metadata file-content)
-
         {:keys [models]} (extract-models-fn code)
-
         models-with-metadata (into {}
                                   (map (fn [[name graph]]
                                         [name (-> graph
                                                  (merge-metadata-into-graph metadata)
                                                  auto-layout-nodes)])
                                        models))]
-
     {:models models-with-metadata
      :metadata metadata
      :code code}))

@@ -262,25 +262,6 @@
       (- 360 diff)
       diff)))
 
-(defn find-corners-by-angle
-  "Deprecated: use find-corners, which also finds curve corners. Give the
-   indexes in the closed ring coords where the direction changes more than
-   threshold degrees. The default threshold is 10.0."
-  ([coords]
-   (find-corners-by-angle coords 10.0))
-  ([coords threshold]
-   (let [n (dec (count coords))
-         angles (mapv (fn [i]
-                        (coord->angle (nth coords i)
-                                      (nth coords (mod (inc i) n))))
-                      (range n))]
-     (filterv (fn [i]
-                (let [prev-angle (nth angles (mod (dec i) n))
-                      curr-angle (nth angles i)
-                      diff (angle-difference prev-angle curr-angle)]
-                  (> diff threshold)))
-              (range n)))))
-
 (defn segment-length
   "Calculate the length of the segment from coordinate i to coordinate
    i+1."
@@ -372,6 +353,11 @@
                        ;; walk finds no curve corner.
                        0.0)
          n (dec (count coords))
+         curve-corner (fn [start-idx end-idx]
+                        {:type :curve
+                         :coord (curve-midpoint-by-length coords start-idx end-idx n)
+                         :start-idx start-idx
+                         :end-idx end-idx})
 
          seg-lengths (mapv #(segment-length coords % n) (range n))
          seg-angles (mapv (fn [i]
@@ -389,11 +375,7 @@
                  final-angle (nth seg-angles 0)
                  net-change (angle-difference (:start-angle curve-state) final-angle)]
              (if (>= net-change curve-thresh)
-               (let [mid (curve-midpoint-by-length coords (:start-idx curve-state) 0 n)]
-                 (conj corners {:type :curve
-                                :coord mid
-                                :start-idx (:start-idx curve-state)
-                                :end-idx 0}))
+               (conj corners (curve-corner (:start-idx curve-state) 0))
                corners))
            corners)
 
@@ -407,27 +389,14 @@
                                   :start-angle prev-angle})
                    net-change (angle-difference (:start-angle new-state) seg-angle)]
                (if (>= net-change curve-thresh)
-                 (let [mid (curve-midpoint-by-length coords (:start-idx new-state) (inc i) n)]
-                   (recur (inc i)
-                          nil
-                          (conj corners {:type :curve
-                                         :coord mid
-                                         :start-idx (:start-idx new-state)
-                                         :end-idx (inc i)})))
+                 (recur (inc i) nil (conj corners (curve-corner (:start-idx new-state) (inc i))))
                  (recur (inc i) new-state corners)))
 
              (let [[corners' reset-curve?]
                    (if curve-state
                      (let [net-change (angle-difference (:start-angle curve-state) seg-angle)]
                        (if (>= net-change curve-thresh)
-                         (let [mid (curve-midpoint-by-length coords
-                                                              (:start-idx curve-state)
-                                                              i n)]
-                           [(conj corners {:type :curve
-                                           :coord mid
-                                           :start-idx (:start-idx curve-state)
-                                           :end-idx i})
-                            true])
+                         [(conj corners (curve-corner (:start-idx curve-state) i)) true]
                          [corners true]))
                      [corners false])
 
@@ -498,12 +467,7 @@
                                     (into [start-coord] (rest intermediate)))
 
                                   (= :curve (:type c2))
-                                  (conj (vec (butlast intermediate)) end-coord)
-
-                                  :else
-                                  (-> [start-coord]
-                                      (into (rest (butlast intermediate)))
-                                      (conj end-coord)))]
+                                  (conj (vec (butlast intermediate)) end-coord))]
                 edge-coords))
             (range num-corners))))))
 
@@ -513,26 +477,6 @@
   [coords corners]
   (let [edge-coord-seqs (corners->edge-coords coords corners)]
     (mapv f/linestring edge-coord-seqs)))
-
-(defn coords->edges-at-corners
-  "Give one LineString for each span between adjacent corner indexes of the
-   closed ring coords. With no corners, the result is the full boundary as
-   one edge."
-  [coords corners]
-  (if (empty? corners)
-    [(f/linestring coords)]
-    (let [n (dec (count coords))
-          num-corners (count corners)
-          sorted-corners (sort corners)]
-      (mapv (fn [i]
-              (let [start-idx (nth sorted-corners i)
-                    end-idx (nth sorted-corners (mod (inc i) num-corners))
-                    edge-coords (if (<= start-idx end-idx)
-                                  (subvec coords start-idx (inc end-idx))
-                                  (into (subvec coords start-idx (inc n))
-                                        (subvec coords 0 (inc end-idx))))]
-                (f/linestring edge-coords)))
-            (range num-corners)))))
 
 ;; The thresholds: the :thresholds of the opts of analyze-parcel-edges and
 ;; analyze-parcel, and the thresholds argument of the classification fns.
@@ -675,9 +619,7 @@
   [point direction probe-distance parcels-ds]
   (let [[x y] point
         [dx dy] direction
-        probe-x (+ x (* dx probe-distance))
-        probe-y (+ y (* dy probe-distance))
-        probe-pt (f/point probe-x probe-y)]
+        probe-pt (f/point (+ x (* dx probe-distance)) (+ y (* dy probe-distance)))]
 
     ;; intersects-any? stops at the first hit and makes no result dataset.
     ;; The sampler calls this fn many times for each edge.
@@ -801,17 +743,14 @@
               seg-len (- (nth arcs (inc j)) seg-arc0)]
           (if (< seg-len 1.0e-6)
             []
-            (let [[x1 y1] a
-                  [x2 y2] b
-                  nsamp (max 1 (min cap (int (+ 1.0 (/ seg-len spacing)))))
+            (let [nsamp (max 1 (min cap (int (+ 1.0 (/ seg-len spacing)))))
                   seg-ls (f/linestring [a b])
                   normal (perpendicular-direction seg-ls centroid)]
               (mapv (fn [k]
                       (let [t (/ (+ k 0.5) nsamp)
-                            px (+ x1 (* t (- x2 x1)))
-                            py (+ y1 (* t (- y2 y1)))]
+                            p (interpolate-coord a b t)]
                         {:arc (+ seg-arc0 (* t seg-len))
-                         :cond (probe-abutting-condition [px py] normal probe-distance parcels-ds)}))
+                         :cond (probe-abutting-condition p normal probe-distance parcels-ds)}))
                     (range nsamp))))))
       (range (dec n))))))
 
@@ -1013,6 +952,17 @@
                     dy (- (second q) (second p))]
                 (math/sqrt (+ (* dx dx) (* dy dy))))))))
 
+(defn widest-front
+  "Give the front edge with the largest :right-of-way-width, or nil for an empty
+   collection. The first coordinate of the edge breaks a tie. The function
+   does not use max-key, because max-key gives the last maximum, and the
+   result would change with the sequence of the input."
+  [fronts]
+  (first (sort-by (fn [e]
+                    (let [[x y] (first (geo/coordinates (:edge e)))]
+                      [(- (or (:right-of-way-width e) 0)) x y]))
+                  fronts)))
+
 (defn qualifying-frontages
   "Select the street edges that count as frontage: the right-of-way is
    :min-front-street-width or wider, and the edge is :min-frontage-length
@@ -1028,12 +978,7 @@
                    street-edges)]
     (cond
       (seq q) q
-      (seq street-edges)
-      ;; The same selection as widest-front, which is defined later.
-      [(first (sort-by (fn [e]
-                         (let [[x y] (first (geo/coordinates (:edge e)))]
-                           [(- (or (:right-of-way-width e) 0)) x y]))
-                       street-edges))]
+      (seq street-edges) [(widest-front street-edges)]
       :else [])))
 
 (defn same-street-frontage?
@@ -1225,17 +1170,6 @@
    ^{:type :map} thresholds]
   (:lot-type (classify-frontages edges-with-info thresholds)))
 
-(defn widest-front
-  "Give the front edge with the largest :right-of-way-width, or nil for an empty
-   collection. The first coordinate of the edge breaks a tie. The function
-   does not use max-key, because max-key gives the last maximum, and the
-   result would change with the sequence of the input."
-  [fronts]
-  (first (sort-by (fn [e]
-                    (let [[x y] (first (geo/coordinates (:edge e)))]
-                      [(- (or (:right-of-way-width e) 0)) x y]))
-                  fronts)))
-
 (defn geom-sort-key
   "Give a sort key for a geometry: the [x y] coordinate of its centroid.
    The first vertex of a ring changes with the sequence of the coordinates,
@@ -1287,8 +1221,8 @@
    ^{:type :map} main-building]
   (let [min-front-width (threshold thresholds :min-front-street-width)
         selector        (threshold thresholds :primary-front-selector)
-        street-edges       (filterv #(= :street (:abutting %)) edges-with-info)
-        other-edges   (filterv #(not= :street (:abutting %)) edges-with-info)
+        street-edges    (filterv #(= :street (:abutting %)) edges-with-info)
+        other-edges     (filterv #(not= :street (:abutting %)) edges-with-info)
         select-primary  (fn [fronts]
                           (cond
                             (fn? selector)
@@ -1318,8 +1252,7 @@
       ;; A lot with no street edge has no front. Because the rear test uses the
       ;; front, each edge is a side and the rear setback stays :unknown. Do not
       ;; add an imaginary rear here.
-      :no-street-frontage (mapv #(assoc % :edge-type :side) edges-with-info)
-      :interior           (mapv #(assoc % :edge-type :side) edges-with-info)
+      :interior (mapv #(assoc % :edge-type :side) edges-with-info)
 
       ;; A bent frontage classifies :mid-block and arrives here with two
       ;; street edges. Each street edge is a front, at any width.
@@ -1433,12 +1366,6 @@
   [edge building]
   (let [[p1 p2] (geo/nearest-points edge building)]
     (f/linestring [p1 p2])))
-
-(defn compute-setback
-  "Give the distance from a parcel edge to a building polygon, in the units
-   of the geometry."
-  [edge building]
-  (geo/distance edge building))
 
 ;; The buffers keep their round ends. On a convex lot, the result is equal
 ;; to the inward offset with sharp corners. On a lot that is not convex,
@@ -1662,31 +1589,18 @@
                                             (assoc opts :main-building main-building))
         typed-edges (:edges edge-analysis)
 
-        thresholds (:thresholds opts)
-        width-for (fn [edge-info]
-                    (when (= :street (:abutting edge-info))
-                      (measure-right-of-way-width
-                       (:edge edge-info) parcel-row parcels-ds
-                       (threshold thresholds :right-of-way-width-step)
-                       (threshold thresholds :right-of-way-width-max)
-                       (ds/index-candidates-fn parcels-ds)
-                       (threshold thresholds :right-of-way-width-resolution))))
-
         edges-with-setbacks
-        (if buildings-ds
-          (mapv (fn [edge-info]
-                  (let [setback (when main-building
-                                  (geo/distance (:edge edge-info)
-                                                (:geometry main-building)))]
-                    (assoc edge-info
-                           :setback            setback
-                           :right-of-way-width (or (:right-of-way-width edge-info)
-                                                   (width-for edge-info)))))
-                typed-edges)
-          (mapv (fn [edge-info]
-                  (assoc edge-info :right-of-way-width (or (:right-of-way-width edge-info)
-                                                           (width-for edge-info))))
-                typed-edges))
+        (mapv (fn [edge-info]
+                (-> edge-info
+                    (cond-> buildings-ds
+                      (assoc :setback (when main-building
+                                        (geo/distance (:edge edge-info)
+                                                      (:geometry main-building)))))
+                    ;; A lot edge has no :right-of-way-width. The assoc adds the
+                    ;; key with nil, because the debug edges layer needs the
+                    ;; column also when no edge abuts a street.
+                    (assoc :right-of-way-width (:right-of-way-width edge-info))))
+              typed-edges)
 
         envelope (when buildings-ds
                    (compute-envelope geom edges-with-setbacks))
@@ -1765,10 +1679,6 @@
             polys (mapv #(geo/geometry-n geom %) (range n))]
         (max-by-stable geo/area geom-sort-key polys))
       :else nil)))
-
-;; An alias for the callers that use parcel/get-dataset-crs. The fn lives in
-;; cg.layer.
-(def get-dataset-crs layer/get-dataset-crs)
 
 ;; analyze-parcel-edges fails on a MultiPolygon row. The buffer of zero
 ;; width cleans the self-intersections that stop JTS predicate work.

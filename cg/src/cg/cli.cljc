@@ -52,43 +52,36 @@
                      {} (introspect/extract-model-names-from-code code)))))
 
 (defn show-model
-  "Print the Flow Graphs that the .cg file `file` builds, or only the model
-  :binding in `opts`. Gives the exit code."
+  "Print a summary of each model that the .cg file `file` builds, or the full
+  model :binding in `opts`. Gives the exit code."
   [file & [opts]]
   (require-file! file)
   (println "=== Extracting Models from" file "===")
   (println)
   (try
-    (let [models (file-models file)
-          binding-filter (:binding opts)]
-      (cond
-        (empty? models)
+    (let [models (file-models file)]
+      (if (empty? models)
         (do (println "No models found in file.")
             (println "Make sure the file contains model definitions using item->, coll->, or table->")
             1)
-
-        binding-filter
         (do (println "Found" (count models) "model(s):")
             (println)
-            (if-let [model (get models binding-filter)]
-              (do (println "Model:" binding-filter)
-                  (println)
-                  #?(:clj (pprint/pprint model) :cljs (js/console.log model))
-                  0)
-              (do (println "Error: Model" binding-filter "not found")
-                  (println "Available models:" (keys models))
-                  1)))
-
-        :else
-        (do (println "Found" (count models) "model(s):")
-            (println)
-            (doseq [{:keys [name node-count edge-count operations]} (introspect/list-models models)]
-              (println "•" name)
-              (println "  Nodes:" node-count)
-              (println "  Edges:" edge-count)
-              (println "  Operations:" (vec operations))
-              (println))
-            0)))
+            (if-let [binding-filter (:binding opts)]
+              (if-let [model (get models binding-filter)]
+                (do (println "Model:" binding-filter)
+                    (println)
+                    #?(:clj (pprint/pprint model) :cljs (js/console.log model))
+                    0)
+                (do (println "Error: Model" binding-filter "not found")
+                    (println "Available models:" (keys models))
+                    1))
+              (do (doseq [{:keys [name node-count edge-count operations]} (introspect/list-models models)]
+                    (println "•" name)
+                    (println "  Nodes:" node-count)
+                    (println "  Edges:" edge-count)
+                    (println "  Operations:" (vec operations))
+                    (println))
+                  0)))))
     (catch #?(:clj Exception :cljs :default) e
       (print-error e)
       1)))

@@ -67,7 +67,9 @@
   [class method]
   (symbol (str (kebab-class class) "-" (method-op-name method))))
 
-(def ^:private geometry-subtypes-set
+(def geometry-subtypes
+  "JTS class names that the wasmts codegen merges into one Geometry surface; their JS path
+   drops the class name (wasmts.geom.buffer). cg.geo/geometry-typed? reads it at run time."
   #{"org.locationtech.jts.geom.Geometry"
     "org.locationtech.jts.geom.Point"
     "org.locationtech.jts.geom.LineString"
@@ -78,11 +80,6 @@
     "org.locationtech.jts.geom.MultiPolygon"
     "org.locationtech.jts.geom.GeometryCollection"})
 
-(def geometry-subtypes
-  "JTS class names that the wasmts codegen merges into one Geometry surface; their JS path
-   drops the class name (wasmts.geom.buffer). cg.geo/geometry-typed? reads it at run time."
-  geometry-subtypes-set)
-
 (defn js-path
   "Return the wasmts JS path of an entry, or `hint` when there is one. A Geometry subtype
    drops the class name, another class keeps its simple name, a constructor is createN (arity N)."
@@ -90,7 +87,7 @@
   (or hint
       (let [pkg (package-leaf class)
             m   (if (= method "<init>") (str "create" (count params)) method)]
-        (if (geometry-subtypes-set class)
+        (if (geometry-subtypes class)
           (str "wasmts." pkg "." m)
           (str "wasmts." pkg "." (simple-name class) "." m)))))
 
@@ -100,15 +97,11 @@
   []
   tsr/registry)
 
-(defn receiver-call? [[_ v]] (= :receiver-call (:kind (:shape v))))
-(defn static-call?   [[_ v]] (= :static-call   (:kind (:shape v))))
-(defn ctor?          [[_ v]] (= :ctor          (:kind (:shape v))))
-
 (defn in-scope?
   "Return true for an entry with a shape that this macro can dispatch.
    :bespoke entries and bare-keyword shape tags are out of scope."
-  [entry]
-  (or (receiver-call? entry) (static-call? entry) (ctor? entry)))
+  [[_ v]]
+  (contains? #{:receiver-call :static-call :ctor} (:kind (:shape v))))
 
 (defn in-scope-entries
   "Return the registry entries with a known shape kind, sorted to keep the
@@ -143,14 +136,11 @@
 (defn entry-meta-literal
   "Return the meta map of an entry, which the dispatcher reads at run time."
   [k v]
-  {:class       (:class k)
-   :method      (:method k)
-   :params      (:params k)
-   :param-names (effective-param-names k v)
-   :static?     (:static? v)
-   :returns     (:returns v)
-   :js-path     (js-path k (:js-path v))
-   :shape       (:shape v)})
+  {:class   (:class k)
+   :method  (:method k)
+   :params  (:params k)
+   :returns (:returns v)
+   :js-path (js-path k (:js-path v))})
 
 (defn entry-keys
   "Return the kebab keywords of the positional params of an entry, in :params
@@ -225,7 +215,7 @@
              call      (fn [receiver] `(. ~receiver (~(symbol method) ~@call-args)))]
          (case kind
            :receiver-call
-           (if (and (geometry-subtypes-set class) (jvm-prepared-methods [method params]))
+           (if (and (geometry-subtypes class) (jvm-prepared-methods [method params]))
              `(fn [~r ~args]
                 (if (instance? org.locationtech.jts.geom.prep.PreparedGeometry ~r)
                   ~(call (with-meta r {:tag 'org.locationtech.jts.geom.prep.PreparedGeometry}))
@@ -259,10 +249,8 @@
     (case kind
       :receiver-call `([~feat-sym ~@arg-syms]
                        ~(dispatch-call jvm? dispatcher entry feat-sym arg-syms))
-      :static-call   `([~@arg-syms]
-                       ~(dispatch-call jvm? dispatcher entry arg-syms))
-      :ctor          `([~@arg-syms]
-                       ~(dispatch-call jvm? dispatcher entry arg-syms)))))
+      (:static-call :ctor) `([~@arg-syms]
+                             ~(dispatch-call jvm? dispatcher entry arg-syms)))))
 
 (defn ^:private dedup-by-key-set
   "Keep the first of the entries that share a kebab key-set, as Area.ofRing(Coordinate[]) and
@@ -287,10 +275,8 @@
     (case kind
       :receiver-call [`(= ~provided-sym ~key-set)
                       (dispatch-call jvm? dispatcher entry feat-sym arg-exprs)]
-      :static-call   [`(= ~provided-sym ~key-set)
-                      (dispatch-call jvm? dispatcher entry arg-exprs)]
-      :ctor          [`(= ~provided-sym ~key-set)
-                      (dispatch-call jvm? dispatcher entry arg-exprs)])))
+      (:static-call :ctor) [`(= ~provided-sym ~key-set)
+                            (dispatch-call jvm? dispatcher entry arg-exprs)])))
 
 (defn emit-map-bodies
   "Return 1 or 2 [argv body] forms for a map-dispatch group: an opts arity that selects the entry
@@ -322,13 +308,7 @@
          `([~feat-sym ~opts-sym] ~cond-body)]
         [`([~feat-sym ~opts-sym] ~cond-body)])
 
-      :static-call
-      (if has-zero?
-        [`([] (~fname {}))
-         `([~opts-sym] ~cond-body)]
-        [`([~opts-sym] ~cond-body)])
-
-      :ctor
+      (:static-call :ctor)
       (if has-zero?
         [`([] (~fname {}))
          `([~opts-sym] ~cond-body)]
@@ -407,7 +387,7 @@
   "Groups that are receiver-call ops on a Geometry-subtype class."
   [groups]
   (filter (fn [[[class _ kind] _]]
-            (and (= :receiver-call kind) (geometry-subtypes-set class)))
+            (and (= :receiver-call kind) (geometry-subtypes class)))
           groups))
 
 ;; Polygon.getBoundary and Geometry.getBoundary both promote to boundary. The base class
@@ -595,7 +575,7 @@
   (some (fn [[[c m kind] entries]]
           (when (and (= c class) (= m method) (= kind :static-call))
             (let [anchored (filter (fn [[k _]]
-                                     (geometry-subtypes-set (first (:params k))))
+                                     (geometry-subtypes (first (:params k))))
                                    entries)]
               (when (seq anchored) (vec anchored)))))
         groups))
@@ -658,24 +638,17 @@
     `(do ~@forms)))
 
 (defn check-data
-  "Return a map that describes what `define-all-ts-fns` emits.
-   cg.geo/check-report reads its keys."
+  "Return a map that describes what `define-all-ts-fns` emits, for
+   `bb ts:check`."
   []
-  (let [registry  (load-registry)
-        entries   (in-scope-entries registry)
-        groups    (group-by group-key entries)
-        by-pkg    (group-by (fn [[k _]]
-                              (str "geo." (package-leaf (:class k))
-                                   "." (kebab-class (:class k))))
-                            entries)
-        by-shape  (->> entries
-                       (group-by (fn [[_ v]] (:kind (:shape v))))
-                       (map (fn [[k vs]] [k (count vs)]))
-                       (into (sorted-map)))]
-    {:total-entries  (count registry)
-     :minted         (count groups)
-     :registered     (count groups)
-     :minted-arities (count entries)
-     :by-shape       by-shape
-     :by-package     (into (sorted-map)
-                           (map (fn [[k vs]] [k (count vs)]) by-pkg))}))
+  (let [registry (load-registry)
+        entries  (in-scope-entries registry)
+        groups   (group-by group-key entries)
+        by-pkg   (group-by (fn [[k _]]
+                             (str "geo." (package-leaf (:class k))
+                                  "." (kebab-class (:class k))))
+                           entries)]
+    {:total-entries (count registry)
+     :minted        (count groups)
+     :by-package    (into (sorted-map)
+                          (map (fn [[k vs]] [k (count vs)]) by-pkg))}))

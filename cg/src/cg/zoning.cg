@@ -732,8 +732,8 @@
                 rule (first (filter (fn [r] (some #(= et %) (:types r)))
                                     (:rules per-edge)))]
             {:edge-length             (:length e)
-             :abuts-right-of-way?              (= :street (:abutting e))
-             :right-of-way-width               (or (:right-of-way-width e) 0)
+             :abuts-right-of-way?     (= :street (:abutting e))
+             :right-of-way-width      (or (:right-of-way-width e) 0)
              :edge-type               et
              :setback-to-bldg         (:setback e)
              :edge-setback-conformity (if rule

@@ -34,13 +34,10 @@
      (def ^GeoJsonWriter gjw-nocrs (doto (GeoJsonWriter.)
                                      (.setEncodeCRS false)))
 
-     (defn read-geojson
-       "Read GeoJSON string to JTS Geometry"
-       [^String s]
+     (defn read-geojson [^String s]
        (.read gjr s))
 
      (defn write-geojson
-       "Write JTS Geometry to GeoJSON string"
        ([^Geometry g]
         (write-geojson g false))
        ([^Geometry g ^Boolean write-crs?]
@@ -53,14 +50,10 @@
      (def ^WKTReader wkt-reader (WKTReader.))
      (def ^WKTWriter wkt-writer (WKTWriter.))
 
-     (defn read-wkt
-       "Read Well-Known Text (WKT) string to JTS Geometry"
-       [^String wkt-str]
+     (defn read-wkt [^String wkt-str]
        (.read wkt-reader wkt-str))
 
-     (defn write-wkt
-       "Write JTS Geometry to Well-Known Text (WKT) string"
-       [^Geometry geom]
+     (defn write-wkt [^Geometry geom]
        (.write wkt-writer geom))))
 
 #?(:cljs
@@ -79,50 +72,30 @@
 
      ;; GeoJSON I/O converts through WKT, because WasmTS has no GeoJSON support.
 
-     (defn- coords->wkt-coords
-       "Convert GeoJSON coordinate array to WKT coordinate string"
-       [coords]
+     (defn- coords->wkt-coords [coords]
        (if (number? (first coords))
          (str/join " " coords)
          (str/join ", " (map coords->wkt-coords coords))))
 
-     (defn- ring->wkt
-       "Convert a GeoJSON ring (array of coordinates) to WKT ring string"
-       [ring]
+     (defn- ring->wkt [ring]
        (clojure.core/str "(" (str/join ", " (map coords->wkt-coords ring)) ")"))
 
-     (defn- geojson-geometry->wkt
-       "Convert a parsed GeoJSON geometry object to WKT string"
-       [geom]
+     (defn- geojson-geometry->wkt [geom]
        (let [geom-type (:type geom)
-             coords (:coordinates geom)]
-         (case geom-type
-           "Point"
-           (clojure.core/str "POINT (" (coords->wkt-coords coords) ")")
-
-           "MultiPoint"
-           (clojure.core/str "MULTIPOINT (" (str/join ", " (map #(clojure.core/str "(" (coords->wkt-coords %) ")") coords)) ")")
-
-           "LineString"
-           (clojure.core/str "LINESTRING (" (str/join ", " (map coords->wkt-coords coords)) ")")
-
-           "MultiLineString"
-           (clojure.core/str "MULTILINESTRING (" (str/join ", " (map ring->wkt coords)) ")")
-
-           "Polygon"
-           (clojure.core/str "POLYGON (" (str/join ", " (map ring->wkt coords)) ")")
-
-           "MultiPolygon"
-           (clojure.core/str "MULTIPOLYGON (" (str/join ", " (map #(clojure.core/str "(" (str/join ", " (map ring->wkt %)) ")") coords)) ")")
-
-           "GeometryCollection"
-           (clojure.core/str "GEOMETRYCOLLECTION (" (str/join ", " (map geojson-geometry->wkt (:geometries geom))) ")")
-
-           (throw (js/Error. (clojure.core/str "Unknown GeoJSON geometry type: " geom-type))))))
+             coords (:coordinates geom)
+             body (case geom-type
+                    "Point" (coords->wkt-coords coords)
+                    "MultiPoint" (str/join ", " (map #(clojure.core/str "(" (coords->wkt-coords %) ")") coords))
+                    "LineString" (str/join ", " (map coords->wkt-coords coords))
+                    ("MultiLineString" "Polygon") (str/join ", " (map ring->wkt coords))
+                    "MultiPolygon" (str/join ", " (map #(clojure.core/str "(" (str/join ", " (map ring->wkt %)) ")") coords))
+                    "GeometryCollection" (str/join ", " (map geojson-geometry->wkt (:geometries geom)))
+                    (throw (js/Error. (clojure.core/str "Unknown GeoJSON geometry type: " geom-type))))]
+         ;; The upper-case GeoJSON type is the WKT tag.
+         (clojure.core/str (str/upper-case geom-type) " (" body ")")))
 
      (defn read-geojson
-       "Read a GeoJSON string to a WasmTS Geometry. The conversion goes
-        through WKT."
+       "Read a GeoJSON string to a WasmTS Geometry."
        [geojson-str]
        ;; Under squint, the plain JS object from JSON.parse is a usable map.
        ;; No js->clj is necessary.
@@ -145,9 +118,7 @@
        (let [inner (-> ring-str str/trim (subs 1) (subs 0 (dec (count (str/trim ring-str)))))]
          (parse-wkt-coords inner)))
 
-     (defn- wkt->geojson-geometry
-       "Convert WKT string to GeoJSON geometry object (as Clojure map)"
-       [wkt-str]
+     (defn- wkt->geojson-geometry [wkt-str]
        (let [wkt (str/trim wkt-str)
              space-idx (str/index-of wkt " ")
              paren-idx (str/index-of wkt "(")
@@ -193,8 +164,7 @@
            (throw (js/Error. (clojure.core/str "Unknown WKT geometry type: " geom-type))))))
 
      (defn write-geojson
-       "Write a WasmTS Geometry to a GeoJSON string. The conversion goes
-        through WKT."
+       "Write a WasmTS Geometry to a GeoJSON string."
        ([geom]
         (write-geojson geom false))
        ([geom _write-crs?]
@@ -207,14 +177,10 @@
      (def ^WKBReader wkb-reader (WKBReader.))
      (def ^WKBWriter wkb-writer (WKBWriter.))
 
-     (defn read-wkb
-       "Read Well-Known Binary (WKB) byte array to JTS Geometry"
-       [^bytes wkb-bytes]
+     (defn read-wkb [^bytes wkb-bytes]
        (.read wkb-reader wkb-bytes))
 
-     (defn write-wkb
-       "Write JTS Geometry to Well-Known Binary (WKB) byte array"
-       [^Geometry geom]
+     (defn write-wkb [^Geometry geom]
        (.write wkb-writer geom))))
 
 #?(:cljs
@@ -557,6 +523,17 @@
            (finally
              (await (gdal/gdal-close ds))))))
 
+     (defn- ^:async walk-path!
+       "`who` starts the error message when GDAL cannot open `path`."
+       [path who]
+       (let [ds (await (gdal/gdal-open-ex path gdal-fndefs/GDAL_OF_VECTOR nil nil nil))]
+         (when (or (nil? ds) (= ds 0))
+           (throw (js/Error. (str who ": open-ex returned null for " path))))
+         (try
+           (await (walk-dataset-cljs! ds))
+           (finally
+             (await (gdal/gdal-close ds))))))
+
      (defn ^:async load-source-from-bytes
        "Load a vector source from a JS object of file name to Uint8Array, opening
         open-name (the .shp for a shapefile). Resolves to #js {:rows :sourceCrs}."
@@ -568,32 +545,20 @@
            (throw (js/Error.
                    (str "cg.io/load-source-from-bytes: open-name '"
                         open-name "' not in files-map"))))
-         (let [ds (await (gdal/gdal-open-ex open-path
-                                       gdal-fndefs/GDAL_OF_VECTOR
-                                       nil nil nil))]
-           (when (or (nil? ds) (= ds 0))
-             (throw (js/Error.
-                     (str "cg.io/load-source-from-bytes: open-ex returned null for "
-                          open-path))))
-           (try
-             (await (walk-dataset-cljs! ds))
-             (finally
-               (await (gdal/gdal-close ds)))))))))
+         (await (walk-path! open-path "cg.io/load-source-from-bytes"))))))
 
-#?(:clj
-   (defn- url-encode [s]
-     (java.net.URLEncoder/encode (str s) "UTF-8")))
+(defn- url-encode [s]
+  #?(:clj (java.net.URLEncoder/encode (str s) "UTF-8")
+     :cljs (js/encodeURIComponent (str s))))
 
-#?(:cljs
-   (defn- url-encode-cljs [s]
-     (js/encodeURIComponent (str s))))
-
-;; A URL source uses the ESRIJSON driver of GDAL, which pages when the server
-;; reports exceededTransferLimit. GDAL is built with no curl. The fetch goes
-;; through the CPLHTTPFetch host callback: net.willcohen.gdal.network on the
-;; JVM, registered on the first URL load, and __gdal_http_fetch on cljs,
-;; which the worker handler registers at init. orderByFields defaults to
-;; "OBJECTID ASC", because paging needs a stable order (GDAL driver docs).
+;; An ESRIJSON: URL uses the ESRIJSON driver of GDAL, which pages when the
+;; server reports exceededTransferLimit. On the JVM, a layer URL also uses the
+;; driver with :fetch-format :json, or when f=pbf fails. GDAL is built with no
+;; curl. The fetch goes through the CPLHTTPFetch host callback:
+;; net.willcohen.gdal.network on the JVM, registered on the first URL load,
+;; and __gdal_http_fetch on cljs, which the worker handler registers at init.
+;; orderByFields defaults to "OBJECTID ASC", because paging needs a stable
+;; order (GDAL driver docs).
 
 (defn source-label
   "The layer name in a GeoServices URL, or the last segment of a path."
@@ -603,10 +568,7 @@
         (re-find #"[^/\\]+$" s)
         s)))
 
-(defn- geoservices-layer-url?
-  "True when `s` looks like a GeoServices REST layer endpoint
-   (…/FeatureServer/<n> or …/MapServer/<n>)."
-  [s]
+(defn- geoservices-layer-url? [s]
   (boolean (re-find #"/(FeatureServer|MapServer)/\d+/?$" s)))
 
 #?(:clj
@@ -835,15 +797,13 @@
              extra-params (aget opts "extraParams")
              base         (str (.replace layer-url (js/RegExp. "/$") "") "/query"
                                "?f=json"
-                               "&where=" (url-encode-cljs where)
-                               "&outFields=" (url-encode-cljs out-fields)
-                               "&orderByFields=" (url-encode-cljs order-by)
+                               "&where=" (url-encode where)
+                               "&outFields=" (url-encode out-fields)
+                               "&orderByFields=" (url-encode order-by)
                                "&resultRecordCount=" result-count)
              extras       (if extra-params
                             (apply str (for [k (js-keys extra-params)]
-                                         (str "&" k "="
-                                              (url-encode-cljs
-                                               (aget extra-params k)))))
+                                         (str "&" k "=" (url-encode (aget extra-params k)))))
                             "")]
          (str base extras)))
 
@@ -851,15 +811,7 @@
        "Open an ESRIJSON: query URL through the worker and walk it."
        [target]
        (await (gdal/gdal-all-register))
-       (let [ds (await (gdal/gdal-open-ex target gdal-fndefs/GDAL_OF_VECTOR nil nil nil))]
-         (when (or (nil? ds) (= ds 0))
-           (throw (js/Error.
-                   (str "cg.io/load-gdal-source: open-ex returned null for "
-                        target))))
-         (try
-           (await (walk-dataset-cljs! ds))
-           (finally
-             (await (gdal/gdal-close ds))))))
+       (await (walk-path! target "cg.io/load-gdal-source")))
 
      ;; A layer URL pages here and not in the GDAL driver, whose walk costs
      ;; one worker message for each field of each feature and gives no
@@ -926,14 +878,13 @@
                (recur (inc i)))))))
 
      ;; Two fetches at the same time must not stage a page under one name.
-     (defonce ^:private staged-pages #js {:n 0})
+     (defonce ^:private staged-pages (atom 0))
 
      (defn- ^:async read-page!
        "Parse one ESRI JSON page with GDAL: #js {:features :types :crs}, the
         last two only for `first?`. nil when a later page has no layer."
        [bytes first?]
-       (let [n      (inc (aget staged-pages "n"))
-             _      (aset staged-pages "n" n)
+       (let [n      (swap! staged-pages inc)
              nm     (str "page-" n ".json")
              staged (await (gdal/stage-files! (js-obj nm bytes) "/work/cg-fetch"))
              path   (aget staged nm)
@@ -1406,8 +1357,8 @@
            (await (cg-flow/run-flow {:config {:procs procs :conns [[[:parse :out] [:rows :in]]]}
                                      :result-atom result
                                      :completed completed}
-                                    ;; The loop before the flow had no time
-                                    ;; limit, and each request has its retries.
+                                    ;; The fetch has no time limit, because
+                                    ;; each request has its own retries.
                                     {:name flow-name
                                      :pids [fetch-pid parse-pid]
                                      :timeout-ms js/Number.MAX_SAFE_INTEGER}))
@@ -1432,7 +1383,7 @@
                           (if token
                             (str url
                                  (if (str/includes? url "?") "&" "?")
-                                 "token=" (url-encode-cljs token))
+                                 "token=" (url-encode token))
                             url))]
          (cond
            (str/starts-with? source "ESRIJSON:")

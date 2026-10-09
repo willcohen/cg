@@ -107,13 +107,15 @@
   [path value]
   (write-file! path (pr-str value)))
 
-(defn read-edn
-  "Return the value of the EDN file at path. On cljs it evaluates the text:
-  read only a file that cg or its user wrote. Throws in a browser."
-  [path]
-  #?(:clj (edn/read-string (read-file path))
+(defn read-edn-string
+  "Return the value of the EDN text s. On cljs it evaluates the text: read
+  only text that cg or its user wrote."
+  [s]
+  #?(:clj (edn/read-string s)
      :cljs (let [compiled (.-javascript ((.-compileStringEx squint-compiler)
-                                         (read-file path)
+                                         s
+                                         ;; squint has no EDN reader. The elide
+                                         ;; options give JS that eval can run.
                                          #js {:context "expr"
                                               :elide-imports true
                                               :elide-exports true}))
@@ -121,6 +123,12 @@
                  ;; the global scope. EDN compiles to plain JS literals.
                  indirect-eval js/eval]
              (indirect-eval compiled))))
+
+(defn read-edn
+  "Return the value of the EDN file at path. On cljs it evaluates the text:
+  read only a file that cg or its user wrote. Throws in a browser."
+  [path]
+  (read-edn-string (read-file path)))
 
 (defn file-exists?
   "Return true if a file exists at path. Returns false in a browser."
@@ -176,55 +184,10 @@
                   (catch :default _ false))
              false)))
 
-(defn log
-  "Log a message to the console or stdout."
-  [& args]
-  #?(:clj (apply println args)
-     :cljs (apply js/console.log args)))
-
-(defn warn
-  "Log a warning message."
-  [& args]
-  #?(:clj (binding [*out* *err*]
-            (apply println "WARNING:" args))
-     :cljs (apply js/console.warn args)))
-
-(defn error
-  "Log an error message."
-  [& args]
-  #?(:clj (binding [*out* *err*]
-            (apply println "ERROR:" args))
-     :cljs (apply js/console.error args)))
-
-(defn exception-message
-  "Return the message of an exception or error."
-  [e]
-  #?(:clj (.getMessage ^Throwable e)
-     :cljs (.-message e)))
-
-(defn throw-ex
-  "Throw an ex-info with a message and an optional data map."
-  ([msg]
-   (throw-ex msg {}))
-  ([msg data]
-   #?(:clj (throw (ex-info msg data))
-      :cljs (throw (ex-info msg data)))))
-
-(defn deep-merge
-  "Deep merge maps recursively."
-  [& maps]
-  (apply merge-with
-         (fn [v1 v2]
-           (if (and (map? v1) (map? v2))
-             (deep-merge v1 v2)
-             v2))
-         maps))
-
-;; Under squint a keyword and a symbol are plain strings. squint-cljs/core
-;; does not export `keyword` or `symbol`, and its `name` accepts only strings.
-;; These shims use the real constructors on the JVM and strings on CLJS. They
-;; are here because cg.macros (generate-node-id) and cg.parser.extract
-;; (body-graph node ids) must share one contract.
+;; Under squint a keyword and a symbol are plain strings. The squint `name`
+;; accepts only strings. These shims use the real constructors on the JVM and
+;; strings on CLJS. They are here because cg.macros (generate-node-id) and
+;; cg.parser.extract (body-graph node ids) must share one contract.
 
 (defn unq-name
   "Return the unqualified name of x, a symbol, keyword or string: the text

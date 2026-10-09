@@ -26,7 +26,7 @@
   (identical? eos msg))
 
 #?(:cljs
-   (defn- thenable? [x]
+   (defn thenable? [x]
      (and (some? x) (fn? (.-then x)))))
 
 (defn- with-count

@@ -21,8 +21,7 @@
   ;; contains?, empty? and reverse are minted below and shadow clojure.core.
   (:refer-clojure :exclude [contains? empty? reverse])
   (:require [cg.feature :as feature]
-            [cg.ts-macros :refer [define-all-ts-fns check-data
-                                  geometry-subtypes]]
+            [cg.ts-macros :refer [define-all-ts-fns geometry-subtypes]]
             [clojure.string :as str]
             #?(:clj [net.willcohen.proj.proj :as proj])
             #?(:cljs [proj-wasm :as proj]))
@@ -74,9 +73,7 @@
       first arg to the function of that name in wasmts.geom.prep.PreparedGeometry."
      [receiver ^string method-name args]
      (let [f (aget receiver method-name)
-           call-args (let [arr #js []]
-                       (doseq [a args] (.push arr a))
-                       arr)]
+           call-args (js/Array.from args)]
        (cond
          f (.apply f receiver call-args)
          (feature/prepared-geometry? receiver)
@@ -96,11 +93,8 @@
                       acc
                       (recur (inc i) (aget acc (aget parts i)))))
            fname  (aget parts (dec n))
-           f      (aget parent fname)
-           call-args (let [arr #js []]
-                       (doseq [a args] (.push arr a))
-                       arr)]
-       (.apply f parent call-args))))
+           f      (aget parent fname)]
+       (.apply f parent (js/Array.from args)))))
 
 (defn dispatch-receiver-call
   "Dispatch a :receiver-call registry entry `meta`. A feature-map receiver gets
@@ -285,12 +279,7 @@
        "Block until the background PROJ init completes."
        []
        @proj-init-future
-       true)
-
-     (defn proj-ready?
-       "True when PROJ is initialized and ready."
-       []
-       (realized? proj-init-future))))
+       true)))
 
 #?(:cljs
    (do
@@ -309,11 +298,6 @@
                              (.then (fn [_] (reset! proj-initialized? true) true)))]
              (reset! proj-init-promise promise)
              promise))))
-
-     (defn proj-ready?
-       "True when PROJ is initialized and ready."
-       []
-       @proj-initialized?)
 
      (defn shutdown-proj!
        "Shut down the PROJ worker pool that init-proj! started. Returns a Promise
@@ -383,9 +367,7 @@
                         jts-coords)
           :count n}))
 
-     (defn read-coord-array
-       "Read coordinates back from a PROJ coord array after transformation."
-       [coord-array n]
+     (defn read-coord-array [coord-array n]
        (mapv (fn [i]
                [(get-in coord-array [i 0])
                 (get-in coord-array [i 1])
@@ -393,9 +375,7 @@
                 (get-in coord-array [i 3])])
              (range n)))
 
-     (defn- apply-coord-item!
-       "Apply one transformed coordinate to a CoordinateSequence item."
-       [^CoordinateSequence cseq ^Integer i coord]
+     (defn- apply-coord-item! [^CoordinateSequence cseq ^Integer i coord]
        (let [[x y z m] coord
              dim (.getDimension cseq)
              has-m (.hasM cseq)]
@@ -406,9 +386,7 @@
          (when (and has-m (>= dim 4))
            (.setOrdinate cseq i 3 (double (or m 0.0))))))
 
-     (defn- apply-coords-filter
-       "A CoordinateSequenceFilter that writes transformed coordinates back."
-       ^CoordinateSequenceFilter [transformed-coords idx-atom]
+     (defn- apply-coords-filter ^CoordinateSequenceFilter [transformed-coords idx-atom]
        (reify CoordinateSequenceFilter
          (filter [_ cseq i]
            (apply-coord-item! cseq i (nth transformed-coords @idx-atom))
@@ -560,12 +538,3 @@
     :end-cap-style     (get {:round 1 :flat 2 :square 3} (get opts :cap-style :round) 1)
     :join-style        (get {:round 1 :mitre 2 :bevel 3} (get opts :join-style :round) 1)
     :mitre-limit       (get opts :mitre-limit 5.0)}))
-
-(defn check-report
-  "Return a snapshot of what the macro mints, for `bb ts:check`."
-  []
-  (let [{:keys [minted by-package total-entries]} (check-data)]
-    {:minted minted
-     :registered minted
-     :total-entries total-entries
-     :by-package by-package}))

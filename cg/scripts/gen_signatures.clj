@@ -6,10 +6,7 @@
    The single source of truth is the enriched `register-operation!` call
    beside each op's defn. The parser cannot execute heavy-ns code
    (tech.ml.dataset / JTS / wasmts), so this snapshot is how the op
-   contract reaches the squint-compiled parser. Run via `bb gen:signatures`.
-
-   Mirrors the `bb ts:sync` pattern (auto-gen header + quoted data literal
-   in a generated ns)."
+   contract reaches the squint-compiled parser. Run via `bb gen:signatures`."
   (:require [clojure.string :as str]
             [clojure.pprint :as pp]))
 

@@ -14,6 +14,7 @@
             ;; Registers the reducers that resolve-reducer looks up.
             #?(:clj [cg.dataset.agg])
             [clojure.string :as str]
+            #?(:clj [clojure.java.io :as jio])
             #?(:clj [clojure.core.async.flow :as flow])
             #?(:clj [sci.core :as sci])
             #?(:clj [net.willcohen.native.workload-pool :as wp])
@@ -45,12 +46,6 @@
 ;; uses more than one library runs on one worker, and no payload crosses a
 ;; worker boundary. The proj handler tags each PJ object with `worker_idx`,
 ;; and later calls on that object go to the same worker.
-
-#?(:cljs
-   (defn cg-pool
-     "Return the live joint pool, or nil if init-cg-workers! did not run."
-     []
-     (cg-pool-reg/current-pool)))
 
 #?(:cljs
    (defn- resolve-wasmts-handler-url
@@ -188,13 +183,11 @@
 ;; makes a cycle (geo -> run -> dataset -> geo).
 
 (defn register-bare-op!
-  "Record that the bare op name `op-name` lives in `ns-name`. With `fn-value`,
-   also store the fn, which an op that a .cg file defines needs."
-  ([op-name ns-name]
-   (feature/register-bare-op-namespace! op-name ns-name))
-  ([op-name ns-name fn-value]
-   (feature/register-bare-op-namespace! op-name ns-name)
-   (feature/register-bare-op-fn! ns-name op-name fn-value)))
+  "Record that the bare op name `op-name` lives in `ns-name`, and store its fn
+   `fn-value`."
+  [op-name ns-name fn-value]
+  (feature/register-bare-op-namespace! op-name ns-name)
+  (feature/register-bare-op-fn! ns-name op-name fn-value))
 
 ;; An operation is a defn whose name has the metadata ^:op. Its decl has
 ;; the shape of the parser's OperationDecl. Because of this, a test can
@@ -275,9 +268,7 @@
                            #?@(:clj
                                [(symbol? op-ref) (str op-ref)
 
-                                (keyword? op-ref)
-                                (let [s (str op-ref)]
-                                  (qualify-op-name (if (= \: (first s)) (subs s 1) s)))])
+                                (keyword? op-ref) (qualify-op-name (subs (str op-ref) 1))])
 
                            (string? op-ref)
                            (if (str/includes? op-ref "/")
@@ -537,7 +528,11 @@
        (let [result (apply-params op-fn nil params schema)]
          [(assoc state :emitted true) {:out [result]}])))))
 
-(declare ^:private wire-pid)
+(defn- wire-pid
+  "The pid `<model>__<id>` of a node, which is the id convention of the
+  canvas. The model name defaults to \"anon\"."
+  [model node-id]
+  (cg-flow/pid (or (:name model) "anon") node-id))
 
 (defn collection-operation->step
   "A step fn that collects the items until each of its :n-inputs connections
@@ -567,10 +562,6 @@
        [(update state :collected conj msg) {}]))))
 
 #?(:cljs
-   (defn- thenable? [x]
-     (and (some? x) (fn? (.-then x)))))
-
-#?(:cljs
    (defn- lift1-async->step
      "As flow/lift1->step, for an op that can give a Promise; the step then
       gives a Promise of [state outputs]."
@@ -583,7 +574,7 @@
        ([_state _input msg]
         (let [emit (fn [m] [nil (when (some? m) {:out [m]})])
               r (f msg)]
-          (if (thenable? r)
+          (if (eos/thenable? r)
             (.then r emit)
             (emit r)))))))
 
@@ -599,7 +590,7 @@
          (if (< i total)
            (let [row (nth rows i)
                  r   (fusion/apply-row-chain row [row-fn])
-                 r   (if (thenable? r)
+                 r   (if (eos/thenable? r)
                        (await (.catch r (fn [t] (assoc row :error (ex-message t)))))
                        r)
                  n   (inc i)]
@@ -640,128 +631,115 @@
 (defn operation->step
   "Convert the operation node `op-node` to a step fn for flow/create-flow.
   `opts` are the run-model opts."
-  ([op-node] (operation->step op-node {}))
-  (#_{:clj-kondo/ignore [:unused-binding]}
-   [op-node opts]
-   (let [op-fn (resolve-operation (:fn op-node))
-         params (:params op-node)
+  #_{:clj-kondo/ignore [:unused-binding]}
+  [op-node opts]
+  (let [op-fn (resolve-operation (:fn op-node))
+        params (:params op-node)
         ;; :execution and the *-level values are aliases of :mode.
-         mode (:mode op-node (:execution op-node :item))
-         exec-type (case mode
-                     :item :item-level
-                     :coll :collection-level
-                     :table :table-level
-                     :item-level :item-level
-                     :collection-level :collection-level
-                     :table-level :table-level
-                     :item-level)
+        mode (:mode op-node (:execution op-node :item))
+        exec-type (case mode
+                    (:coll :collection-level) :collection-level
+                    (:table :table-level) :table-level
+                    :item-level)
 
         ;; The registry key is a string on both runtimes (squint has no symbol
         ;; constructor). A bare name gets its namespace from bare-op-namespaces,
         ;; because a per-row op registers as "<ns>/<op-name>".
-         raw-fn-sym (let [fn-ref (:fn op-node)]
-                      #?(:clj (cond
-                                (keyword? fn-ref) (subs (str fn-ref) 1)
-                                :else (str fn-ref))
-                         :cljs (str fn-ref)))
-         fn-sym (if (str/includes? raw-fn-sym "/")
-                  raw-fn-sym
-                  (if-let [ns-part (feature/get-bare-op-namespace raw-fn-sym)]
-                    (str ns-part "/" raw-fn-sym)
-                    raw-fn-sym))
+        raw-fn-sym (let [fn-ref (:fn op-node)]
+                     #?(:clj (cond
+                               (keyword? fn-ref) (subs (str fn-ref) 1)
+                               :else (str fn-ref))
+                        :cljs (str fn-ref)))
+        fn-sym (if (str/includes? raw-fn-sym "/")
+                 raw-fn-sym
+                 (if-let [ns-part (feature/get-bare-op-namespace raw-fn-sym)]
+                   (str ns-part "/" raw-fn-sym)
+                   raw-fn-sym))
 
-         op-info (feature/get-operation-info fn-sym)
-         schema (:params op-info)
-         op-type (:type op-info :transformer)]
+        op-info (feature/get-operation-info fn-sym)
+        schema (:params op-info)
+        op-type (:type op-info :transformer)]
 
-     (cond
-       (= op-type :source)
-       (source-operation->step op-fn params schema)
+    (cond
+      (= op-type :source)
+      (source-operation->step op-fn params schema)
 
-       (= op-type :step-factory)
-       (let [param-values (if (and (map? params) (seq params))
-                            (let [param-schema (:params op-info [])
-                                  param-names (map :name param-schema)]
-                              (map #(get params %) param-names))
-                            [])]
-         (apply op-fn param-values))
+      (= op-type :step-factory)
+      (apply op-fn (if (and (map? params) (seq params))
+                     (map #(get params (:name %)) schema)
+                     []))
 
-       :else
-       (case exec-type
-         :item-level
-         (#?(:clj flow/lift1->step :cljs lift1-async->step)
-          (fn [item]
-            (apply-params op-fn item params schema)))
+      :else
+      (case exec-type
+        :item-level
+        (#?(:clj flow/lift1->step :cljs lift1-async->step)
+         (fn [item]
+           (apply-params op-fn item params schema)))
 
-         :collection-level
-         (collection-operation->step op-fn params schema)
+        :collection-level
+        (collection-operation->step op-fn params schema)
 
-         :table-level
-         (cond
+        :table-level
+        (cond
           ;; A sink op derives :row-shape :terminal and must get the whole
           ;; dataset, not one geometry ("raw-ds.objects is not a function").
-           (contains? #{:whole-dataset :terminal} (:row-shape op-info))
-           (flow/lift1->step
-            (fn [wrapped-batch]
-              (dataset/wrap-dataset
-               (apply-params op-fn (dataset/unwrap-dataset wrapped-batch) params schema))))
+          (contains? #{:whole-dataset :terminal} (:row-shape op-info))
+          (flow/lift1->step
+           (fn [wrapped-batch]
+             (dataset/wrap-dataset
+              (apply-params op-fn (dataset/unwrap-dataset wrapped-batch) params schema))))
 
           ;; JVM only: the group scatter uses futures and the compute-exec
           ;; (see run-component-groups).
-           (= :over-groups (:row-shape op-info))
-           (flow/lift1->step
-            (fn [wrapped-batch]
-              (let [#_{:clj-kondo/ignore [:unused-binding]}
-                    groups (dataset/unwrap-dataset wrapped-batch)]
-                (dataset/wrap-dataset
-                 #?(:clj (run-component-groups
-                          (:component op-node)
-                          groups
-                          ;; The pid that instrument-flow-step gives the proc-*
-                          ;; events of this node: wire-pid reads only :name, and
-                          ;; the model carries the run-model :name.
-                          (wire-pid {:name (:name opts)} (:id op-node))
-                          (select-keys opts [:timeout-ms :batch-size]))
-                    :cljs (throw (ex-info "map-over-groups executor is JVM-only (no cljs Worker-pool port yet)"
-                                          {:component (:component op-node)})))))))
+          (= :over-groups (:row-shape op-info))
+          (flow/lift1->step
+           (fn [wrapped-batch]
+             (let [#_{:clj-kondo/ignore [:unused-binding]}
+                   groups (dataset/unwrap-dataset wrapped-batch)]
+               (dataset/wrap-dataset
+                #?(:clj (run-component-groups
+                         (:component op-node)
+                         groups
+                         ;; The pid that instrument-flow-step gives the proc-*
+                         ;; events of this node: wire-pid reads only :name, and
+                         ;; the model carries the run-model :name.
+                         (wire-pid {:name (:name opts)} (:id op-node))
+                         (select-keys opts [:timeout-ms :batch-size]))
+                   :cljs (throw (ex-info "map-over-groups executor is JVM-only (no cljs Worker-pool port yet)"
+                                         {:component (:component op-node)})))))))
 
           ;; A per-row op in :table mode. The single op goes through
           ;; fusion/apply-row-chain as a chain of one, because a row op must
           ;; always get a transient row and give one, as in a fused chain.
-           (= :per-row (:row-shape op-info))
-           #?(:clj
-              (flow/lift1->step
-               (fn [wrapped-batch]
-                 (let [batch (dataset/unwrap-dataset wrapped-batch)
-                       rows (dataset/rows batch :as-maps)
-                       row-fn (with-meta
-                                (fn [row] (apply-params op-fn row params schema))
-                                (assoc (select-keys opts [:row-id-keys])
-                                       :row-reads (:reads op-info)))
-                       processed (mapv (fn [row]
-                                         (fusion/apply-row-chain row [row-fn]))
-                                       rows)]
-                   (dataset/wrap-dataset (dataset/maps->dataset processed)))))
-              :cljs
-              (per-row-step (fn [row] (apply-params op-fn row params schema))
-                            (last (str/split fn-sym #"/"))))
+          (= :per-row (:row-shape op-info))
+          #?(:clj
+             (flow/lift1->step
+              (fn [wrapped-batch]
+                (let [batch (dataset/unwrap-dataset wrapped-batch)
+                      rows (dataset/rows batch :as-maps)
+                      row-fn (with-meta
+                               (fn [row] (apply-params op-fn row params schema))
+                               (assoc (select-keys opts [:row-id-keys])
+                                      :row-reads (:reads op-info)))
+                      processed (mapv (fn [row]
+                                        (fusion/apply-row-chain row [row-fn]))
+                                      rows)]
+                  (dataset/wrap-dataset (dataset/maps->dataset processed)))))
+             :cljs
+             (per-row-step (fn [row] (apply-params op-fn row params schema))
+                           (last (str/split fn-sym #"/"))))
 
-           :else
-           (flow/lift1->step
-            (fn [wrapped-batch]
-              (let [batch (dataset/unwrap-dataset wrapped-batch)
-                    transformed (dataset/map-geometry batch
-                                                      (fn [geom]
-                                                        (apply-params op-fn geom params schema))
-                                                      {:preserve-index true})]
-                (dataset/wrap-dataset transformed)))))
+          :else
+          (flow/lift1->step
+           (fn [wrapped-batch]
+             (let [batch (dataset/unwrap-dataset wrapped-batch)
+                   transformed (dataset/map-geometry batch
+                                                     (fn [geom]
+                                                       (apply-params op-fn geom params schema))
+                                                     {:preserve-index true})]
+               (dataset/wrap-dataset transformed)))))))))
 
-         (throw (ex-info (str "Unknown execution type: " exec-type)
-                         {:node op-node
-                          :execution-type exec-type
-                          :operation-type op-type})))))))
-
-(defn- expand-groups
+(defn expand-model
   "Replace each :type :group node of `model` with its :expansion, rewiring
   group edges to the :entry and :exit nodes."
   [model]
@@ -776,9 +754,7 @@
                              (map (fn [g]
                                     [(:id g)
                                      {:entry (get-in g [:expansion :entry])
-                                      :exit (get-in g [:expansion :exit])
-                                      :nodes (get-in g [:expansion :nodes])
-                                      :edges (get-in g [:expansion :edges])}])
+                                      :exit (get-in g [:expansion :exit])}])
                                   group-nodes))
 
             internal-nodes (mapcat (fn [g]
@@ -808,52 +784,49 @@
   "A step fn that emits the items of `data` one time, then eos/eos, on a
   dummy :trigger input."
   [data]
-  (letfn [(step-fn
-            ([] {:params {}
-                 :ins {:trigger "Start signal"}
-                 :outs {:out "Data"}})
+  (fn step-fn
+    ([] {:params {}
+         :ins {:trigger "Start signal"}
+         :outs {:out "Data"}})
 
-            ([_args]
-             {:items (vec data)
-              :emitting false})
+    ([_args]
+     {:items (vec data)
+      :emitting false})
 
-            ([state _lifecycle] state)
+    ([state _lifecycle] state)
 
-            ([state _in-name _msg]
-             (if (:emitting state)
-               [state {}]
-               [(assoc state :emitting true)
-                {:out (conj (:items state) eos/eos)}])))]
-    step-fn))
+    ([state _in-name _msg]
+     (if (:emitting state)
+       [state {}]
+       [(assoc state :emitting true)
+        {:out (conj (:items state) eos/eos)}]))))
 
 (defn- sink-step
   "A step fn that collects results in `result-atom` and calls `completion-fn`
   when each of its `n-inputs` connections sent eos/eos. Only completion-fn
   marks completion."
-  ([result-atom] (sink-step result-atom 0 nil))
-  ([result-atom n-inputs completion-fn]
-   (letfn [(step-fn
-             ([] {:params {}
-                  :ins {:in "Data"}
-                  :outs {}})
-             ([_args] {:results [] :eos-count 0})
-             ([state lifecycle]
-              ;; Use the literal, not ::flow/stop. squint builds an auto-resolved
-              ;; keyword from the module specifier: ::flow/stop compiles to
-              ;; "cljc-flow/flow/stop" on CLJS, which does not match the keyword
-              ;; that the flow sends.
-              (when (= lifecycle :clojure.core.async.flow/stop)
-                (reset! result-atom (:results state)))
-              state)
-             ([state _in-name msg]
-              (if (eos/eos? msg)
-                (let [n (inc (:eos-count state))]
-                  (when (and (= n n-inputs) completion-fn)
-                    (reset! result-atom (:results state))
-                    (completion-fn))
-                  [(assoc state :eos-count n) {}])
-                [(update state :results conj msg) {}])))]
-     step-fn)))
+  [result-atom n-inputs completion-fn]
+  (fn step-fn
+    ([] {:params {}
+         :ins {:in "Data"}
+         :outs {}})
+    ([_args] {:results [] :eos-count 0})
+    ([state lifecycle]
+     ;; Use the literal, not ::flow/stop. squint builds an auto-resolved
+     ;; keyword from the module specifier: ::flow/stop compiles to
+     ;; "cljc-flow/flow/stop" on CLJS, which does not match the keyword
+     ;; that the flow sends.
+     (when (= lifecycle :clojure.core.async.flow/stop)
+       (reset! result-atom (:results state)))
+     state)
+    ([state _in-name msg]
+     (if (eos/eos? msg)
+       (let [n (inc (:eos-count state))]
+         (when (and (= n n-inputs) completion-fn)
+           (reset! result-atom (:results state))
+           (completion-fn))
+         [(assoc state :eos-count n) {}])
+       [(update state :results conj msg) {}]))))
 
 (defn- table-source-step
   "A source step for table-> mode: it registers the dataset context and emits
@@ -901,8 +874,7 @@
 
 #?(:cljs
    (defn- assemble-batches
-     "Unwrap the batches into one dataset, and rebuild the spatial index when a
-      batch wrapper is marked `:cg.dataset/needs-reindex`."
+     "As the JVM assemble-batches. The mark is on the batch wrapper."
      [wrapped-batches]
      (let [needs-reindex? (some #(:cg.dataset/needs-reindex (dataset/fd-meta %))
                                 wrapped-batches)
@@ -962,12 +934,6 @@
        acc))
    {}
    (:nodes model)))
-
-(defn ^:private wire-pid
-  "The pid `<model>__<id>` of a node, which is the id convention of the
-  canvas. The model name defaults to \"anon\"."
-  [model node-id]
-  (cg-flow/pid (or (:name model) "anon") node-id))
 
 (defn- source-proc-ids
   "The ids of the procs of `flow-model` that get a trigger: each :source node
@@ -1052,7 +1018,7 @@
   name a row, default [:id])."
   ([model bindings] (model->flow model bindings {}))
   ([model bindings opts]
-   (let [model (expand-groups model)
+   (let [model (expand-model model)
          ;; A sink such as map-layer makes one result from the whole table.
          sink? (some (fn [n]
                        (when-let [qn (some-> (:fn n) component-qualified-name)]
@@ -1192,15 +1158,12 @@
 
                       (contains? fused-steps pid)
                       (assoc acc pid
-                             {:proc #?(:clj  (cg-flow/make-process
-                                              (eos/forward-eos
-                                               (cg-flow/instrument-flow-step
-                                                (wire-pid model pid)
-                                                (get fused-steps pid))
-                                               (get n-inputs pid 0)))
-                                       :cljs (cg-flow/make-process
-                                              (eos/forward-eos (get fused-steps pid)
-                                                               (get n-inputs pid 0))))
+                             {:proc (cg-flow/make-process
+                                     (eos/forward-eos
+                                      (cg-flow/instrument-flow-step
+                                       (wire-pid model pid)
+                                       (get fused-steps pid))
+                                      (get n-inputs pid 0)))
                               :args {}})
 
                       :else
@@ -1270,12 +1233,6 @@
       :sources sources
       :is-table-mode? is-table-mode?})))
 
-(defn expand-model
-  "`model` with each group node expanded (see expand-groups). Use it to
-   examine a model before flow construction."
-  [model]
-  (expand-groups model))
-
 (defn create-flow
   "The flow is not started."
   [model bindings]
@@ -1310,8 +1267,8 @@
 
 (defn run-model
   "Run `flow-model` with `bindings` (source :data-ref -> data) and give the sink
-  results, a Promise on JS. `opts`: :timeout-ms (60000), :batch-size, :name,
-  :return-flow? ({:results :flow}). Throws ex-info :type :timeout or :flow-error."
+  results, a Promise on JS. `opts`: :timeout-ms (60000), :batch-size and :name.
+  Throws ex-info :type :timeout or :flow-error."
   [flow-model bindings opts]
   (let [flow-model #?(:cljs (if (object? flow-model)
                               ;; A squint keyword is a string. Because of this,
@@ -1364,7 +1321,8 @@
      (atom {})))
 
 #?(:clj
-   (defn- ensure-cg-context!
+   (defn get-cg-context
+     "The SCI context that eval-cg uses, made on first use."
      []
      (when-not @cg-context-atom
        (require 'cg.dsl)
@@ -1496,8 +1454,8 @@
 
 #?(:cljs
    (defn- eval-globals
-     "The globals that compiled CG code reads: squint_core, the cg namespaces
-      under their usual aliases, and the threading-macro fns."
+     "The globals that compiled CG code reads: squint_core and the cg namespaces
+      under their usual aliases."
      []
      (let [cg-println (fn [& args]
                         (apply js/console.log
@@ -1518,9 +1476,6 @@
         "ds" js-dataset
         "io" js-io
         "squint_core" cg-squint-core
-        "item__GT_" macros/item->*
-        "coll__GT_" macros/coll->*
-        "table__GT_" macros/table->*
         "register_alias_BANG_" macros/register-alias!
         ;; The calls that mark-defs puts in the text of a run.
         "__cg_def_start" trace/def-start!
@@ -1585,28 +1540,16 @@
 #?(:cljs
    (defn- eval-cg-cljs
      "Evaluate CG code on the JS runtime at global scope, where each def and alias
-      stays a global for the next eval. `bindings` become globals under their
-      munged names."
-     ([code-str] (eval-cg-cljs code-str {}))
-     ([code-str bindings]
-      ;; The aliases first: the threading macros resolve them (geo ->
-      ;; cg.geo) while the code compiles.
-      (let [aliases (alias-values! code-str)
-            _ (register-ops-of! code-str "user"
-                                (fn [munged] (unchecked-get js/globalThis munged)))
-            compiled-js (compile-cg-js code-str)]
-        (set-globals! (merge (eval-globals)
-                             aliases
-                             (into {} (map (fn [[sym val]]
-                                             [(str/replace (str sym) "-" "_") val]))
-                                   bindings)))
-        ((js* "(0, eval)") compiled-js)))))
-
-#?(:clj
-   (defn get-cg-context
-     "The SCI context that eval-cg uses, made on first use."
-     []
-     (ensure-cg-context!)))
+      stays a global for the next eval."
+     [code-str]
+     ;; The aliases first: the threading macros resolve them (geo ->
+     ;; cg.geo) while the code compiles.
+     (let [aliases (alias-values! code-str)
+           _ (register-ops-of! code-str "user"
+                               (fn [munged] (unchecked-get js/globalThis munged)))
+           compiled-js (compile-cg-js code-str)]
+       (set-globals! (merge (eval-globals) aliases))
+       ((js* "(0, eval)") compiled-js))))
 
 (def ^:dynamic *session-file*
   "Basename of the .cg file that a map session loads, or nil. Read it through
@@ -1614,8 +1557,7 @@
   nil)
 
 (defn session-file
-  "The session-entry filename bound by the backend during a session/load
-  eval, or nil outside one. See *session-file*."
+  "See *session-file*."
   []
   *session-file*)
 
@@ -1625,8 +1567,7 @@
   nil)
 
 (defn script-file
-  "The filename that cg.cli/run-model-file binds while it runs a .cg file,
-  or nil outside one. See *script-file*."
+  "See *script-file*."
   []
   *script-file*)
 
@@ -1747,12 +1688,12 @@
   last form. A def stays visible in the next call. On JS the result gets no
   clj->js conversion."
   [code-str]
-  #?(:clj (eval-cg* (or *cg-context* (ensure-cg-context!)) code-str)
+  #?(:clj (eval-cg* (or *cg-context* (get-cg-context)) code-str)
      :cljs (eval-cg-cljs code-str)))
 
 (defn eval-cg-file
-  "Evaluate the CG file at `path` in the default context and give the value of
-  its last form (the value of the Var for a def)."
+  "Evaluate the CG file at `path` as eval-cg does, and give the value of its
+  last form (the value of the Var for a def)."
   [path]
   (let [content (util/read-file path)
         result (eval-cg (str "(do " content ")"))]
@@ -1765,15 +1706,12 @@
   "The names of the threading-macro bindings of `text` in source order, the
   models that Run can run. A Promise on cljs."
   [text opts]
-  #?(:clj (let [extract (requiring-resolve 'cg.parser.core/extract-models)]
-            (->> (:bindings (extract text opts))
-                 (filter #(= :threading_macro (:body-shape %)))
-                 (mapv :name)))
-     :cljs (.then (parser/extract-models text opts)
-                  (fn [flow]
-                    (->> (:bindings flow)
-                         (filter #(= :threading_macro (:body-shape %)))
-                         (mapv :name))))))
+  (let [names (fn [flow]
+                (->> (:bindings flow)
+                     (filter #(= :threading_macro (:body-shape %)))
+                     (mapv :name)))]
+    #?(:clj (names ((requiring-resolve 'cg.parser.core/extract-models) text opts))
+       :cljs (.then (parser/extract-models text opts) names))))
 
 #?(:clj (declare parse-ns-form))
 #?(:cljs (declare load-entry-module!))
@@ -1892,7 +1830,7 @@
               (await (parser/init! opts))))
    #?(:cljs (await (load-deps! text)))
    (let [file-ns #?(:clj (do (binding [*script-file* (or (:file opts) *script-file*)]
-                               (eval-cg* (or *cg-context* (ensure-cg-context!)) text {:def-events? true}))
+                               (eval-cg* (or *cg-context* (get-cg-context)) text {:def-events? true}))
                              (file-ns-prefix text))
                     :cljs (await (eval-run-text! text (:file opts))))
          nm (or (:model opts)
@@ -1948,7 +1886,7 @@
       resource of the library, whose name has no src/."
      [path]
      (if-let [r (when-not (util/file-exists? path)
-                  (clojure.java.io/resource (str/replace-first path #"^src/" "")))]
+                  (jio/resource (str/replace-first path #"^src/" "")))]
        (slurp r)
        (util/read-file path))))
 
@@ -2029,7 +1967,7 @@
          path)))
 
 #?(:cljs
-   (defn ^:async read-module-text
+   (defn- ^:async read-module-text
      "The text of the module `path`, from the reader of set-module-reader!, else
       from the file (Node)."
      [path]
@@ -2052,7 +1990,7 @@
                        (fn [munged] (unchecked-get (module-namespace ns-name) munged)))))
 
 #?(:cljs
-   (defn ^:async register-dep-ops!
+   (defn- ^:async register-dep-ops!
      "Registers the ops of each module that `text` loads with run/load-module,
       and of the modules that those load, with no run. A rung binds its args
       by the param names of its op when the module compiles, and the
@@ -2069,7 +2007,7 @@
              (await (register-dep-ops! dep seen))))))))
 
 #?(:cljs
-   (defn ^:async load-module-text!
+   (defn- ^:async load-module-text!
      "Evaluate `text` as the CG module of `path`. See load-module."
      [path text]
      (let [ns-name (module-ns-name text)]
@@ -2077,22 +2015,16 @@
          (throw (ex-info (str "Module must start with (ns ...) form: " path)
                          {:path path})))
        (let [info {:ns-name ns-name :path path}
-             aliases (vals (into {} (map (fn [[n a]] [a [n a]])) (code-aliases text)))
              _ (swap! module-loads assoc path info)
              _ (await (register-dep-ops! text (atom #{path})))
              ;; The aliases first: the threading macros resolve them while
              ;; the module compiles.
-             _ (doseq [[n a] aliases]
-                 (when-not (= n "cg.macros")
-                   (macros/register-alias! a n)))
+             aliases (alias-values! text)
              _ (await (register-module-ops! text ns-name))
-             module-fn ((js* "(0, eval)")
-                        (module-js text (map (fn [[_ a]] (util/munge-alias a)) aliases)))]
+             module-fn ((js* "(0, eval)") (module-js text (keys aliases)))]
          (set-globals! (eval-globals))
          (try
-           (await (.apply module-fn nil
-                          (vec (cons (module-namespace ns-name)
-                                     (map (fn [[n _]] (ns-module n)) aliases)))))
+           (await (.apply module-fn nil (vec (cons (module-namespace ns-name) (vals aliases)))))
            (catch :default e
              (swap! module-loads dissoc path)
              (throw e)))
@@ -2108,7 +2040,7 @@
          (await (load-module-text! path (await (read-module-text path)))))))
 
 #?(:cljs
-   (defn ^:async load-entry-module!
+   (defn- ^:async load-entry-module!
      "Evaluate the opened file as a module, because only a module can wait
       at its top level. Resolves to its namespace object."
      [text file]
@@ -2132,7 +2064,6 @@
      "Make a new default CG context. This clears all bindings and the record
       of loaded modules. Gives the new context."
      []
-     (require 'cg.dsl)
      (reset! loaded-module-hashes {})
-     (reset! cg-context-atom ((resolve 'cg.dsl/create-cg-context)))
-     @cg-context-atom))
+     (reset! cg-context-atom nil)
+     (get-cg-context)))

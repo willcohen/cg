@@ -47,12 +47,6 @@
     (or (= type :source)
         (= type "source"))))
 
-(defn- sink-node?
-  [node]
-  (let [type (get-prop node :type)]
-    (or (= type :sink)
-        (= type "sink"))))
-
 (defn- find-node-by-id
   [graph node-id]
   (let [nodes (get-prop graph :nodes)]
@@ -63,40 +57,14 @@
   (let [edges (get-prop graph :edges)]
     (filter #(= (get-prop % :from) node-id) edges)))
 
-(defn- find-edges-to
-  [graph node-id]
-  (let [edges (get-prop graph :edges)]
-    (filter #(= (get-prop % :to) node-id) edges)))
-
-(defn- topological-sort
-  "Sort nodes in topological order (dependencies first)"
+(defn- root-nodes
+  "The nodes of `graph` that no edge goes to, in node order."
   [graph]
-  (let [nodes (get-prop graph :nodes)
-        edges (get-prop graph :edges)
-        in-degree (reduce (fn [acc edge]
+  (let [in-degree (reduce (fn [acc edge]
                             (update acc (get-prop edge :to) (fnil inc 0)))
                           {}
-                          edges)
-        queue (into [] (filter #(zero? (get in-degree (get-prop % :id) 0)) nodes))
-        result (atom [])]
-
-    (loop [q queue
-           visited #{}]
-      (if (empty? q)
-        @result
-        (let [node (first q)
-              node-id (get-prop node :id)]
-          (swap! result conj node)
-          (let [outgoing (find-edges-from graph node-id)
-                next-nodes (mapv #(find-node-by-id graph (get-prop % :to)) outgoing)
-                ready-nodes (filter (fn [n]
-                                      (let [n-id (get-prop n :id)
-                                            incoming (find-edges-to graph n-id)]
-                                        (every? #(contains? visited (get-prop % :from))
-                                                incoming)))
-                                    next-nodes)]
-            (recur (into (subvec q 1) ready-nodes)
-                   (conj visited node-id))))))))
+                          (get-prop graph :edges))]
+    (filter #(zero? (get in-degree (get-prop % :id) 0)) (get-prop graph :nodes))))
 
 (defn- param-value->code
   [v]
@@ -112,7 +80,7 @@
     (map? v) #?(:clj (str v) :cljs (pr-str v))
     :else (pr-str v)))
 
-(defn- denamespace-cg
+(defn denamespace-cg
   "Remove the `cg.` prefix from an operation name, to give the alias form
    (\"cg.geo/buffer\" -> \"geo/buffer\"). The macro stores :fn in resolved
    form, and the generated code must match the source as written."
@@ -200,33 +168,12 @@
 
 (defn flow-graph->cg-code
   "Generate a .cg code string from a Flow Graph: one threading macro call for
-  each source node, inside a def when the sink has an :output-binding."
+  each source node."
   [graph]
-  (let [sorted-nodes (topological-sort graph)
-        sources (filter source-node? sorted-nodes)
-        sinks (filter sink-node? sorted-nodes)
-        edges-for-sink (get-prop graph :edges)
-        pipelines (mapv (fn [source]
-                          (let [pipeline (find-pipeline graph (get-prop source :id))
-                                sink (first (filter #(some (fn [edge]
-                                                             (and (= (get-prop edge :from) (get-prop (last pipeline) :id))
-                                                                  (= (get-prop edge :to) (get-prop % :id))))
-                                                           edges-for-sink)
-                                                    sinks))]
-                            {:source source
-                             :pipeline pipeline
-                             :sink sink}))
-                        sources)
-
-        code-parts (mapv (fn [{:keys [source pipeline sink]}]
-                           (let [macro-call (generate-threading-macro source pipeline)
-                                 binding (get-prop sink :output-binding)]
-                             (if binding
-                               (str "(def " binding "\n  " macro-call ")")
-                               macro-call)))
-                         pipelines)]
-
-    (str/join "\n\n" code-parts)))
+  (->> (root-nodes graph)
+       (filter source-node?)
+       (map #(generate-threading-macro % (find-pipeline graph (get-prop % :id))))
+       (str/join "\n\n")))
 
 (defn extract-visual-metadata
   "The ^:cgproj metadata of a Flow Graph: the :visual map of each node, keyed
@@ -241,10 +188,7 @@
                                     acc)))
                               {}
                               nodes)
-        config (get-prop graph :config)
-        viewport (if config
-                   (get-prop config :viewport)
-                   nil)]
+        viewport (get-prop (get-prop graph :config) :viewport)]
 
     {:nodes node-metadata
      :viewport (or viewport {:zoom 1.0 :pan [0 0]})}))

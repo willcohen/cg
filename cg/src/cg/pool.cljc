@@ -16,17 +16,13 @@
            (defonce ^:private *registry (atom nil))
 
            (defn set-registry!
-             "Install the joint-pool registry (clj-native workload-pool).
-   cg.run/init-cg-workers! calls this."
+             "Install the joint-pool registry (clj-native workload-pool)."
              [registry]
              (when @*registry
                (throw (js/Error. "cg.pool/set-registry!: registry already set; clear-registry! first")))
              (reset! *registry registry))
 
-           (defn clear-registry!
-             "Drop the registry reference. terminate-cg-workers! calls this
-   after wp/shutdown-pool! resolves."
-             []
+           (defn clear-registry! []
              (reset! *registry nil))
 
            (defn current-registry
@@ -120,15 +116,13 @@
 
      (defn set-jvm-pool!
        "Install the JVM workload-pool handle, a map with :registry and
-        :compute-exec. cg.run/init-cg-workers! calls this."
+        :compute-exec."
        [handle]
        (when @*jvm-pool
          (throw (ex-info "cg.pool/set-jvm-pool!: pool already set; clear-jvm-pool! first" {})))
        (reset! *jvm-pool handle))
 
-     (defn clear-jvm-pool!
-       "Drop the JVM workload-pool handle. terminate-cg-workers! calls this."
-       []
+     (defn clear-jvm-pool! []
        (reset! *jvm-pool nil))
 
      (defn current-jvm-pool
@@ -137,7 +131,6 @@
        @*jvm-pool)
 
      (defn current-compute-exec
-       "Return the JVM :compute ExecutorService, or nil. cg.run passes it to
-        create-flow as :compute-exec."
+       "Return the JVM :compute ExecutorService, or nil."
        []
        (:compute-exec @*jvm-pool))))

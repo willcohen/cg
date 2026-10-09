@@ -55,51 +55,35 @@
   #?(:clj (m/atan2 y x)
      :cljs (js/Math.atan2 y x)))
 
-(defn sinh
-  "Returns the hyperbolic sine of x."
-  [x]
+(defn sinh [x]
   #?(:clj (m/sinh x)
      :cljs (js/Math.sinh x)))
 
-(defn cosh
-  "Returns the hyperbolic cosine of x."
-  [x]
+(defn cosh [x]
   #?(:clj (m/cosh x)
      :cljs (js/Math.cosh x)))
 
-(defn tanh
-  "Returns the hyperbolic tangent of x."
-  [x]
+(defn tanh [x]
   #?(:clj (m/tanh x)
      :cljs (js/Math.tanh x)))
 
-(defn to-degrees
-  "Converts an angle from radians to degrees."
-  [radians]
+(defn to-degrees [radians]
   #?(:clj (m/to-degrees radians)
      :cljs (* radians (/ 180 js/Math.PI))))
 
-(defn to-radians
-  "Converts an angle from degrees to radians."
-  [degrees]
+(defn to-radians [degrees]
   #?(:clj (m/to-radians degrees)
      :cljs (* degrees (/ js/Math.PI 180))))
 
-(defn abs
-  "Returns the absolute value of x."
-  [x]
+(defn abs [x]
   #?(:clj (clojure.core/abs x)
      :cljs (js/Math.abs x)))
 
-(defn sqrt
-  "Returns the square root of x."
-  [x]
+(defn sqrt [x]
   #?(:clj (m/sqrt x)
      :cljs (js/Math.sqrt x)))
 
-(defn cbrt
-  "Returns the cube root of x."
-  [x]
+(defn cbrt [x]
   #?(:clj (m/cbrt x)
      :cljs (js/Math.cbrt x)))
 
@@ -127,9 +111,7 @@
   #?(:clj (m/log x)
      :cljs (js/Math.log x)))
 
-(defn log10
-  "Returns the base 10 logarithm of x."
-  [x]
+(defn log10 [x]
   #?(:clj (m/log10 x)
      :cljs (js/Math.log10 x)))
 
@@ -139,21 +121,15 @@
   #?(:clj (m/log1p x)
      :cljs (js/Math.log1p x)))
 
-(defn floor
-  "Returns the largest integer less than or equal to x."
-  [x]
+(defn floor [x]
   #?(:clj (m/floor x)
      :cljs (js/Math.floor x)))
 
-(defn ceil
-  "Returns the smallest integer greater than or equal to x."
-  [x]
+(defn ceil [x]
   #?(:clj (m/ceil x)
      :cljs (js/Math.ceil x)))
 
-(defn round
-  "Returns the closest integer to x."
-  [x]
+(defn round [x]
   #?(:clj (m/round x)
      :cljs (js/Math.round x)))
 
@@ -188,11 +164,9 @@
      :cljs (js/Math.random)))
 
 (def PI
-  "The ratio of the circumference of a circle to its diameter."
   #?(:clj m/PI
      :cljs js/Math.PI))
 
 (def E
-  "Euler's number, the base of natural logarithms."
   #?(:clj m/E
      :cljs js/Math.E))

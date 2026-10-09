@@ -20,9 +20,7 @@
                                  {:exclude [cg.model cg.io cg.feature cg.geo cg.run
                                             cg.dataset clojure.core.async.flow
                                             cg.math cg.util]}}}}
-  ;; Every require is :clj-only. Under :cljs squint detects a cycle via
-  ;; cg.macros -> cg.introspect -> cg.dsl -> cg.macros, and all uses in this
-  ;; ns are inside :clj reader conditionals.
+  ;; Every require is :clj-only, because the JS runtime has no SCI.
   #?(:clj (:require [cg.model :as model]
                     [cg.macros :as macros]
                     [sci.core :as sci]
@@ -87,17 +85,9 @@
    (defn- extract-alias-from-libspec
      "{:ns <ns> :alias <alias>} for a vector libspec with :as, else nil."
      [libspec]
-     (cond
-       (symbol? libspec)
-       nil
-
-       (vector? libspec)
-       (let [ns-sym (first libspec)
-             opts (apply hash-map (rest libspec))]
-         (when-let [alias-sym (:as opts)]
-           {:ns ns-sym :alias alias-sym}))
-
-       :else nil)))
+     (when (vector? libspec)
+       (when-let [alias-sym (:as (apply hash-map (rest libspec)))]
+         {:ns (first libspec) :alias alias-sym}))))
 
 #?(:clj
    (defn create-cg-context

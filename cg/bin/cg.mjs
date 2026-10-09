@@ -11,8 +11,7 @@ import * as fs from 'fs';
 import { fileURLToPath, pathToFileURL } from 'url';
 
 
-// Set up fs module globally BEFORE importing cg.mjs
-// This allows util.cljc to use fs operations in ESM mode
+// util.cljc takes its fs from globalThis.nodeFs when cg.mjs loads.
 globalThis.nodeFs = fs;
 
 const args = process.argv.slice(2);
@@ -54,6 +53,14 @@ async function initWasmTS() {
   return { jsFile: wasmJsFile, binary: wasmBinary };
 }
 
+function fail(label, error) {
+  console.error(label, error.message);
+  if (error.stack) {
+    console.error(error.stack);
+  }
+  process.exit(1);
+}
+
 function showHelp() {
   console.error(`cg - the cg command line tool (Node.js)
 
@@ -85,16 +92,11 @@ async function main() {
     process.exit(args.length === 0 ? 1 : 0);
   }
 
-  // Initialize WasmTS BEFORE importing CG module
   const wasmts = await initWasmTS();
-
-  // Dynamic import AFTER WasmTS and nodeFs are set up
   const cg = await import('../dist/cg.mjs');
 
   async function initializeCG(filePath) {
-    if (cg.dataset && cg.dataset.init_arquero_BANG_) {
-      await cg.dataset.init_arquero_BANG_();
-    }
+    await cg.dataset.init_arquero_BANG_();
     // show-model, generate and validate evaluate the file as global code,
     // where a load-module call cannot wait for its module.
     if (filePath && fs.existsSync(filePath)) {
@@ -102,70 +104,8 @@ async function main() {
     }
   }
 
-  async function runFile(filePath, opts = {}) {
-    try {
-      await initializeCG();
-      // A reprojection step needs the PROJ handler of the joint pool. A
-      // worker cannot see the fetch shim of initWasmTS, so it gets the bytes.
-      await cg.run.init_cg_workers_BANG_({
-        'wasmts-js-url': pathToFileURL(wasmts.jsFile).href,
-        'wasmts-wasm-binary': wasmts.binary,
-      });
-      const code = await cg.cli.run_model_file(filePath, opts);
-      process.exit(typeof code === 'number' ? code : 0);
-    } catch (error) {
-      console.error('Error running file:', error.message);
-      if (error.stack) {
-        console.error(error.stack);
-      }
-      process.exit(1);
-    }
-  }
-
-  async function showModelFile(filePath, opts = {}) {
-    try {
-      await initializeCG(filePath);
-      const exitCode = cg.cli.show_model(filePath, opts);
-      process.exit(exitCode || 0);
-    } catch (error) {
-      console.error('Error showing model:', error.message);
-      if (error.stack) {
-        console.error(error.stack);
-      }
-      process.exit(1);
-    }
-  }
-
-  async function generateCode(filePath, opts = {}) {
-    try {
-      await initializeCG(filePath);
-      const exitCode = cg.cli.generate(filePath, opts);
-      process.exit(exitCode || 0);
-    } catch (error) {
-      console.error('Error generating code:', error.message);
-      if (error.stack) {
-        console.error(error.stack);
-      }
-      process.exit(1);
-    }
-  }
-
-  async function validateFile(filePath) {
-    try {
-      await initializeCG(filePath);
-      const valid = cg.cli.validate(filePath);
-      process.exit(valid ? 0 : 1);
-    } catch (error) {
-      console.error('Error validating file:', error.message);
-      if (error.stack) {
-        console.error(error.stack);
-      }
-      process.exit(1);
-    }
-  }
-
   const command = args[0];
-  let cmdArgs = args.slice(1);
+  const cmdArgs = args.slice(1);
 
   const opts = {};
   const positionalArgs = [];
@@ -174,16 +114,9 @@ async function main() {
     if (cmdArgs[i].startsWith('--')) {
       const key = cmdArgs[i].substring(2);
       if (i + 1 < cmdArgs.length && !cmdArgs[i + 1].startsWith('--')) {
-        const value = cmdArgs[i + 1];
-        if (key === 'format') {
-          opts[key] = value; // Will be converted to keyword by CLI
-        } else if (key === 'timeout-ms') {
-          // A squint keyword is its name, so :timeout-ms reads "timeout-ms".
-          opts['timeout-ms'] = parseInt(value, 10);
-        } else {
-          opts[key] = value;
-        }
-        i++;
+        const value = cmdArgs[++i];
+        // A squint keyword is its name, so :timeout-ms reads "timeout-ms".
+        opts[key] = key === 'timeout-ms' ? parseInt(value, 10) : value;
       } else {
         opts[key] = true;
       }
@@ -192,51 +125,48 @@ async function main() {
     }
   }
 
-  switch (command) {
-    case 'run':
-      if (positionalArgs.length === 0) {
-        console.error('Error: No file path provided');
-        process.exit(1);
-      }
-      await runFile(resolve(positionalArgs[0]), opts);
-      break;
+  const commands = {
+    'run': ['Error running file:', async (filePath) => {
+      await initializeCG();
+      // A reprojection step needs the PROJ handler of the joint pool. A
+      // worker cannot see the fetch shim of initWasmTS, so it gets the bytes.
+      await cg.run.init_cg_workers_BANG_({
+        'wasmts-js-url': pathToFileURL(wasmts.jsFile).href,
+        'wasmts-wasm-binary': wasmts.binary,
+      });
+      return cg.cli.run_model_file(filePath, opts);
+    }],
+    'show-model': ['Error showing model:', async (filePath) => {
+      await initializeCG(filePath);
+      return cg.cli.show_model(filePath, opts) || 0;
+    }],
+    'generate': ['Error generating code:', async (filePath) => {
+      await initializeCG(filePath);
+      return cg.cli.generate(filePath, opts) || 0;
+    }],
+    'validate': ['Error validating file:', async (filePath) => {
+      await initializeCG(filePath);
+      return cg.cli.validate(filePath) ? 0 : 1;
+    }],
+  };
 
-    case 'show-model':
-      if (positionalArgs.length === 0) {
-        console.error('Error: No file path provided');
-        process.exit(1);
-      }
-      await showModelFile(resolve(positionalArgs[0]), opts);
-      break;
-
-    case 'generate':
-      if (positionalArgs.length === 0) {
-        console.error('Error: No file path provided');
-        process.exit(1);
-      }
-      await generateCode(resolve(positionalArgs[0]), opts);
-      break;
-
-    case 'validate':
-      if (positionalArgs.length === 0) {
-        console.error('Error: No file path provided');
-        process.exit(1);
-      }
-      await validateFile(resolve(positionalArgs[0]));
-      break;
-
-    default:
-      console.error('Error: Unknown command:', command);
-      console.error('');
-      showHelp();
-      process.exit(1);
+  if (!Object.hasOwn(commands, command)) {
+    console.error('Error: Unknown command:', command);
+    console.error('');
+    showHelp();
+    process.exit(1);
+  }
+  if (positionalArgs.length === 0) {
+    console.error('Error: No file path provided');
+    process.exit(1);
+  }
+  const [label, runCommand] = commands[command];
+  const filePath = resolve(positionalArgs[0]);
+  try {
+    process.exit(await runCommand(filePath));
+  } catch (error) {
+    fail(label, error);
   }
 }
 
-main().catch(error => {
-  console.error('Fatal error:', error.message);
-  if (error.stack) {
-    console.error(error.stack);
-  }
-  process.exit(1);
-});
+main().catch(error => fail('Fatal error:', error));
