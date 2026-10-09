@@ -22,6 +22,12 @@
     (is (= [41 4] (:start (:range d))))
     (is (= [41 7] (:end (:range d))))))
 
+(deftest a-multi-line-finding-ends-at-its-own-column
+  (let [f (doto (finding 3 10) (aset "end-row" 5) (aset "end-col" 2))
+        [d] (kondo/findings->diagnostic-data #js [f])]
+    (is (= [2 9] (:start (:range d))))
+    (is (= [4 1] (:end (:range d))))))
+
 (deftest finding-fields-map-across
   (let [[d] (kondo/findings->diagnostic-data #js [(finding 2 1)])]
     (is (= "unresolved-symbol" (:code d)))
