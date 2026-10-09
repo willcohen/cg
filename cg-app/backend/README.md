@@ -27,15 +27,17 @@ Start the backend before you load the page of the web app. The dev server reads 
 `src/cg_app/backend/server.clj` lists each route. The web app and `cg-vscode` call these routes:
 
 - `GET /api/health` tells the client that the server is up.
-- `POST /api/execution/start` starts a run of `.cg` code.
+- `POST /api/execution/start` starts a run of `.cg` code in a session.
 - `GET /api/execution/:id/trace` gives the trace of that run as server-sent events.
 - `GET /api/execution/:id/result` gives the status of the run, then its result.
-- `POST /api/session/create` makes a session. `POST /api/session/load` runs `.cg` code in it. `GET /api/session/vars` lists its vars.
+- `POST /api/session/create` makes a session. `POST /api/session/load` runs `.cg` code in it. `GET /api/session/vars` lists its vars. `POST /api/session/repl` starts an nREPL server on it.
 - `POST /api/data/:var` gives one dataset as GeoJSON, with an optional bbox filter.
 
-A run gives a summary and no geometries. A client gets the geometries of one dataset through `/api/data/:var`.
+A client sends the session ID in the `X-Session-Id` header.
 
-The clients do not call the other routes. Of those, `POST /api/execute` is deprecated, and `POST /api/project` gives HTTP 501.
+A run gives a summary and the GeoJSON of its map-layer models. A client gets the rows of one dataset through `/api/data/:var`.
+
+The clients do not call `DELETE /api/session/delete`. This route removes a session and stops its nREPL server.
 
 ## Tests
 

@@ -37,14 +37,12 @@
 
 (deftest ^:async a-session-call-sends-the-session-id-and-tags-the-outcome
   (let [calls #js []
-        send (stub-send calls {"POST /api/session/load" (ok #js {:vars #js [#js {:name "a"}]
-                                                                 :files #js ["a.cg"]})
+        send (stub-send calls {"POST /api/session/load" (ok #js {:vars #js [#js {:name "a"}]})
                                "POST /api/session/repl" gone
                                "POST /api/execution/start"
                                #js {:status 409 :body #js {:error "busy" :live-execution-id "e-0"}}})
         loaded (await (jvm/load-session send "s-1" "(def a 1)" "a.cg" "/w/proj"))]
     (is (= "a" (aget (aget (:ok loaded) 0) "name")))
-    (is (= ["a.cg"] (vec (:files loaded))))
     (is (= "s-1" (aget (aget (aget calls 0) "headers") "X-Session-Id")))
     (is (= "(def a 1)" (aget (aget (aget calls 0) "body") "code")))
     (is (= "/w/proj" (aget (aget (aget calls 0) "body") "root")))

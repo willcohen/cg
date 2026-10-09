@@ -36,13 +36,13 @@
         (throw (js/Error. (str "session/create HTTP " (aget res "status")))))))
 
 (defn ^:async load-session
-  "Evaluates `code` in the session. {:ok vars :files}. `root`, when given, is
+  "Evaluates `code` in the session. {:ok vars}. `root`, when given, is
    the project dir that the relative module paths of `code` resolve against."
   [send sid code filename root]
   (outcome (await (send "POST" "/api/session/load" (session-headers sid)
                         #js {:code code :filename filename :root root}))
            "session/load"
-           (fn [b] {:ok (some-> b (aget "vars")) :files (some-> b (aget "files"))})))
+           (fn [b] {:ok (some-> b (aget "vars"))})))
 
 (defn- dataset-names [vars]
   (.map (.filter (or vars #js []) (fn [v] (= "dataset" (aget v "type"))))
@@ -77,8 +77,8 @@
       r)))
 
 (defn ^:async execution-result
-  "The result of the execution `id`: #js {:count :message :name :results
-   :layers}. Throws when the backend has none."
+  "The result of the execution `id`: #js {:count :name :results :layers}.
+   Throws when the backend has none."
   [send id]
   (let [res (await (send "GET" (str "/api/execution/" id "/result") nil nil))]
     (when-not (= 200 (aget res "status"))

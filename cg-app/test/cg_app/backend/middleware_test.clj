@@ -14,7 +14,7 @@
   [method origin]
   ((middleware/wrap-cors (fn [_] {:status 200 :headers {} :body "ok"}))
    {:request-method method
-    :uri "/api/execute-code"
+    :uri "/api/execution/start"
     :headers (if origin {"origin" origin} {})}))
 
 (deftest a-page-of-a-different-site-is-refused

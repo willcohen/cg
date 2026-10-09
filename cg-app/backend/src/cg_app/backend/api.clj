@@ -5,8 +5,9 @@
 ;; SPDX-License-Identifier: Apache-2.0 WITH LLVM-exception
 
 (ns cg-app.backend.api
-  "API handlers for the CG backend. A run returns a summary, not geometries,
-   and a client fetches one dataset through /api/data/:var."
+  "API handlers for the CG backend. A run gives a summary and the GeoJSON of
+   its map-layer models (see wire-result). A client gets the rows of one
+   dataset through /api/data/:var."
   (:require [babashka.nrepl.server :as nrepl-server]
             [cg.run :as run]
             [cg.geo :as geo]
@@ -21,7 +22,6 @@
             [clojure.core.async :as async]
             [clojure.java.io :as io]
             [clojure.string :as str]
-            [clojure.walk :as walk]
             [clojure.tools.logging :as log]
             [ring.core.protocols :as protocols]))
 
@@ -30,7 +30,8 @@
 (defonce sessions (atom {}))
 
 (def cg-project-root
-  "Root of the CG core project. load-module paths resolve relative to this."
+  "Root of the CG core project. session-input reads a relative path here when
+   the root of the session does not have it."
   (let [cwd (System/getProperty "user.dir")
         parent (.getParent (java.io.File. ^String cwd))]
     (cond
@@ -61,14 +62,6 @@
       (when (.exists f)
         (.getAbsolutePath f)))))
 
-(defn- resolve-cg-path
-  "Resolves a relative path against the CG project root when the file exists
-   there. Else returns `path`."
-  [path]
-  (if (.isAbsolute (java.io.File. ^String path))
-    path
-    (or (file-under cg-project-root path) path)))
-
 (defn- session-input
   "What the session `sid` reads for `path`: an absolute path as it is, else the
    file under the :root of the session, else the file under the CG project
@@ -90,19 +83,6 @@
   [sid root]
   (when root
     (swap! sessions #(cond-> % (contains? % sid) (assoc-in [sid :root] root)))))
-
-(defonce ^:private default-context-rooted
-  ;; run/run-file evaluates in the default cg.run context, where load-module
-  ;; reads paths against the process cwd. This roots load-module and slurp at
-  ;; the CG project. It calls the host fn, because that keeps the content hash
-  ;; and the load-cycle guard of load-module.
-  (delay
-    (let [env (:env (run/get-cg-context))]
-      (swap! env assoc-in [:namespaces 'cg.run 'load-module]
-             (fn [path] (run/load-module (resolve-cg-path path))))
-      (swap! env assoc-in [:namespaces 'clojure.core 'slurp]
-             (fn [path & opts] (apply slurp (resolve-cg-path path) opts)))
-      true)))
 
 (defn- new-session
   "Overrides load-module and slurp to read paths as session-input does."
@@ -131,8 +111,6 @@
            (fn [path & opts]
              (apply slurp (session-input sid path) opts)))
     {:sci-ctx ctx
-     :files []
-     :var-meta {}
      :last-access (now-ms)}))
 
 (defn- touch-session!
@@ -147,8 +125,7 @@
              (into {} (filter (fn [[_ s]] (or (:repl s) (> (:last-access s) cutoff))) m))))))
 
 (defn- get-session-id [request]
-  (or (get-in request [:headers "x-session-id"])
-      (get-in request [:params :session-id])))
+  (get-in request [:headers "x-session-id"]))
 
 (defn- get-session! [request]
   (expire-sessions!)
@@ -220,7 +197,7 @@
   (some #(.startsWith ^String ns-str %) builtin-ns-prefixes))
 
 (defn- deref-if-var
-  "eval-cg of a .cg file that ends with a def returns the Var."
+  "A namespace map of the SCI env holds each def as a Var."
   [v]
   (if (instance? sci.lang.Var v) @v v))
 
@@ -263,23 +240,7 @@
 
 (defn health [_request]
   {:status 200
-   :body {:status "ok"
-          :service "cg-app-backend"
-          :backend "jvm"}})
-
-(defn- resolve-source-bindings
-  "Adds each missing source-node :data-ref to `bindings`. A named ref resolves
-   in the shared eval context. Any other ref is the data and binds to itself."
-  [flow-graph bindings]
-  (let [refs (->> (:nodes flow-graph)
-                  (filter #(= :source (:type %)))
-                  (keep :data-ref)
-                  (remove #(contains? bindings %)))]
-    (reduce (fn [acc r]
-              (if (or (instance? clojure.lang.Named r) (string? r))
-                (assoc acc r (deref-if-var (run/eval-cg (name r))))
-                (assoc acc r r)))
-            bindings refs)))
+   :body {:status "ok"}})
 
 (defn- result-count [results]
   (cond
@@ -287,9 +248,6 @@
     (sequential? results) (count results)
     (some? results) 1
     :else 0))
-
-(defn- done-message [n]
-  (str "Executed successfully, produced " n " result(s)"))
 
 (defn- layer-sink
   "The map-layer result in `r`, which the JVM collects in a vector, or nil."
@@ -326,19 +284,17 @@
                     layers)))
 
 (defn- run-in-session
-  "Gives {:count :message :name :results :layers}, the shape that the map hosts read."
+  "Gives {:count :name :results :layers}, the shape that the map hosts read."
   [sess body]
   (let [ctx (:sci-ctx sess)
         filename (:filename body)
-        opts (cond-> (assoc (walk/keywordize-keys (or (:opts body) {})) :map-layers true)
+        opts (cond-> (assoc (or (:opts body) {}) :map-layers true)
                filename (assoc :file filename))
         out (binding [run/*cg-context* ctx
                       run/*session-file* (some-> filename (str/split #"/") last)]
-              (run/run-file (:code (metadata/split-code-and-metadata (:code body))) opts))
-        n (result-count (:result out))]
+              (run/run-file (:code (metadata/split-code-and-metadata (:code body))) opts))]
     (keep-results! ctx out)
-    {:count n
-     :message (done-message n)
+    {:count (result-count (:result out))
      :name (:model out)
      :results (wire-result (:model out) (:result out))
      :layers (mapv (fn [l] (if (contains? l :error)
@@ -346,42 +302,9 @@
                              {:model (:model l) :result (wire-result (:model l) (:result l))}))
                    (:layers out))}))
 
-(defn- run-request
-  "`code` runs through cg.run/run-file with no overlay. A `flow-graph` runs as it is."
-  [body]
-  (let [opts (walk/keywordize-keys (or (:opts body) {}))]
-    (if-let [code-str (:code body)]
-      (do @default-context-rooted
-          (:result (run/run-file (:code (metadata/split-code-and-metadata code-str)) opts)))
-      (let [fg (walk/keywordize-keys (:flow-graph body))]
-        (when-not (and (map? fg) (seq (:nodes fg)))
-          (throw (ex-info "provide 'code' or a 'flow-graph' with nodes" {})))
-        (run/run-model fg
-                       (resolve-source-bindings fg (walk/keywordize-keys (or (:bindings body) {})))
-                       opts)))))
-
-(defn execute-code
-  "Runs CG code on the JVM and responds with a summary ({:status :count
-  :message}), because JTS geometries are not JSON-serializable."
-  [request]
-  (try
-    (let [results (run-request (:body request))
-          n (result-count results)]
-      (log/info "Execution successful, produced" n "results")
-      {:status 200
-       :body {:status "success"
-              :count n
-              :message (done-message n)}})
-    (catch Exception e
-      (log/error e "Failed to execute CG code")
-      {:status 500
-       :body {:error (.getMessage e)
-              :type (-> e class .getName)}})))
-
 (defonce executions
   ;; id -> {:id :chan :status (:running, :complete or :failed) :result
-  ;;        :session-id :started-at :ended-at}. Public, because tests seed a
-  ;; live entry for the 409 path.
+  ;;        :ended-at}. Public, because tests seed a live entry for the 409 path.
   (atom {}))
 
 (def ^:private execution-ttl-ms
@@ -409,15 +332,6 @@
     (trace/untap-trace chan)
     (async/put! chan (merge {:kind "execution-ended" :execution-id id} sentinel))
     (async/close! chan)))
-
-(defn- execution-summary
-  "The result of an execution: a session run with code, or a run of the
-   request with {:count :message} only."
-  [body sess]
-  (if (and sess (:code body))
-    (run-in-session sess body)
-    (let [n (result-count (run-request body))]
-      {:count n :message (done-message n)})))
 
 (defn- trace-writer
   "A Writer that sends each line written to it as an \"output\" trace event
@@ -469,7 +383,7 @@
 (defn- run-execution! [id body sess]
   (try
     (log/info "Async execution" id "starting")
-    (let [summary (with-run-output #(execution-summary body sess))]
+    (let [summary (with-run-output #(run-in-session sess body))]
       (log/info "Async execution" id "complete," (:count summary) "results")
       (finish-execution! id
                          {:status :complete :result summary}
@@ -478,32 +392,30 @@
       (log/error e "Async execution failed" id)
       (finish-execution! id
                          {:status :failed
-                          :result {:error (.getMessage e)
-                                   :type (-> e class .getName)}}
+                          :result {:error (.getMessage e)}}
                          {:outcome "error" :message (.getMessage e)}))))
 
 (defn execution-start
-  "POST /api/execution/start: runs the request in a future and returns
-   {:execution-id id}. With X-Session-Id, the run is in that session (see
-   run-in-session), and an unknown session gets 404. A `root` in the body
-   becomes the :root of the session (see session-input). Only one execution
-   streams at a time; a second gets 409."
+  "POST /api/execution/start: runs the `code` of the body in the session of
+   X-Session-Id (see run-in-session), in a future, and returns
+   {:execution-id id}. A request with no session ID or no `code` gets 400, and
+   an unknown session gets 404. A `root` in the body becomes the :root of the
+   session (see session-input). Only one execution streams at a time, and a
+   second gets 409."
   [request]
   (try
     (prune-executions!)
     (let [body (:body request)
           sid (get-session-id request)
-          sess (when sid (get-session! request))
+          sess (get-session! request)
+          _ (when-not (:code body)
+              (throw (ex-info "Provide 'code'" {:status 400})))
           id (str (java.util.UUID/randomUUID))
           ;; The mult waits for each tap. A full fixed buffer with no reader
           ;; blocks the global trace stream for the whole process. A dropped
           ;; event shows as a gap in :seq.
           ch (async/chan (async/sliding-buffer 4096))
-          entry {:id id
-                 :chan ch
-                 :status :running
-                 :session-id sid
-                 :started-at (now-ms)}
+          entry {:id id :chan ch :status :running}
           [_ new] (swap-vals! executions
                               (fn [m] (if (live-execution m) m (assoc m id entry))))]
       (if-not (contains? new id)
@@ -511,7 +423,7 @@
             {:status 409
              :body {:error "Another execution is already streaming; trace events are global, so executions serialize"
                     :live-execution-id (:id (live-execution new))}})
-        (do (when sess (set-session-root! sid (:root body)))
+        (do (set-session-root! sid (:root body))
             (trace/tap-trace ch)
             (future (run-execution! id body sess))
             {:status 200
@@ -519,8 +431,7 @@
     (catch Exception e
       (log/error e "Failed to start async execution")
       {:status (or (:status (ex-data e)) 500)
-       :body {:error (.getMessage e)
-              :type (-> e class .getName)}})))
+       :body {:error (.getMessage e)}})))
 
 (defn- write-sse-event!
   "Writes one `data: <json>` frame and flushes. An event that JSON cannot
@@ -561,7 +472,7 @@
 
 (defn execution-result
   "GET /api/execution/:id/result: the status, plus :result when finished
-   ({:count :message} on success, {:error :type} on failure)."
+   (the map of run-in-session on success, {:error} on failure)."
   [request]
   (let [id (get-in request [:path-params :id])
         e (get @executions id)]
@@ -572,50 +483,6 @@
        :body (cond-> {:execution-id id
                       :status (name (:status e))}
                (:result e) (assoc :result (:result e)))})))
-
-(defn execute-model
-  "DEPRECATED: Use execute-code instead."
-  [request]
-  (try
-    (let [body (:body request)
-          flow-graph (walk/keywordize-keys (:flow-graph body))
-          bindings (walk/keywordize-keys (or (:bindings body) {}))
-          opts (walk/keywordize-keys (or (:opts body) {}))
-          _ (log/info "Executing Flow Graph with" (count (:nodes flow-graph)) "nodes")
-          results (run/run-model flow-graph bindings opts)
-          result-count (if (coll? results) (count results) 1)]
-      (log/info "Execution successful, produced" result-count "results")
-      {:status 200
-       :body {:status "success"
-              :count result-count
-              :results results
-              :message (str "Executed successfully, produced " result-count " result(s)")}})
-    (catch Exception e
-      (log/error e "Failed to execute Flow Graph")
-      {:status 500
-       :body {:error (.getMessage e)
-              :type (-> e class .getName)}})))
-
-(defn transform-geometry [request]
-  (try
-    (let [{:keys [geometry operation params]} (:body request)
-          _ (log/info "Transforming geometry with operation:" operation)
-          result (case operation
-                   :buffer (geo/buffer geometry (:distance params))
-                   :simplify (geo/simplify geometry (:tolerance params))
-                   :union (geo/union geometry (:other params))
-                   {:error "Unknown operation"})]
-      {:status 200
-       :body {:result result}})
-    (catch Exception e
-      (log/error e "Failed to transform geometry")
-      {:status 500
-       :body {:error (.getMessage e)}})))
-
-(defn project-geometry [_request]
-  {:status 501
-   :body {:error "Projection not yet implemented"
-          :message "CRS transformation will be available in future version"}})
 
 (defn session-create [_request]
   (expire-sessions!)
@@ -665,8 +532,8 @@
        :body {:error (.getMessage e)}})))
 
 (defn session-delete
-  "DELETE /api/session/delete - Destroy a session and free resources.
-   Session ID from X-Session-Id header."
+  "DELETE /api/session/delete: stops the nREPL server of the session and
+   removes the session."
   [request]
   (let [sid (get-session-id request)]
     (if (and sid (get @sessions sid))
@@ -680,42 +547,32 @@
 
 (defn session-load
   "POST /api/session/load: evaluates .cg code in the session. The body has
-   `code` (with an optional `filename`), or `path` for a file on the server,
-   and an optional `root` for the session (see session-input)."
+   `code`, an optional `filename` and an optional `root` for the session (see
+   session-input)."
   [request]
   (try
     (let [sess (get-session! request)
           sid (get-session-id request)
-          {:keys [code path filename root]} (:body request)
+          {:keys [code filename root]} (:body request)
           _ (set-session-root! sid root)
-          [content label] (cond
-                            code [code (or filename "<eval>")]
-                            path [(slurp (session-input sid path)) path]
-                            :else (throw (ex-info "Provide 'code' or 'path'" {:status 400})))
+          _ (when-not code
+              (throw (ex-info "Provide 'code'" {:status 400})))
+          label (or filename "<eval>")
           _ (log/info "Loading" label "in session" sid)
           ctx (:sci-ctx sess)
-          ;; Bind the entry filename (basename) for the eval. A module file can
-          ;; then tell, through cg.run/session-file, whether it is the opened
-          ;; file or a load-module dependency.
+          ;; A module file uses cg.run/session-file to tell whether it is the
+          ;; opened file or a load-module dependency.
           _ (binding [run/*session-file* (last (str/split label #"/"))]
-              (run/eval-cg* ctx (str "(do " content ")")))
-          vars (user-vars ctx)
-          var-meta-map (into {} (map (fn [v] [(:qualified v) v]) vars))]
-      (swap! sessions update sid
-             (fn [s]
-               (-> s
-                   (update :files #(vec (distinct (conj % label))))
-                   (update :var-meta merge var-meta-map))))
+              (run/eval-cg* ctx (str "(do " code ")")))
+          vars (user-vars ctx)]
       (log/info "Loaded" label "- found" (count vars) "user vars")
       {:status 200
        :body {:status "ok"
-              :files (get-in @sessions [sid :files])
               :vars vars}})
     (catch Exception e
       (log/error e "Failed to load .cg code")
       {:status (or (:status (ex-data e)) 500)
-       :body {:error (.getMessage e)
-              :type (-> e class .getName)}})))
+       :body {:error (.getMessage e)}})))
 
 (defn session-vars [request]
   (try
@@ -728,7 +585,9 @@
        :body {:error (.getMessage e)}})))
 
 (defn data-var
-  "POST /api/data/:var - Get dataset as GeoJSON, filtered by bbox."
+  "POST /api/data/:var: the dataset of the var as GeoJSON in EPSG:4326, at
+   most `limit` rows (5000 when the body has no limit). An optional `bbox` in
+   EPSG:4326 keeps the rows that intersect it."
   [request]
   (try
     (let [sess (get-session! request)
@@ -770,27 +629,5 @@
                       :returned-rows (ds/row-count served))}))
     (catch Exception e
       (log/error e "Failed to get data for var")
-      {:status (or (:status (ex-data e)) 500)
-       :body {:error (.getMessage e)}})))
-
-(defn session-source
-  "POST /api/session/source - Return source file + line for a var."
-  [request]
-  (try
-    (let [sess (get-session! request)
-          {:keys [var]} (:body request)
-          ctx (:sci-ctx sess)
-          env @(:env ctx)
-          [ns-str name-str] (if-let [[_ n s] (re-matches #"(.+)/(.+)" var)]
-                              [n s]
-                              ["user" var])
-          sci-var (get-in env [:namespaces (symbol ns-str) (symbol name-str)])
-          m (when (instance? sci.lang.Var sci-var)
-              (meta sci-var))]
-      {:status 200
-       :body {:file (:file m)
-              :line (:line m)
-              :column (:column m)}})
-    (catch Exception e
       {:status (or (:status (ex-data e)) 500)
        :body {:error (.getMessage e)}})))
