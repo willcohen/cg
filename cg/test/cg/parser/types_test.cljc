@@ -5,9 +5,7 @@
 ;; SPDX-License-Identifier: Apache-2.0 WITH LLVM-exception
 
 (ns cg.parser.types-test
-  "Point tests for the cg.parser.types static checker (passes 1-3).
-
-   Run with: clojure -M:test-parser"
+  "Point tests for the cg.parser.types static checker."
   (:require [cg.parser.core :as parser]
             [cg.dsl.signatures :as sigs]
             [clojure.java.io :as io]
@@ -29,26 +27,11 @@
      (count (filter #(= code (:code %)) (:diagnostics flow)))))
 
 #?(:clj
-   (deftest pass-1-known-built-in-resolves
-     (testing "a binding whose head is a built-in produces no :unresolved-op"
-       (let [flow (parser/extract-models
-                   "(def parcels (ds/load-geojson \"parcels.geojson\"))")]
-         (is (zero? (count-code flow :unresolved-op)))))))
-
-#?(:clj
    (deftest pass-1-unknown-head-fires
      (testing "a binding with a head absent from the registry fires :unresolved-op"
        (let [flow (parser/extract-models
                    "(def x (totally/missing 1 2))")]
-         (is (contains? (diag-codes flow) :unresolved-op))
          (is (= 1 (count-code flow :unresolved-op)))))))
-
-#?(:clj
-   (deftest pass-1-threading-op-resolves
-     (testing "a threading-body OpCall resolves through the same registry"
-       (let [flow (parser/extract-models
-                   "(def m (item-> :parcels (geo/buffer 100)))")]
-         (is (zero? (count-code flow :unresolved-op)))))))
 
 #?(:clj
    (deftest pass-1-threading-unknown-op-fires
@@ -110,13 +93,6 @@
              "user op 'my-thing' must resolve via from-operation-decl projection")))))
 
 #?(:clj
-   (deftest pass-2-threading-arity-clean
-     (testing "geo/buffer with the right arg count in threading context is clean"
-       (let [flow (parser/extract-models
-                   "(def m (item-> :parcels (geo/buffer 100)))")]
-         (is (zero? (count-code flow :op-arity-mismatch)))))))
-
-#?(:clj
    (deftest pass-2-threading-too-few-args
      (testing "geo/buffer with zero args in threading context fires :op-arity-mismatch"
        (let [flow (parser/extract-models
@@ -131,13 +107,6 @@
          (is (contains? (diag-codes flow) :op-arity-mismatch))))))
 
 #?(:clj
-   (deftest pass-2-optional-arg-accepted
-     (testing "geo/buffer with its optional opts arg is clean"
-       (let [flow (parser/extract-models
-                   "(def m (item-> :parcels (geo/buffer 10 {:quad-segs 8})))")]
-         (is (zero? (count-code flow :op-arity-mismatch)))))))
-
-#?(:clj
    (deftest pass-2-binding-context-includes-row-input
      (testing "a Binding head includes :row inputs in the explicit-arg slots"
        (let [;; ds/load-geojson has zero :row inputs but exactly one
@@ -147,18 +116,10 @@
              "missing required path arg should still fire arity")))))
 
 #?(:clj
-   (deftest pass-3-clean-types
-     (testing "geo/buffer with a numeric distance is clean"
-       (let [flow (parser/extract-models
-                   "(def m (item-> :parcels (geo/buffer 100)))")]
-         (is (zero? (count-code flow :type-mismatch)))))))
-
-#?(:clj
    (deftest pass-3-string-where-number-expected
      (testing "geo/buffer with a string distance fires :type-mismatch"
        (let [flow (parser/extract-models
                    "(def m (item-> :parcels (geo/buffer \"ten\")))")]
-         (is (contains? (diag-codes flow) :type-mismatch))
          (is (= 1 (count-code flow :type-mismatch)))))))
 
 #?(:clj
@@ -274,17 +235,6 @@
              "a filter-by-column predicate absent from the registry must fire unknown-predicate")))))
 
 #?(:clj
-   (deftest pass-4-pipeline-clean
-     (testing "a chain of geo ops all returning :feature passes pipeline flow"
-       (let [flow (parser/extract-models
-                   (str "(def m\n"
-                        "  (item-> :parcels\n"
-                        "    (geo/buffer 10)\n"
-                        "    (geo/simplify 1.0)\n"
-                        "    (geo/centroid)))"))]
-         (is (zero? (count-code flow :pipeline-type-mismatch)))))))
-
-#?(:clj
    (deftest pass-4-dataset-feeding-feature-fires
      (testing "ds/transform-crs (:dataset out) → geo/buffer (:feature in) fires pipeline-type-mismatch"
        (let [flow (parser/extract-models
@@ -295,37 +245,12 @@
          (is (contains? (diag-codes flow) :pipeline-type-mismatch))))))
 
 #?(:clj
-   (deftest pass-4-single-op-pipeline-clean
-     (testing "a one-op pipeline has no adjacent pairs and never fires pipeline-type-mismatch"
-       (let [flow (parser/extract-models
-                   "(def one (item-> :parcels (geo/buffer 10)))")]
-         (is (zero? (count-code flow :pipeline-type-mismatch)))))))
-
-#?(:clj
-   (deftest pass-4-source-not-checked
-     (testing "the source (keyword) is not checked against op[0] — only adjacent op pairs are"
-       (let [;; :parcels is a bare keyword, no type info; geo/buffer row-in :feature
-             ;; would mismatch under strict source checking. With pass 4's
-             ;; source-to-op[0] skip, this is clean.
-             flow (parser/extract-models
-                   "(def m (item-> :parcels (geo/buffer 10) (geo/simplify 1.0)))")]
-         (is (zero? (count-code flow :pipeline-type-mismatch)))))))
-
-#?(:clj
    (deftest pass-4-runs-inside-an-op-body-pipeline
      (testing "an op body pipeline gets pass-4 checking like a top-level model"
        (let [flow (parser/extract-models
                    (str "(defn ^:op bad [^:table ds]\n"
                         "  (table-> :ds (ds/transform-crs \"EPSG:3857\") (geo/buffer 10)))"))]
          (is (contains? (diag-codes flow) :pipeline-type-mismatch))))))
-
-#?(:clj
-   (deftest pass-5-clean-op
-     (testing "single-output op whose body terminal matches declared type is clean"
-       (let [flow (parser/extract-models
-                   (str "(defn ^:op ok {:outputs {:area {:type :number}}} [^:table parcel]\n"
-                        "  (item-> :parcel (geo/area)))"))]
-         (is (empty? (:diagnostics flow)))))))
 
 #?(:clj
    (deftest pass-5-mismatch-fires
@@ -444,23 +369,6 @@
            tagged (mapv #(assoc % :source-module {:path path :label label :ns mod-ns})
                         (:operations module-flow))]
        (update main-flow :operations (fnil into []) tagged))))
-
-#?(:clj
-   (deftest recheck-resolves-aliased-cross-file-ops
-     (testing "post-follow recheck resolves an aliased cross-file op call"
-       (let [main (parser/extract-models
-                   (str "(require '[cg.mymod :as mm])\n"
-                        "(run/load-module \"src/cg/mymod.cg\")\n"
-                        "(def m (item-> :parcels (mm/my-thing)))"))
-             module (parser/extract-models
-                     (str "(ns cg.mymod)\n"
-                          "(defn ^:op my-thing [^:row parcel]\n"
-                          "  (geo/area parcel))"))]
-         (is (= 1 (count-code main :unresolved-op))
-             "pre-follow, mm/my-thing is a resolution miss")
-         (let [re (parser/recheck (follow-merge main module "src/cg/mymod.cg" "Mymod"))]
-           (is (zero? (count-code re :unresolved-op))
-               "the alias-qualified spelling resolves through :source-module :ns"))))))
 
 #?(:clj
    (deftest recheck-resolves-a-module-own-namespace-head

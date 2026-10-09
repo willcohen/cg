@@ -1,4 +1,4 @@
-;; typed-mismatch.cg — fixture for cg.parser.types passes 1-5.
+;; typed-mismatch.cg: fixture for the parser checks.
 ;;
 ;; Plants one of each kind of checker diagnostic:
 ;;   - :unresolved-op           — unknown head 'totally/missing'.

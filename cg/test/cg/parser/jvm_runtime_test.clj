@@ -12,9 +12,7 @@
    JDK (see flake.nix jvmJdk), the guest JIT-compiles via libgraal; without
    either it silently falls back to the interpreter (~6x slower). Stock
    OpenJDK 25 cannot load the optimizing runtime cleanly (JDK-8364936). This
-   test fails loudly if that regresses. JVM-only.
-
-   Run with: clojure -M:test-parser"
+   test fails loudly if that regresses. JVM-only."
   (:require [cg.parser.core :as parser]
             [clojure.test :refer [deftest is testing]])
   (:import [com.oracle.truffle.api Truffle]))

@@ -10,7 +10,7 @@
    of eval: do not require cg.dsl, cg.macros, cg.run or cg.codegen."
   (:require ["web-tree-sitter" :refer [Parser Language]]))
 
-(defonce ^:private state (atom {:language nil}))
+(defonce ^:private language (atom nil))
 (defonce ^:private init-promise (atom nil))
 
 (defn- default-grammar
@@ -24,15 +24,13 @@
       (.replace (js/decodeURIComponent (.-pathname (js/URL. url))) #"^/([A-Za-z]:)" "$1")
       url)))
 
-(defn ^:async do-init!
+(defn- ^:async do-init!
   "Call init!, which caches the Promise: concurrent loads of the same wasm
    leave a half-initialized Language whose version reads as 0."
   [opts]
   (let [wasm-path (or (:grammar-wasm opts) (default-grammar))]
     (await (.init Parser))
-    (let [lang (await (.load Language wasm-path))]
-      (reset! state {:language lang})
-      @state)))
+    (reset! language (await (.load Language wasm-path)))))
 
 (defn ^:async init!
   "The first call caches the init Promise, and concurrent callers all await it."
@@ -46,9 +44,9 @@
   "Parses source text with no Promise. Returns the tree-sitter Tree, or
    nil before init! resolves."
   [text]
-  (when-let [language (:language @state)]
+  (when-let [lang @language]
     (let [parser (Parser.)]
-      (.setLanguage parser language)
+      (.setLanguage parser lang)
       (.parse parser text))))
 
 (defn ^:async parse

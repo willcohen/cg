@@ -11,47 +11,23 @@
    do not require cg.dsl, cg.macros, cg.run or cg.codegen (cg.dsl.signatures
    is pure data)."
   (:require [cg.dsl.signatures :as sigs]
-            [cg.parser.extract :as extract]))
+            [cg.parser.extract :as extract :refer [diag]]))
 
 #?(:clj (set! *warn-on-reflection* true))
 
-(defn- diag
-  ([code severity message location]
-   {:code code :severity severity :message message :location location})
-  ([code message location]
-   (diag code :error message location)))
-
-(defn- t-name
-  "The name string of a type kind. On the JVM the kind is a keyword. On
-   squint a keyword is already a string, and squint-cljs/core does not define
-   `name`."
-  [t]
-  #?(:clj  (when t (name t))
-     :cljs t))
-
-(def ^:private literal-kind->type
-  "The checker type kind for each LiteralValue :kind (from
-   cg.parser.extract)."
-  {:number  :number
-   :string  :string
-   :keyword :keyword
-   :boolean :boolean
-   :vec     :any
-   :mapv    :any})
+(defn- t-name [t] (some-> t name))
 
 (defn- literal-type
-  "The type keyword of a LiteralValue. An unknown kind gives :any."
+  "The type keyword of a LiteralValue: the :kind of a scalar, else :any."
   [lit]
-  (get literal-kind->type (:kind lit) :any))
+  (let [k (:kind lit)]
+    (if (contains? #{:number :string :keyword :boolean} k) k :any)))
 
 (defn- parameter-type
   "The type of a parameter_ref OpArg, from the :parameters of the CgFlow. A
    missing parameter gives :any, and no validate pass reports it."
   [param-name cg-flow]
-  (let [p (first (filter #(= (:name %) param-name) (:parameters cg-flow)))]
-    (if p
-      (literal-type (:value p))
-      :any)))
+  (literal-type (:value (first (filter #(= (:name %) param-name) (:parameters cg-flow))))))
 
 (defn- binding-output-type
   "The output type of the top-level Binding with this name: the first output
@@ -63,9 +39,7 @@
         out (first (:outputs sig))]
     (if out (:type out) :any)))
 
-(defn- op-arg-type
-  "Resolves the type of a single OpArg map."
-  [arg cg-flow registry]
+(defn- op-arg-type [arg cg-flow registry]
   (case (:kind arg)
     :literal        (literal-type (:literal arg))
     :inline_map     :any
@@ -159,9 +133,7 @@
                           (:location arg)))))
               args)))))))
 
-(defn- binding-call-site
-  "Projects a Binding into a checkable call site."
-  [b]
+(defn- binding-call-site [b]
   {:qualified-name (:head-sym b)
    :args (vec (:args b))
    :location (:location b)
@@ -176,24 +148,17 @@
    :location (:location opcall)
    :context :threading})
 
-(defn- model-call-sites
-  "Projects a Model's :ops sequence into threading call sites."
-  [m]
+(defn- model-call-sites [m]
   (mapv threading-op-call-site (:ops m)))
 
-(defn- body-form-call-sites
-  "Projects the OpCalls of a decoded OpBodyForm into call sites. Only a
-   :pipeline has OpCalls: its :ops."
+(defn- pipeline-body-form
+  "The OpBodyForm when it is a :pipeline, else nil."
   [body-form]
-  (if (= :pipeline (:kind body-form))
-    (mapv threading-op-call-site (:ops body-form))
-    []))
+  (when (= :pipeline (:kind body-form))
+    body-form))
 
-(defn- operation-decl-call-sites
-  "Projects every OpCall reachable from an OperationDecl's body into
-   call sites."
-  [op-decl]
-  (mapcat body-form-call-sites (:body op-decl)))
+(defn- operation-decl-call-sites [op-decl]
+  (mapcat (comp model-call-sites pipeline-body-form) (:body op-decl)))
 
 (defn- call-sites
   "Each call site in a CgFlow that the checker can inspect: the heads of
@@ -231,36 +196,22 @@
   "Check that the first output of each op in a decoded pipeline fits the :row
    input of the next op. A keyword source has no type and is not checked."
   [pipeline registry]
-  (let [ops (vec (:ops pipeline))]
-    (loop [i 1
-           diags []]
-      (if (>= i (count ops))
-        diags
-        (let [prev (nth ops (dec i))
-              cur  (nth ops i)
-              prev-sig (get registry (:qualified-name prev))
-              cur-sig  (get registry (:qualified-name cur))]
-          (if (or (nil? prev-sig) (nil? cur-sig))
-            (recur (inc i) diags)
-            (let [prev-out (sig-output-type prev-sig)
-                  cur-in   (sig-row-input-type cur-sig)]
-              (if (type-compatible? prev-out cur-in)
-                (recur (inc i) diags)
-                (recur (inc i)
-                       (conj diags
-                             (diag :pipeline-type-mismatch
-                                   (str "operation '" (:qualified-name cur)
-                                        "' expects " (t-name cur-in)
-                                        " on its row input but the previous "
-                                        "op '" (:qualified-name prev)
-                                        "' returns " (t-name prev-out))
-                                   (:location cur))))))))))))
-
-(defn- pipeline-body-form
-  "The OpBodyForm when it is a :pipeline, else nil."
-  [body-form]
-  (when (= :pipeline (:kind body-form))
-    body-form))
+  (let [ops (:ops pipeline)]
+    (keep (fn [[prev cur]]
+            (let [prev-sig (get registry (:qualified-name prev))
+                  cur-sig  (get registry (:qualified-name cur))]
+              (when (and prev-sig cur-sig)
+                (let [prev-out (sig-output-type prev-sig)
+                      cur-in   (sig-row-input-type cur-sig)]
+                  (when-not (type-compatible? prev-out cur-in)
+                    (diag :pipeline-type-mismatch
+                          (str "operation '" (:qualified-name cur)
+                               "' expects " (t-name cur-in)
+                               " on its row input but the previous "
+                               "op '" (:qualified-name prev)
+                               "' returns " (t-name prev-out))
+                          (:location cur)))))))
+          (map vector ops (rest ops)))))
 
 (defn- all-pipelines
   "Each pipeline in a CgFlow that the checker can inspect: threading-macro
@@ -300,7 +251,6 @@
         (cond
           ;; No terminal pipeline, or a last op that does not resolve.
           ;; Another pass reports the op that does not resolve.
-          (nil? term)      []
           (nil? term-type) []
 
           (type-compatible? term-type decl-out-type)

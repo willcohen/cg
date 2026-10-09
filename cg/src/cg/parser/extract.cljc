@@ -19,7 +19,7 @@
 
 #?(:clj (set! *warn-on-reflection* true))
 
-(defn- diag
+(defn diag
   ([code severity message location]
    {:code code :severity severity :message message :location location})
   ([code message location]
@@ -87,10 +87,7 @@
     {:kind :string :data (str-lit-text node)}
 
     (w/kwd? node)
-    {:kind :keyword
-     :data (let [t (w/node-text node)]
-             #?(:clj  (keyword (subs t 1))
-                :cljs (subs t 1)))}
+    {:kind :keyword :data (keyword (subs (w/node-text node) 1))}
 
     (w/bool-lit? node)
     {:kind :boolean :data (= "true" (w/node-text node))}
@@ -249,14 +246,10 @@
                 (w/node->span first-arg))
           r)))))
 
-(defn- first-line
-  [s]
-  (let [i (.indexOf ^String s "\n")]
-    (if (neg? i) s (subs s 0 i))))
-
-(defn- truncate-label
-  [s n]
-  (if (> (count s) n) (str (subs s 0 n) " …") s))
+(defn- form-label [text]
+  (let [i (.indexOf ^String text "\n")
+        s (if (neg? i) text (subs text 0 i))]
+    (if (> (count s) 60) (str (subs s 0 60) " …") s)))
 
 (defn- opaque-block
   "An OpaqueBlock entry for a form that the classifier rejects: :label (the
@@ -264,7 +257,7 @@
    extract records it only with :opaque-blocks true."
   [node]
   (let [text (w/node-text node)]
-    {:label (truncate-label (first-line text) 60)
+    {:label (form-label text)
      :raw text
      :location (w/node->span node)}))
 
@@ -281,7 +274,7 @@
      :arity (count args)
      :text (when (and sole (w/str-lit? sole)) (str-lit-text sole))
      :args (mapv w/node-text args)
-     :label (truncate-label (first-line text) 60)
+     :label (form-label text)
      :raw text
      :location (w/node->span list-node)}))
 
@@ -337,11 +330,6 @@
   [node]
   (let [span (w/node->span node)]
     (cond
-      (w/quoting? node)
-      ;; A quoted op form is illegal. decode-threading-form emits
-      ;; :quoted-op-form for it.
-      {:kind :symbol_ref :symbol-text (w/node-text node) :location span}
-
       (w/list-form? node)
       ;; A nested call, such as (ds/load-geojson (str data-dir "...")),
       ;; becomes a recursive OpArg tree. A consumer can then find the
@@ -460,9 +448,7 @@
     []
     (let [pos (if dataset-implicit? 1 2)
           arg (get args pos)]
-      (if (and arg
-               (= :literal (:kind arg))
-               (= :keyword (:kind (:literal arg))))
+      (if (op-arg-keyword? arg)
         (let [raw (:raw (:literal arg))
               kw-name (if (str/starts-with? raw ":") (subs raw 1) raw)]
           (if (contains? sigs/predicate-kinds kw-name)
@@ -473,9 +459,7 @@
                    (:location arg))]))
         []))))
 
-(defn- threading-form?
-  "True when node is a list_lit whose head is item->/coll->/table->/layers->."
-  [node]
+(defn- threading-form? [node]
   (w/list-head-in? node threading-macro-syms))
 
 (defn- mode-keyword
@@ -488,6 +472,10 @@
     "coll->"  :coll
     "table->" :table
     nil))
+
+(defn- kwd->name [kwd-node]
+  (let [t (w/node-text kwd-node)]
+    (if (str/starts-with? t ":") (subs t 1) t)))
 
 (defn- decode-threading-form
   "Decode a (item->|coll->|table->|layers-> source ops... config?) form.
@@ -528,11 +516,7 @@
                                       "OpArg shape (got " (w/node-type first-arg) ")")
                                  (w/node->span first-arg)))
                     nil)
-                (w/kwd? first-arg)
-                (let [t (w/node-text first-arg)]
-                  (if (str/starts-with? t ":")
-                    (subs t 1)
-                    t))
+                (w/kwd? first-arg) (kwd->name first-arg)
                 ;; A source that is not a keyword: :source carries it.
                 :else
                 nil)
@@ -598,12 +582,6 @@
                :location (w/node->span body-node)})
      :diagnostics diagnostics}))
 
-(defn- valid-binding-arg?
-  "False only for a quoted form, because a quote has no runtime meaning in a
-   flow body. Each other node can be an OpArg."
-  [node]
-  (not (w/quoting? node)))
-
 (defn- extract-binding
   "Parse a (def <name> (<head> <arg>...)) form into {:kind :binding :value
    <Binding> :diagnostics [...]}, or {:kind :error ...} when an arg is a
@@ -621,8 +599,10 @@
         head-sym  (w/node-text head)
         accessor? (w/kwd? head)
         control?  (contains? control-form-heads head-sym)
+        ;; A quote has no runtime meaning in a flow body. Each other node
+        ;; can be an OpArg.
         bad       (when-not control?
-                    (first (remove valid-binding-arg? arg-nodes)))]
+                    (first (filter w/quoting? arg-nodes)))]
     (if bad
       {:kind :error
        :diagnostics [(diag :binding-malformed
@@ -654,30 +634,9 @@
 
            :else (check-known-predicate-args head-sym args false))}))))
 
-(def ^:private let-body-sym "let")
-
-(defn- pipeline-body-form?
-  "True when node is a list_lit whose head is a threading-macro name."
-  [node]
-  (w/list-head-in? node threading-macro-syms))
-
-(defn- let-body-form?
-  "True when node is a list_lit whose head is plain `let`."
-  [node]
-  (w/list-head= node let-body-sym))
-
-(defn- kwd->name
-  "Strips the leading colon from a kwd_lit's source text."
-  [kwd-node]
-  (let [t (w/node-text kwd-node)]
-    (if (str/starts-with? t ":") (subs t 1) t)))
-
 (defn- map-pairs
   "The named children of a map_lit as [key value] pairs. A key with no value
-   gets nil. This fn uses partition-all, not `(partition 2 2 nil coll)`:
-   squint's 4-arity partition reads `.length` on the nil pad and throws on a
-   short last group. The other pair walks in this namespace use partition-all
-   for the same reason."
+   gets nil."
   [map-node]
   (partition-all 2 (w/named-children map-node)))
 
@@ -689,12 +648,6 @@
           (when (and k (w/kwd? k) (= target-text (w/node-text k))) v))
         (map-pairs map-node)))
 
-(defn- str-lit-content
-  "Returns a String literal's inner text (without the surrounding quotes)."
-  [node]
-  (let [t (w/node-text node)]
-    (subs t 1 (dec (count t)))))
-
 (defn- extract-type-spec
   "Read a :type value (a keyword or a string literal) from a port config
    map. Returns {:type <String> :diagnostics [...]}. The caller reports a
@@ -705,7 +658,7 @@
     {:type (kwd->name type-node) :diagnostics []}
 
     (w/str-lit? type-node)
-    {:type (str-lit-content type-node) :diagnostics []}
+    {:type (str-lit-text type-node) :diagnostics []}
 
     :else
     {:type nil
@@ -743,11 +696,10 @@
 
 (defn- extract-port-decl
   "Parse the outer {:inputs {...}} or {:outputs {...}} declaration map.
-   `port-key-text` is \":inputs\" or \":outputs\". `per-key-fn` reads one
-   port from a (name, config map) pair. `sibling-keys` is the set of the
-   other key texts that the map admits: each key outside it gives
+   `port-key-text` is \":inputs\" or \":outputs\". `sibling-keys` is the set
+   of the other key texts that the map admits: each key outside it gives
    :op-malformed. Returns {:ports [...] :diagnostics [...]}."
-  [op-name outer-node port-key-text sibling-keys per-key-fn]
+  [op-name outer-node port-key-text sibling-keys]
   (if-not (w/map-form? outer-node)
     {:ports []
      :diagnostics
@@ -807,10 +759,10 @@
                                         (w/node->span k)))
 
                           :else
-                          (let [{:keys [input output diagnostics]}
-                                (per-key-fn op-name (kwd->name k) v)]
+                          (let [{:keys [output diagnostics]}
+                                (extract-typed-output op-name (kwd->name k) v)]
                             (-> acc
-                                (update :ports conj (or input output))
+                                (update :ports conj output)
                                 (update :diagnostics into diagnostics)))))
                       {:ports [] :diagnostics []}
                       (map-pairs inner-node))]
@@ -829,7 +781,7 @@
      :diagnostics
      [(diag :op-malformed
             (str "op '" op-name "' " key-text
-                 " must be a set literal of row keys, e.g. #{:geometry}")
+                 " must be a set literal of row keys, for example #{:geometry}")
             (w/node->span node))]}
 
     :else
@@ -846,10 +798,7 @@
 
 (declare extract-op-body-form)
 
-(defn- extract-pipeline-body-form
-  "Decode a threading-macro form in an op body into an OpBodyForm
-   {:kind :pipeline ...}, with decode-threading-form."
-  [node]
+(defn- extract-pipeline-body-form [node]
   (let [{:keys [mode input ops config diagnostics]} (decode-threading-form node)]
     {:body-form {:kind :pipeline
                  :mode mode
@@ -859,6 +808,11 @@
                  :raw (w/node-text node)
                  :location (w/node->span node)}
      :diagnostics diagnostics}))
+
+(defn- chain-edges [nodes]
+  (let [ids (mapv :id nodes)]
+    (vec (map (fn [from to] {:from from :to to :type :data-flow})
+              (butlast ids) (rest ids)))))
 
 (defn- pipeline-body->graph
   "Build a flow graph {:nodes :edges} from a :pipeline OpBodyForm, or nil for
@@ -878,15 +832,9 @@
                              :location loc}
                       lvl  (assoc :emits-level lvl)
                       comp (assoc :component comp)))
-                  ops))
-          ids (mapv :id nodes)
-          edges (vec
-                 (map (fn [from to]
-                        {:from from :to to :type :data-flow})
-                      (butlast ids)
-                      (rest ids)))]
+                  ops))]
       {:nodes nodes
-       :edges edges
+       :edges (chain-edges nodes)
        :mode (:mode body-form)
        :input (:input body-form)})))
 
@@ -959,15 +907,9 @@
                            :location (:location form)})]))
            [seen-after-bindings []]
            (filterv tail-node-worthy? (:tail body-form)))
-          nodes (into nodes tail-nodes)
-          ids (mapv :id nodes)
-          edges (vec
-                 (map (fn [from to]
-                        {:from from :to to :type :data-flow})
-                      (butlast ids)
-                      (rest ids)))]
+          nodes (into nodes tail-nodes)]
       {:nodes nodes
-       :edges edges
+       :edges (chain-edges nodes)
        :mode nil
        :input nil})))
 
@@ -1098,8 +1040,8 @@
    the body of a plain defn."
   [op-name node mode]
   (cond
-    (and (not= :defn mode) (pipeline-body-form? node)) (extract-pipeline-body-form node)
-    (let-body-form? node) (extract-let-body op-name node mode)
+    (and (not= :defn mode) (threading-form? node)) (extract-pipeline-body-form node)
+    (w/list-head= node "let") (extract-let-body op-name node mode)
     :else {:body-form {:kind :expr
                        :head (when (w/list-form? node) (w/first-sym-text node))
                        :raw (w/node-text node)
@@ -1232,8 +1174,7 @@
   (let [attr-keys (into [] (comp (map first) (filter #(and % (w/kwd? %))) (map w/node-text))
                         (when attr-node (map-pairs attr-node)))
         outs (if (and attr-node (map-get-kwd attr-node ":outputs"))
-               (extract-port-decl op-name attr-node ":outputs" attr-keys
-                                  (fn [op-n out-n cfg] (extract-typed-output op-n out-n cfg)))
+               (extract-port-decl op-name attr-node ":outputs" attr-keys)
                {:ports [{:name "result" :type "any"}] :diagnostics []})
         reads (extract-row-key-set op-name ":row-reads"
                                    (some-> attr-node (map-get-kwd ":row-reads")))
@@ -1327,8 +1268,7 @@
                            "(deftemplate <name> <body>) requires a symbol name"
                            span)]}
 
-      (or (nil? body-node) (not (w/list-form? body-node))
-          (not (contains? threading-macro-syms (w/first-sym-text body-node))))
+      (or (nil? body-node) (not (threading-form? body-node)))
       {:kind :error
        :diagnostics [(diag :def-malformed
                            (str "deftemplate '" (w/sym-name name-node)
@@ -1446,22 +1386,11 @@
                                 "model, nor a binding call")
                            span)]})))
 
-(defn- cgproj-meta?
-  "True when map-node carries ^:cgproj metadata."
-  [map-node]
+(defn- cgproj-meta? [map-node]
   (when-let [m (w/field map-node "meta")]
     (boolean
      (some (fn [c] (and (w/kwd? c) (= ":cgproj" (w/node-text c))))
            (w/named-children m)))))
-
-(defn- extract-overlay
-  "Returns {:overlay ... :diagnostics ...} for a ^:cgproj map_lit. The
-   overlay holds only the raw text and the span: the consumer (flow-graph)
-   decodes the node positions, and the parser does not check the keys."
-  [map-node]
-  {:overlay {:raw (w/node-text map-node)
-             :location (w/node->span map-node)}
-   :diagnostics []})
 
 (defn- forbidden-form-diagnostic
   "A :forbidden-form Diagnostic when the head of list-node is in
@@ -1490,10 +1419,6 @@
 (defn- block-form?
   [node]
   (w/list-head-in? node block-constructor-heads))
-
-(defn- clause-form?
-  [head node]
-  (w/list-head= node head))
 
 (defn- head-text
   "The head of a list form as source text, symbol or keyword.
@@ -1561,7 +1486,7 @@
   (let [text (w/node-text node)]
     {:kind :expr
      :head (head-text node)
-     :label (truncate-label (first-line text) 60)
+     :label (form-label text)
      :raw text
      :location (w/node->span node)}))
 
@@ -1578,7 +1503,7 @@
                     (expr-leaf node))
        :diagnostics diagnostics})
 
-    (clause-form? "println" node)
+    (w/list-head= node "println")
     {:body-form {:kind :output
                  :output (extract-output node)
                  :location (w/node->span node)}
@@ -1621,8 +1546,8 @@
   "The shape decode-block-body returns, plus `:catches` and `:finally`.
    The clause forms do not stay in the guarded body."
   [body-nodes]
-  (let [catch? (fn [n] (clause-form? "catch" n))
-        finally? (fn [n] (clause-form? "finally" n))
+  (let [catch? (fn [n] (w/list-head= n "catch"))
+        finally? (fn [n] (w/list-head= n "finally"))
         guarded (decode-block-body
                  (remove (fn [n] (or (catch? n) (finally? n))) body-nodes))
         catches (mapv extract-catch-clause (filter catch? body-nodes))
@@ -1661,7 +1586,7 @@
        :value (cond-> {:kind kind
                        :head head
                        :body (:body decoded)
-                       :label (truncate-label (first-line text) 60)
+                       :label (form-label text)
                        :raw text
                        :location span}
                 (= :bindings binder) (assoc :bindings bindings)
@@ -1752,13 +1677,17 @@
   "A top-level map_lit is legal only as the ^:cgproj overlay."
   [node]
   (if (cgproj-meta? node)
-    (let [{:keys [overlay diagnostics]} (extract-overlay node)]
-      {:kind :overlay :value overlay :diagnostics diagnostics})
+    ;; The overlay holds only the raw text and the span: the consumer
+    ;; (flow-graph) decodes the node positions, and the parser does not check
+    ;; the keys.
+    {:kind :overlay
+     :value {:raw (w/node-text node) :location (w/node->span node)}
+     :diagnostics []}
     ;; Nothing decodes a ^:inputs declaration: a ^:inputs map also gets this
     ;; error.
     {:kind :error
      :diagnostics [(diag :unclassified-top-level-form
-                         "top-level map literal is only legal as ^:cgproj overlay or ^:inputs declaration"
+                         "top-level map literal is only legal as the ^:cgproj overlay"
                          (w/node->span node))]}))
 
 (def ^:private kind->collection
@@ -1778,7 +1707,7 @@
   "Classifies a single top-level form into {:kind ... :value ...
    :diagnostics [...]}. The kinds are the keys of `kind->collection`
    plus :overlay, :module-ns, :comment and :error; :value is absent for
-   the last three."
+   the last two."
   [node]
   (cond
     (w/comment? node)
@@ -1806,10 +1735,7 @@
                               " is not allowed in a flow file")
                          (w/node->span node))]}))
 
-(defn- check-legacy-macro-namespace
-  "Emits a :legacy-macro-namespace diagnostic per require that pulls
-   item->/coll->/table-> from cg.dsl or cg.dsl.macros."
-  [requires]
+(defn- check-legacy-macro-namespace [requires]
   (->> requires
        (filter (fn [r]
                  (and (contains? legacy-macro-namespaces (:namespace r))
@@ -1820,14 +1746,10 @@
                           (:namespace r))
                      (:location r))))))
 
-(defn function-call-bindings
-  "The `:bindings` of `cg-flow` whose body shape is `:function_call`."
-  [cg-flow]
+(defn function-call-bindings [cg-flow]
   (filterv #(= :function_call (:body-shape %)) (:bindings cg-flow)))
 
-(defn threading-macro-bindings
-  "The `:bindings` of `cg-flow` whose body shape is `:threading_macro`."
-  [cg-flow]
+(defn threading-macro-bindings [cg-flow]
   (filterv #(= :threading_macro (:body-shape %)) (:bindings cg-flow)))
 
 (defn extract
@@ -1835,7 +1757,6 @@
 
      {:requires       [<NamespaceImport> ...]
       :loaded-modules [<LoadModule> ...]
-      :inputs         [<InputDecl> ...]
       :parameters     [<Parameter> ...]
       :bindings       [<Binding> ...]
       :operations     [<OperationDecl> ...]
@@ -1855,7 +1776,6 @@
    (let [opaque? (boolean (:opaque-blocks opts))
         initial {:requires []
                  :loaded-modules []
-                 :inputs []
                  :parameters []
                  :bindings []
                  :operations []

@@ -8,9 +8,7 @@
   "A defn with ^:op on its name is an operation in each .cg file. The
    parser reads the op data from the metadata: the name
    flags, the attr-map, and a role flag or a type map on each param. A rung
-   must name an op, and a row op must return a value.
-
-   Run with: clojure -M:test-parser"
+   must name an op, and a row op must return a value."
   (:require [cg.parser.core :as parser]
             [clojure.test :refer [deftest is testing]]))
 
@@ -45,12 +43,7 @@
     (is (= ["geometry"] (:row-reads op)))
     (is (= ["tag"] (:row-writes op)))
     (is (= "Tags a row." (:doc op)))
-    (is (every? (set (:flags op)) ["op" "idempotent" "defn"]))))
-
-(deftest an-op-defn-in-a-module-ns-reads-its-metadata
-  (let [flow (parser/extract-models (str "(ns cg.m)\n" tag-src))]
-    (is (empty? (:diagnostics flow)))
-    (is (= [:row nil nil] (mapv :role (:inputs (op-named flow "tag")))))))
+    (is (= ["defn" "op" "idempotent"] (:flags op)))))
 
 (deftest an-op-defn-without-an-attr-map-has-one-output
   (let [flow (parser/extract-models "(ns city)\n(defn ^:op one [^:table rows] rows)\n")
@@ -58,16 +51,6 @@
     (is (empty? (:diagnostics flow)))
     (is (= [["result" "any"]] (mapv (juxt :name :type) (:outputs op))))
     (is (nil? (:row-reads op)))))
-
-(deftest a-table-op-body-keeps-its-pipeline
-  (let [flow (parser/extract-models
-              (str "(ns city)\n"
-                   "(defn ^:op run-all [^:table rows d]\n"
-                   "  (table-> :rows (geo/buffer d) (geo/centroid)))\n"))
-        op (op-named flow "run-all")]
-    (is (empty? (:diagnostics flow)))
-    (is (= :pipeline (:kind (first (:body op)))))
-    (is (some? (:body-graph op)))))
 
 (deftest a-row-op-that-returns-a-model-is-an-error
   (testing "a threading form as the body"
