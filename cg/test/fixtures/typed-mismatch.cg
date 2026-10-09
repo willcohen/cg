@@ -1,14 +1,5 @@
 ;; typed-mismatch.cg: fixture for the parser checks.
 ;;
-;; Plants one of each kind of checker diagnostic:
-;;   - :unresolved-op           — unknown head 'totally/missing'.
-;;   - :op-arity-mismatch       — geo/buffer with zero args, ds/load-geojson with 3.
-;;   - :type-mismatch           — string where number expected.
-;;   - :pipeline-type-mismatch  — ds/transform-crs (:dataset out) feeding geo/buffer
-;;                                (:feature row in).
-;;   - :op-output-mismatch      — a table op declares :number output but its body
-;;                                terminal produces :feature.
-;;
 ;; This fixture is intentionally non-conforming. Tests assert the
 ;; presence of each diagnostic code; they do not assert exact counts
 ;; so adding new lines here is safe as long as the codes remain

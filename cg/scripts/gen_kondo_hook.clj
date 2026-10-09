@@ -36,7 +36,7 @@
 
 (defn placeholder-args
   "Rename one argument vector to positional placeholders. The hook gives every
-   generated defn a nil body, so a name that reads as a binding makes
+   generated defn an empty body, so a name that reads as a binding makes
    :unused-binding fire at each call site. The leading underscore stops that.
    A variadic tail keeps its position."
   [args]

@@ -5,9 +5,11 @@
 ;; SPDX-License-Identifier: Apache-2.0 WITH LLVM-exception
 
 (ns cg.metadata
-  "Parse the visual metadata of a .cg file (EDN after a ^:cgproj tag, read as
-  data and never evaluated) and merge it into Flow Graphs. The keys under
-  :nodes are not node ids: see find-node-key-for-metadata."
+  "Parse the visual metadata of a .cg file (EDN after a ^:cgproj tag) and
+  merge it into Flow Graphs. cg.util/read-edn-string reads the EDN. On the
+  JVM it reads the EDN as data. On JS it compiles the EDN with squint and
+  evaluates it. The keys under :nodes are not node ids: see
+  find-node-key-for-metadata."
   (:require [cg.util :as util]
             [clojure.string :as str]))
 

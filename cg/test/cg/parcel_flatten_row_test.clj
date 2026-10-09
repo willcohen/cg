@@ -9,7 +9,7 @@
    cache and an export store.
 
    analyze-parcel puts the lot measurements under :metrics. The flat row
-   gives seven of them their own columns, because the reports read
+   gives eight of them their own columns, because the reports read
    :lot-area at the top level. It keeps the scalar values,
    gives a keyword as its name, and drops the nested values."
   (:require [clojure.test :refer [deftest is testing use-fixtures]]

@@ -1,6 +1,4 @@
 ;; threading-macros.cg - Demonstrates the CG threading macros.
-;;
-;; Run with: cg run test/fixtures/threading-macros.cg --data parcels=<path>
 
 (require '[cg.macros :refer [item-> coll->]])
 (require '[cg.geo :as geo])

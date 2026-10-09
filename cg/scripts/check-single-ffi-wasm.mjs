@@ -1,4 +1,5 @@
-// Fail the install when more than one copy of ffi-wasm (clj-native) is present.
+// Warn when more than one copy of ffi-wasm (clj-native) is present. Fail the
+// install when no copy is present.
 //
 // clj-native must be a singleton: dispatch holds per-library registries and the
 // pool ref, so a second copy gives a second set of registries. The two ways a
