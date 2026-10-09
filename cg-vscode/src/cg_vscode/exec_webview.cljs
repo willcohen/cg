@@ -70,8 +70,7 @@
   (post-status! panel "jvm runtime selected, backend unreachable"))
 
 (defn ^:async with-tab-session!
-  "(f send sid) with the JVM session of the tab on `port`, made when there is
-   none, and again with a new session when `f` gives {:expired true}."
+  "(f send sid) with the JVM session of the tab on `port`. See jvm/with-session."
   [port f]
   (let [send (jvm-client/send-to port nil)]
     (await (jvm/with-session send !map-session (fn [sid] (f send sid))))))
@@ -116,8 +115,7 @@
         port @!jvm-port
         vars @!last-vars]
     (when (and sid port vars)
-      (swap! !refetch-gen inc)
-      (let [gen @!refetch-gen]
+      (let [gen (swap! !refetch-gen inc)]
         (try
           (let [r (await (jvm-client/fetch-layers (jvm-client/send-to port nil) sid vars
                                                   {:bbox bbox :limit jvm-client/default-row-limit}))]
@@ -282,14 +280,13 @@
     "cg/read-module"      (answer-module-read! panel msg)
     "cg/viewport-settled" (handle-viewport-settled! panel (.-bbox msg))
     "cg/repl-result"      (answer-repl! msg)
-    "cg/run-started"      (relay! !state msg false)
-    "cg/trace-event"      (relay! !state msg false)
+    ("cg/run-started" "cg/trace-event") (relay! !state msg false)
     "cg/run-ended"        (relay! !state msg true)
     "cg/run-error"        (do (relay! !state msg true)
                               (vscode/window.showErrorMessage (str "CG map run failed: " (.-message msg))))
     ;; Before cg/ready the page could not load the JS backend, and a run that
     ;; waits for it never starts.
-    ;; Only the boot failure has no :level. A console line of the page has one.
+    ;; Before cg/ready, only the boot failure has no :level. A console line of the page has one.
     "cg/map-error"        (if (or @!ready (.-level msg))
                             (run-status/post! !state (:uri (first @!run-docs))
                                               (relay/page-error-output msg))
@@ -343,10 +340,7 @@
 (defn- ensure-panel!
   "`keep-focus?` leaves the focus in the active editor."
   [!state keep-focus?]
-  (or @!panel
-      (let [panel (build-panel! !state keep-focus?)]
-        (reset! !ready false)
-        (reset! !panel panel))))
+  (or @!panel (reset! !panel (build-panel! !state keep-focus?))))
 
 (defn- with-active-cg! [^js panel f]
   (if-let [^js uri (doc/active-cg-uri)]

@@ -121,13 +121,11 @@
       (when (= "cg/run-started" (aget msg "type")) (.show ch true))
       (.append ch text))))
 
-(defn post-to! [!state ^js panel ^js msg]
-  (when panel (.. panel -webview (postMessage msg)))
+(defn post! [!state uri-str ^js msg]
+  (when-let [^js panel (get-in @!state [:editor/panels uri-str])]
+    (.. panel -webview (postMessage msg)))
   (note! !state msg)
   (append-to-channel! !state msg))
-
-(defn post! [!state uri-str ^js msg]
-  (post-to! !state (get-in @!state [:editor/panels uri-str]) msg))
 
 (defn requested!
   "A request with no line after it stopped before its run started."

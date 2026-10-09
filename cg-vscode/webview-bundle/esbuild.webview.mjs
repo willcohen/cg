@@ -8,7 +8,6 @@
 // to asWebviewUri. cg-app builds the canvas bundle (`bb bundle:canvas`).
 import { mkdirSync, copyFileSync, existsSync } from 'fs';
 
-mkdirSync('dist/webview', { recursive: true });
 mkdirSync('dist/webview/cg-brand', { recursive: true });
 
 copyFileSync('node_modules/@xyflow/react/dist/style.css',

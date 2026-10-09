@@ -4,7 +4,6 @@
 // See LICENSE for license information.
 // SPDX-License-Identifier: Apache-2.0 WITH LLVM-exception
 
-// Compile each cljs.test namespace in place to .mjs and run it with node.
 // Each file runs its deftests and exits non-zero on a failure.
 import { readdirSync } from 'node:fs';
 import { join } from 'node:path';

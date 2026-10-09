@@ -219,11 +219,9 @@
                                       target-uri (if other-file?
                                                    (vscode/Uri.file path)
                                                    (.-uri document))
-                                      target-uri-str (str target-uri)
                                       existing-editor
                                       (some (fn [^js ed]
-                                              (when (= target-uri-str
-                                                       (str (.. ed -document -uri)))
+                                              (when (= (str target-uri) (str (.. ed -document -uri)))
                                                 ed))
                                             vscode/window.visibleTextEditors)
                                       reuse-column (some-> existing-editor .-viewColumn)
@@ -345,10 +343,9 @@
 
 (defn init-editor! [!state]
   (let [extension-uri (.. ^js (:extension/context @!state) -extensionUri)
-        ^js coll (diag/create-collection!)
+        ^js coll (diag/create-collection! "cg")
         ^js kondo-coll (diag/create-collection! "clj-kondo")]
-    (swap! !state assoc :editor/diagnostic-collection coll)
-    (swap! !state assoc :editor/kondo-collection kondo-coll)
+    (swap! !state assoc :editor/diagnostic-collection coll :editor/kondo-collection kondo-coll)
     (lc/push-disposable! !state coll)
     (lc/push-disposable! !state kondo-coll)
     (register-document-listeners! !state)

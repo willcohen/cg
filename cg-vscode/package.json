@@ -117,7 +117,7 @@
           ],
           "enumDescriptions": [
             "Always use the JVM REST backend",
-            "Always use the in-process JS runtime",
+            "Always run in the CG Map tab (JS)",
             "Auto-detect: JVM if REST server is reachable, otherwise JS"
           ],
           "description": "Which runtime to use for CG eval operations"

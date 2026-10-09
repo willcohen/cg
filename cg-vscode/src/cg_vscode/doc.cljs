@@ -8,30 +8,16 @@
   "Host-side helpers for finding the .cg document the user is looking at."
   (:require ["vscode" :as vscode]))
 
-(defn cg-uri?
-  "True when `u` is a Uri pointing at a .cg file."
-  [^js u]
-  (boolean (and u
-                (let [p (.-fsPath u)]
-                  (and (string? p) (.endsWith p ".cg"))))))
+(defn cg-uri? [^js u]
+  (boolean (some-> u .-fsPath (.endsWith ".cg"))))
 
 (defn active-cg-uri
   "The Uri of the .cg document in view, or nil. It also looks at the tabs,
    because `activeTextEditor` is nil while a webview has focus."
   []
-  (or
-   (let [^js u (some-> vscode/window.activeTextEditor .-document .-uri)]
-     (when (cg-uri? u) u))
-   (let [^js u (some-> vscode/window.tabGroups.activeTabGroup
-                       .-activeTab .-input .-uri)]
-     (when (cg-uri? u) u))
-   (some (fn [^js ed]
-           (let [^js u (some-> ed .-document .-uri)]
-             (when (cg-uri? u) u)))
-         (or vscode/window.visibleTextEditors #js []))
-   (some (fn [^js grp]
-           (some (fn [^js tab]
-                   (let [^js u (some-> tab .-input .-uri)]
-                     (when (cg-uri? u) u)))
-                 (or (.-tabs grp) #js [])))
-         (or (some-> vscode/window.tabGroups .-all) #js []))))
+  (let [cg-only (fn [^js u] (when (cg-uri? u) u))]
+    (or (cg-only (some-> vscode/window.activeTextEditor .-document .-uri))
+        (cg-only (some-> vscode/window.tabGroups.activeTabGroup .-activeTab .-input .-uri))
+        (some (fn [^js ed] (cg-only (some-> ed .-document .-uri))) vscode/window.visibleTextEditors)
+        (some (fn [^js grp] (some (fn [^js tab] (cg-only (some-> tab .-input .-uri))) (.-tabs grp)))
+              vscode/window.tabGroups.all))))

@@ -5,7 +5,7 @@
 ;; SPDX-License-Identifier: Apache-2.0 WITH LLVM-exception
 
 (ns cg-vscode.jvm-client-test
-  "The SSE frame parser of the JVM client. No backend."
+  "The SSE parser and the trace stream of the JVM client. No backend."
   (:require [cljs.test :as t :refer [deftest is]]
             ["child_process" :as cp]
             ["../../src/cg_vscode/runtime/jvm_client.mjs" :as jvm]))

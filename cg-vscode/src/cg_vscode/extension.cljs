@@ -32,8 +32,8 @@
     (swap! !state assoc :run-status/bar bar)))
 
 (defn- create-run-channel!
-  "The CG Run output channel: the start, the end line and the failure of each
-   run, on both runtimes. The CG channel keeps the log of the extension."
+  "The CG Run output channel: the lines of each run, on both runtimes. The CG
+   channel keeps the log of the extension."
   [!state]
   (let [^js ch (vscode/window.createOutputChannel "CG Run")]
     (lc/push-disposable! !state ch)
@@ -71,9 +71,7 @@
     (editor/init-editor! !state)
     (editor/setup-split-view! !state)
 
-    (.appendLine channel "CG: active")
-
-    #js {:v1 {}}))
+    (.appendLine channel "CG: active")))
 
 (defn ^:export deactivate []
   (runtime/stop-backend!)

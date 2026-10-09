@@ -147,8 +147,7 @@
   (let [^js bar (:runtime/status-bar @!state)
         choice (:runtime/choice @!state)
         resolved (:runtime/resolved @!state)]
-    (when bar
-      (set! (.-text bar) (lane/chip-text choice resolved)))))
+    (set! (.-text bar) (lane/chip-text choice resolved))))
 
 (defn- create-status-bar-item [!state]
   (let [^js bar (vscode/window.createStatusBarItem vscode/StatusBarAlignment.Right 100)]
@@ -157,8 +156,7 @@
     (set! (.-command bar) "cg.setRuntime")
     (.show bar)
     (lc/push-disposable! !state bar)
-    (swap! !state assoc :runtime/status-bar bar)
-    bar))
+    (swap! !state assoc :runtime/status-bar bar)))
 
 (defn- pick-runtime []
   (vscode/window.showQuickPick

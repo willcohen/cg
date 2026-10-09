@@ -5,15 +5,14 @@
 ;; SPDX-License-Identifier: Apache-2.0 WITH LLVM-exception
 
 (ns cg-vscode.calva-test
-  (:require [cljs.test :as t :refer [deftest is testing]]
+  (:require [cljs.test :as t :refer [deftest is]]
             ["../../src/cg_vscode/repl/calva.mjs" :as calva]))
 
 (deftest the-ns-of-a-file-is-the-name-in-its-ns-form
   (is (= "boston" (calva/file-ns "(ns boston\n  \"Doc.\"\n  (:require [cg.dataset :as ds]))")))
   (is (= "cg.parcel" (calva/file-ns ";; a comment\n\n(ns ^:no-doc cg.parcel)")))
-  (testing "no ns form, or an ns form after another form"
-    (is (nil? (calva/file-ns "(require '[cg.dataset :as ds])\n(def x 1)")))
-    (is (nil? (calva/file-ns "(def x 1)\n(ns late)")))))
+  (is (nil? (calva/file-ns "(require '[cg.dataset :as ds])\n(def x 1)")))
+  (is (nil? (calva/file-ns "(def x 1)\n(ns late)"))))
 
 (deftest the-jvm-repl-is-named-claims-cg-files-and-starts-in-the-file-ns
   (let [s (calva/connect-sequence "jvm" "/w/proj" "boston")]

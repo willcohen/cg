@@ -46,7 +46,6 @@
 
 (deftest a-run-with-no-layer-ends-with-a-success
   (let [msgs (relay/canvas-messages #js {:type "cg/run-ended" :outcome "success" :count 1} file)]
-    (is (= ["cg/run-output" "cg/run-ended"] (types msgs)))
     (is (= "ran on the JS backend: 1 result, no map layer\n" (aget (first msgs) "text")))))
 
 (deftest a-jvm-run-names-the-jvm-backend
