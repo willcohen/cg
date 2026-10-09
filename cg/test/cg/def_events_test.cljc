@@ -9,14 +9,13 @@
    top-level def of the file. The pid is binding-<name>, the id of the loader
    card of the def. Other evaluations emit no def events."
   #?(:clj (:require [clojure.test :refer [deftest is testing]]
-                    [clojure.core.async :as a]
                     [cg.run :as run]
-                    [cg.trace :as trace])
+                    [cg.test-runner :as runner :refer [after]])
      :cljs (:require [cljs.test :refer [deftest is testing]]
                      ["../../src/cg/run.mjs" :as run]
                      ["../../src/cg/trace_js.mjs" :as trace]
                      ["./wasmts_setup.mjs" :refer [init_wasmts_BANG_]]
-                     ["./test_runner.mjs" :refer [run_tests_and_exit_BANG_]])))
+                     ["./test_runner.mjs" :refer [run_tests_and_exit_BANG_ after]])))
 
 #?(:clj (set! *warn-on-reflection* true))
 
@@ -52,71 +51,42 @@
        (mapv (fn [e] [(:kind e) (:pid e)]))))
 
 #?(:clj
-   (defn- collect-events [f]
-     (let [ch (a/chan 1024)]
-       (trace/tap-trace ch)
-       (try
-         (try (f) (catch Exception _ nil))
-         (Thread/sleep 150)
-         (loop [acc []]
-           (if-let [e (a/poll! ch)] (recur (conj acc e)) acc))
-         (finally
-           (trace/untap-trace ch))))))
+   (defn- collect-events
+     "cg.test-runner/collect-events, but a throw of `f` counts as an end."
+     [f]
+     (runner/collect-events #(try (f) (catch Exception _ nil)))))
 
 #?(:cljs
    (defn ^:async collect-events
-     "Resolve to the events that the Promise of (f) emitted. A rejection
-      counts as an end."
+     "Resolve to the events that (f) emitted. f can give a Promise. A throw
+      or a rejection counts as an end."
      [f]
      (let [events (atom [])
            listener (trace/add-trace-listener (fn [e] (swap! events conj e)))]
        (try
-         (await (.catch (f) (fn [_] nil)))
+         (try (await (f)) (catch :default _ nil))
          @events
          (finally
            (trace/remove-trace-listener listener))))))
 
-#?(:cljs
-   (do
-     (defn ^:async run-two-defs! []
-       (is (= two-defs-events
-              (def-events (await (collect-events #(run/run-file two-defs {:model "buffered"})))))))
-
-     (defn ^:async run-module! []
-       (is (= two-defs-events
-              (def-events (await (collect-events
-                                  #(run/run-file two-defs-in-a-module {:model "buffered"})))))))
-
-     (defn ^:async run-failing! []
-       (is (= [["def-start" "binding-ok"] ["def-complete" "binding-ok"]
-               ["def-start" "binding-bad"] ["def-error" "binding-bad"]]
-              (def-events (await (collect-events #(run/run-file failing-def)))))))
-
-     (defn ^:async run-eval-only! []
-       (is (= [] (def-events (await (collect-events
-                                     #(js/Promise.resolve (run/eval-cg "(def z 1)"))))))))))
-
 (deftest each-def-of-a-run-emits-start-and-complete
-  #?(:clj (is (= two-defs-events
-                 (def-events (collect-events #(run/run-file two-defs {:model "buffered"})))))
-     :cljs (run-two-defs!)))
+  (after (collect-events #(run/run-file two-defs {:model "buffered"}))
+         #(is (= two-defs-events (def-events %)))))
 
 (deftest the-defs-of-a-module-emit-their-events
-  #?(:clj (is (= two-defs-events
-                 (def-events (collect-events
-                              #(run/run-file two-defs-in-a-module {:model "buffered"})))))
-     :cljs (run-module!)))
+  (after (collect-events #(run/run-file two-defs-in-a-module {:model "buffered"}))
+         #(is (= two-defs-events (def-events %)))))
 
 (deftest a-failed-def-emits-def-error
-  #?(:clj (is (= [["def-start" "binding-ok"] ["def-complete" "binding-ok"]
+  (after (collect-events #(run/run-file failing-def))
+         #(is (= [["def-start" "binding-ok"] ["def-complete" "binding-ok"]
                   ["def-start" "binding-bad"] ["def-error" "binding-bad"]]
-                 (def-events (collect-events #(run/run-file failing-def)))))
-     :cljs (run-failing!)))
+                 (def-events %)))))
 
 (deftest eval-cg-emits-no-def-events
   (testing "only the run of a file lights the loader cards"
-    #?(:clj (is (= [] (def-events (collect-events #(run/eval-cg "(def z 1)")))))
-       :cljs (run-eval-only!))))
+    (after (collect-events #(run/eval-cg "(def z 1)"))
+           #(is (= [] (def-events %))))))
 
 #?(:cljs (-> (init_wasmts_BANG_)
              (.then (fn [_] (run_tests_and_exit_BANG_ "cg.def-events-test")))))

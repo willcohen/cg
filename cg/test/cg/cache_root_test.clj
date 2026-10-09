@@ -10,24 +10,14 @@
    map."
   (:require [clojure.java.io :as io]
             [clojure.test :refer [deftest is]]
+            [cg.test-runner :refer [with-system-property]]
             [cg.util :as util]))
 
 (set! *warn-on-reflection* true)
 
-(defn with-cache-dir-property
-  "Call f with the cg.cache.dir system property set to v (nil clears it),
-   then put the old value back."
-  [v f]
-  (let [old (System/getProperty "cg.cache.dir")]
-    (try
-      (if v
-        (System/setProperty "cg.cache.dir" v)
-        (System/clearProperty "cg.cache.dir"))
-      (f)
-      (finally
-        (if old
-          (System/setProperty "cg.cache.dir" old)
-          (System/clearProperty "cg.cache.dir"))))))
+;; Public, because ensure_dataset_test uses it too.
+(defn with-cache-dir-property [v f]
+  (with-system-property "cg.cache.dir" v f))
 
 (deftest the-home-cache-is-the-default
   (with-cache-dir-property nil

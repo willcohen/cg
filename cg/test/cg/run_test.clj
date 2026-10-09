@@ -17,6 +17,7 @@
             [cg.dataset :as dataset]
             [cg.trace :as trace]
             [cg.macros :refer [table->]]
+            [cg.test-runner :refer [poll]]
             [sci.core :as sci]
             [tech.v3.dataset :as ds])
   (:import [org.locationtech.jts.geom Geometry LineString Point Polygon TopologyException]))
@@ -83,15 +84,13 @@
   "The :item-id of each worker-busy-end event whose id is in `ids`. Polls,
    because recent-events drains the trace channel on another thread."
   [ids]
-  (loop [tries 0]
-    (let [seen (->> (trace/recent-events)
-                    (filter #(= "worker-busy-end" (:kind %)))
-                    (keep :item-id)
-                    (filter ids)
-                    set)]
-      (if (or (= ids seen) (>= tries 40))
-        seen
-        (do (Thread/sleep 50) (recur (inc tries)))))))
+  (poll #(->> (trace/recent-events)
+              (filter (fn [e] (= "worker-busy-end" (:kind e))))
+              (keep :item-id)
+              (filter ids)
+              set)
+        #(= ids %)
+        40))
 
 (deftest run-component-labels-trace-rows-by-row-id-keys
   ;; The fused per-row chain tags each row's worker-busy events with an
@@ -115,17 +114,15 @@
    event for each id arrives, because recent-events drains the trace
    channel on another thread."
   [kind ids]
-  (loop [tries 0]
-    (let [evs (filterv #(and (= kind (:kind %)) (contains? ids (:item-id %)))
-                       (trace/recent-events))]
-      (if (or (>= (count evs) (count ids)) (>= tries 60))
-        evs
-        (do (Thread/sleep 50) (recur (inc tries)))))))
+  (poll #(filterv (fn [e] (and (= kind (:kind e)) (contains? ids (:item-id e))))
+                  (trace/recent-events))
+        #(>= (count %) (count ids))
+        60))
 
 (deftest fused-chain-runs-each-row-once-on-the-compute-pool
   ;; The fused step splits the rows into one chunk per compute worker and
-  ;; runs the whole chain on each row. The nh spines depend on this shape:
-  ;; the study compute ran 7 rungs as one proc, 280 rows, 35 on each of 8
+  ;; runs the whole chain on each row. A downstream study depends on this
+  ;; shape: one proc for a chain of rungs, its rows spread over the compute
   ;; workers.
   (let [n     64
         ids   (mapv #(str "fp-" %) (range n))
@@ -239,12 +236,9 @@
         ;; recent-events drains the trace channel asynchronously; poll until
         ;; the terminal map-groups-complete lands (it is put after every
         ;; per-group event, so its arrival means the per-group events are in).
-        events (loop [tries 0]
-                 (let [evs (filterv mine? (trace/recent-events))]
-                   (if (or (some #(= "map-groups-complete" (:kind %)) evs)
-                           (>= tries 60))
-                     evs
-                     (do (Thread/sleep 50) (recur (inc tries))))))
+        events (poll #(filterv mine? (trace/recent-events))
+                     (fn [evs] (some #(= "map-groups-complete" (:kind %)) evs))
+                     60)
         of-kind (fn [k] (filterv #(= k (:kind %)) events))]
     (is (map? out) "into demotes the groups container to a keyed map")
     (is (= #{"a" "b"} (set (keys out))) "one result per group, keyed by group")
@@ -347,11 +341,7 @@
         out (run/run-model (table-> :input (rc-incr)) {:input d} {:timeout-ms 15000})
         added (fn [] (remove before (keys @dataset/dataset-context-store)))
         ;; flow/stop does not wait for the procs to stop.
-        left (loop [tries 0]
-               (let [ids (added)]
-                 (if (or (empty? ids) (>= tries 50))
-                   ids
-                   (do (Thread/sleep 50) (recur (inc tries))))))]
+        left (poll added empty? 50)]
     (is (= [2 4] (mapv :doubled (dataset/rows out :as-maps))))
     (is (= 0 (count left)) "the run unregisters each context that it registers")))
 

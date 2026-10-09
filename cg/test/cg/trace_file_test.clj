@@ -11,6 +11,7 @@
   (:require [clojure.test :refer [deftest is]]
             [cg.featureserver-pbf :as pbf]
             [cg.trace :as trace]
+            [cg.test-runner :refer [poll with-system-property]]
             [clojure.java.io :as io]
             [clojure.string :as str])
   (:import (java.nio.file Files)
@@ -18,27 +19,25 @@
 
 (set! *warn-on-reflection* true)
 
-(defn- with-trace-dir-property
-  "Call f with the cg.trace.dir system property set to v (nil clears it), then
-   put the old value back."
-  [v f]
-  (let [old (System/getProperty "cg.trace.dir")]
-    (try
-      (if v
-        (System/setProperty "cg.trace.dir" v)
-        (System/clearProperty "cg.trace.dir"))
-      (f)
-      (finally
-        (if old
-          (System/setProperty "cg.trace.dir" old)
-          (System/clearProperty "cg.trace.dir"))))))
-
 (defn- file-names [dir]
   (set (.list (io/file dir))))
 
+(defn- trace-text
+  "The text of the trace file in `dir` whose name starts with `prefix`, or nil.
+   The file writer writes on a go block, so this polls until the text holds
+   flow-complete, for 5 s at most."
+  [dir prefix]
+  (poll #(some->> (file-names dir)
+                  (filter (fn [n] (str/starts-with? n prefix)))
+                  first
+                  (io/file dir)
+                  slurp)
+        #(str/includes? (str %) "flow-complete")
+        100))
+
 (deftest no-folder-named-writes-no-file
   (when-not (System/getenv "CG_TRACE_DIR")
-    (with-trace-dir-property nil
+    (with-system-property "cg.trace.dir" nil
       (fn []
         (let [before  (file-names "tmp/cg-traces")
               session (trace/open-file-writer! "trace-file-test")]
@@ -50,7 +49,7 @@
 (deftest the-property-names-the-folder
   (let [dir (.toFile (Files/createTempDirectory "cg-trace-file-test"
                                                 (make-array FileAttribute 0)))]
-    (with-trace-dir-property (.getPath dir)
+    (with-system-property "cg.trace.dir" (.getPath dir)
       (fn []
         (let [session (trace/open-file-writer! "trace-file-test")]
           (trace/close-file-writer! session)
@@ -67,12 +66,10 @@
   (let [dir (.toFile (Files/createTempDirectory "cg-trace-file-test"
                                                 (make-array FileAttribute 0)))
         page (pbf-fixture "point")]
-    (with-trace-dir-property (.getPath dir)
+    (with-system-property "cg.trace.dir" (.getPath dir)
       (fn []
         (pbf/load-pages (fn [_] page) {:name "fetch-file-test"})
-        (Thread/sleep 200)
-        (let [f (first (filter #(str/starts-with? % "fetch-file-test-") (file-names dir)))
-              text (when f (slurp (io/file dir f)))]
+        (let [text (trace-text dir "fetch-file-test-")]
           (is (str/includes? (str text) "fetch-file-test__fetch") "the fetch events")
           (is (str/includes? (str text) "rows-progress") "the row count"))))))
 
@@ -81,15 +78,15 @@
   (let [dir (.toFile (Files/createTempDirectory "cg-trace-file-test"
                                                 (make-array FileAttribute 0)))
         page (pbf-fixture "point")]
-    (with-trace-dir-property (.getPath dir)
+    (with-system-property "cg.trace.dir" (.getPath dir)
       (fn []
         (trace/call-with-file-writer
          "outer-test"
          #(pbf/load-pages (fn [_] page) {:name "fetch-nested-test"}))
-        (Thread/sleep 200)
-        (let [names (file-names dir)
+        (let [text (trace-text dir "outer-test-")
+              names (file-names dir)
               f (first (filter #(str/starts-with? % "outer-test-") names))]
           (is (= #{"latest.jsonl"} (set (remove #(= f %) names)))
               "the fetch opened no file of its own")
-          (is (str/includes? (slurp (io/file dir f)) "fetch-nested-test__fetch")
+          (is (str/includes? (str text) "fetch-nested-test__fetch")
               "the fetch events are in the outer file"))))))

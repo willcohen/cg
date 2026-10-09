@@ -8,9 +8,11 @@
   "Cross-cutting invariant checks driven by programmatically constructed
    CgFlow maps. These tests bypass extract entirely, exercising
    validate's uniqueness and reference-resolution rules in isolation."
-  (:require [cg.parser.validate :as validate]
-            #?(:clj [clojure.test :refer [deftest is testing]]
-               :cljs [cljs.test :refer-macros [deftest is testing]])))
+  #?(:clj (:require [clojure.test :refer [deftest is testing]]
+                    [cg.parser.validate :as validate])
+     :cljs (:require [cljs.test :refer [deftest is testing]]
+                     ["../../../src/cg/parser/validate.mjs" :as validate]
+                     ["../test_runner.mjs" :refer [run_tests_and_exit_BANG_]])))
 
 #?(:clj (set! *warn-on-reflection* true))
 
@@ -22,11 +24,8 @@
    :head-sym head-sym :args [] :location empty-span})
 
 (defn- threading-binding
-  ([name mode input] (threading-binding name mode input []))
-  ([name mode input ops]
-   {:name name :body-shape :threading_macro
-    :mode mode :input input :is-template true
-    :ops ops :config nil :location empty-span}))
+  ([name] (threading-binding name []))
+  ([name ops] {:name name :body-shape :threading_macro :ops ops :location empty-span}))
 
 (defn- diagnostic-codes [flow]
   (into #{} (map :code) (:diagnostics flow)))
@@ -36,8 +35,8 @@
 
 (deftest detects-duplicate-threading-binding-names
   (testing "two threading-macro bindings sharing a name yield :duplicate-binding-name"
-    (let [flow {:bindings [(threading-binding "m" :item "parcels")
-                           (threading-binding "m" :coll "parcels")]
+    (let [flow {:bindings [(threading-binding "m")
+                           (threading-binding "m")]
                 :diagnostics []}
           out (validate/validate flow)]
       (is (= 1 (get (code-counts out) :duplicate-binding-name))
@@ -46,7 +45,7 @@
 (deftest detects-unknown-map-component
   (testing "a map component naming no declared op yields :unknown-component"
     (let [flow {:bindings [(threading-binding
-                            "out" :table "ps"
+                            "out"
                             [{:qualified-name "group-by" :args [] :location empty-span}
                              {:qualified-name "map" :component "nope"
                               :args [] :location empty-span}])]
@@ -56,7 +55,7 @@
   (testing "a map component naming a declared op is clean"
     (let [flow {:operations [{:name "f" :location empty-span}]
                 :bindings [(threading-binding
-                            "out" :table "ps"
+                            "out"
                             [{:qualified-name "map" :component "f"
                               :args [] :location empty-span}])]
                 :diagnostics []}
@@ -81,7 +80,7 @@
     (let [flow {:parameters [{:name "p" :value {:kind :number :raw "1"}
                               :config nil :location empty-span}]
                 :bindings [(function-binding "b" "ds/load-geojson")
-                           (threading-binding "m" :item "parcels")]
+                           (threading-binding "m")]
                 :diagnostics []}
           out (validate/validate flow)]
       (is (= 0 (count (:diagnostics out)))))))
@@ -98,8 +97,10 @@
 (deftest detects-duplicate-cross-shape-binding-names
   (testing "a function-call binding and a threading-macro binding sharing a name yield :duplicate-binding-name"
     (let [flow {:bindings [(function-binding "y" "ds/load-geojson")
-                           (threading-binding "y" :item "parcels")]
+                           (threading-binding "y")]
                 :diagnostics []}
           out (validate/validate flow)]
       (is (contains? (diagnostic-codes out) :duplicate-binding-name)
-          "Stage D unified Bindings across both body shapes — name uniqueness is one-namespace"))))
+          "the two body shapes share one namespace of binding names"))))
+
+#?(:cljs (run_tests_and_exit_BANG_ "cg.parser.validate-test"))

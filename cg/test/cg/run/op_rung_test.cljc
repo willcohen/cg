@@ -16,12 +16,13 @@
    JVM."
   #?(:clj (:require [clojure.test :refer [deftest is testing]]
                     [clojure.string :as str]
-                    [cg.run :as run])
+                    [cg.run :as run]
+                    [cg.test-runner :refer [after error-message]])
      :cljs (:require [cljs.test :refer [deftest is testing]]
                      [clojure.string :as str]
                      ["../../../src/cg/run.mjs" :as run]
                      ["../../../src/cg/parser/core.mjs" :as parser]
-                     ["../test_runner.mjs" :refer [run_tests_and_exit_BANG_]])))
+                     ["../test_runner.mjs" :refer [run_tests_and_exit_BANG_ after error-message]])))
 
 #?(:clj (set! *warn-on-reflection* true))
 
@@ -69,40 +70,23 @@
   (is (= [9 19] (vec result))))
 
 #?(:cljs
-   (do
-     (defn ^:async run-same-eval! []
-       (let [m (run/eval-cg same-eval-src)]
-         (check-same-eval! m (await (run/run-model m {:xs [0]} {})))))
-
-     (defn ^:async run-row-model! []
-       (is (row-model-error?
-            (try (await (run/run-model (run/eval-cg row-model-src) {:xs [1]} {}))
-                 nil
-                 (catch :default e (.-message e))))))
-
-     (defn ^:async run-option-map! []
-       (let [ms (run/eval-cg option-map-src)
-             results #js []]
-         (doseq [m ms]
-           (.push results (await (run/run-model m {:xs [1 2]} {}))))
-         (check-option-map! (vec results))))
-
-     (defn ^:async run-module-rung! []
-       (await (run/load-module "test/fixtures/modules/op_mod.cg"))
-       (check-module-rung!
-        (await (run/run-model (run/eval-cg module-rung-src) {:xs [10 20]} {}))))))
+   (defn ^:async run-option-map! []
+     (let [ms (run/eval-cg option-map-src)
+           results #js []]
+       (doseq [m ms]
+         (.push results (await (run/run-model m {:xs [1 2]} {}))))
+       (check-option-map! (vec results)))))
 
 (deftest a-rung-in-the-same-eval-as-its-op
-  #?(:clj (let [m (run/eval-cg same-eval-src)]
-            (check-same-eval! m (run/run-model m {:xs [0]} {})))
-     :cljs (run-same-eval!)))
+  (let [m (run/eval-cg same-eval-src)]
+    (after (run/run-model m {:xs [0]} {}) #(check-same-eval! m %))))
 
 (deftest a-module-op-is-a-rung
   (testing "(item-> :xs (test.op-mod/rung-sub 1)) over 10 and 20"
-    #?(:clj (do (run/load-module "test/fixtures/modules/op_mod.cg")
-                (check-module-rung!
-                 (run/run-model (run/eval-cg module-rung-src) {:xs [10 20]} {})))
-       :cljs (run-module-rung!))))
+    (after (run/load-module "test/fixtures/modules/op_mod.cg")
+           (fn [_]
+             (after (run/run-model (run/eval-cg module-rung-src) {:xs [10 20]} {})
+                    check-module-rung!)))))
 
 (deftest a-rung-gives-an-option-map
   #?(:clj (check-option-map! (mapv (fn [m] (run/run-model m {:xs [1 2]} {}))
@@ -120,11 +104,8 @@
         msg)))
 
 (deftest a-row-op-that-returns-a-model-fails-when-it-runs
-  #?(:clj (is (row-model-error?
-               (try (run/run-model (run/eval-cg row-model-src) {:xs [1]} {})
-                    nil
-                    (catch Exception e (ex-message e)))))
-     :cljs (run-row-model!)))
+  (after (error-message #(run/run-model (run/eval-cg row-model-src) {:xs [1]} {}))
+         #(is (row-model-error? %))))
 
 #?(:cljs (-> (parser/init! nil)
              (.then (fn [_] (run_tests_and_exit_BANG_ "cg.run.op-rung-test")))))

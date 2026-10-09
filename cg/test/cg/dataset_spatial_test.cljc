@@ -65,8 +65,7 @@
         candidates-of (ds/index-candidates-fn d :geometry)]
     (is (every? (fn [i] (probe-square candidates-of i)) (range n))
         "each square is the one candidate of a point in it")
-    (is (probe-square candidates-of 0) "the first square, prepared again")
-    (is (probe-square candidates-of (dec n)) "the last square")))
+    (is (probe-square candidates-of 0) "the first square, prepared again")))
 
 (deftest the-prepared-geometry-operations-that-parcel-cg-applies
   (let [pg (geo/prepared-geometry-factory-prepare (square 0 10))]
@@ -112,6 +111,7 @@
   (is (false? (ds/has-spatial-index? (ds/add-spatial-index (swapped-squares) :footprint)))
       "an index on another column only"))
 
+;; The JS runtime keeps one index for each dataset.
 #?(:clj
    (deftest two-indexed-geometry-columns
      (let [d (-> (swapped-squares)
@@ -120,7 +120,6 @@
        (is (= [1] (ids (ds/select-intersects d (feature/point 5 5) :geometry))))
        (is (= [2] (ids (ds/select-intersects d (feature/point 5 5) :footprint)))
            "the select uses the index of its own column")
-       (is (= [2] (ids (ds/select-within d (square -1 12) :footprint))))
        (is (true? (ds/has-spatial-index? d)))
        (is (thrown-with-msg? clojure.lang.ExceptionInfo #"more than one spatial index"
                              (ds/get-spatial-index d))

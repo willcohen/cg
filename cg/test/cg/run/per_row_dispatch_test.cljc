@@ -20,10 +20,9 @@
   #?(:clj (:require [clojure.test :refer [deftest is]]
                     [cg.run :as run]
                     [cg.run.fusion :as fusion]
-                    [cg.trace :as trace]
                     [cg.feature :as feature]
                     [cg.macros :refer [table->]]
-                    [clojure.core.async :as a]
+                    [cg.test-runner :refer [collect-events]]
                     [tech.v3.dataset :as ds])
      :cljs (:require [cljs.test :refer [deftest is]]
                      ["../../../src/cg/run.mjs" :as run]
@@ -32,7 +31,7 @@
                      ["../../../src/cg/feature.mjs" :as feature]
                      ["../../../src/cg/trace_js.mjs" :as trace]
                      ["../wasmts_setup.mjs" :refer [init_wasmts_BANG_]]
-                     ["../test_runner.mjs" :refer [run_tests_and_exit_BANG_]])))
+                     ["../test_runner.mjs" :refer [run_tests_and_exit_BANG_ after]])))
 
 #?(:clj (set! *warn-on-reflection* true))
 
@@ -87,15 +86,10 @@
          (is (zero? (ds/row-count result)))))
 
      (deftest a-run-counts-the-rows-that-failed
-       (let [ch (a/chan 1024)
-             d (ds/->>dataset [{:n 1} {:n 2} {:n 3} {:n 4}])]
-         (trace/tap-trace ch)
-         (try
-           (run/run-model (table-> :input (tdt-fail-even)) {:input d} {:timeout-ms 10000})
-           (Thread/sleep 150)
-           (check-row-errors! (loop [acc []]
-                                (if-let [e (a/poll! ch)] (recur (conj acc e)) acc)))
-           (finally (trace/untap-trace ch)))))
+       (let [d (ds/->>dataset [{:n 1} {:n 2} {:n 3} {:n 4}])]
+         (check-row-errors!
+          (collect-events
+           #(run/run-model (table-> :input (tdt-fail-even)) {:input d} {:timeout-ms 10000})))))
 
      (deftest per-row-op-runs-in-table-mode
        (let [d (ds/->>dataset [{:n 1} {:n 2} {:n 3} {:n 4}])
@@ -155,7 +149,29 @@
      (defn- result-rows [result]
        (if (array? result) result (dataset/rows result)))
 
-     (defn ^:async run-per-geometry! []
+     (deftest per-row-op-runs-in-table-mode
+       (register-probe-ops!)
+       (after (run/run-model (table-model "cg.probe/double-n")
+                             {:input (dataset/->dataset {:n [1 2 3 4]})} {:timeout-ms 10000})
+              (comp check-doubled-rows! result-rows)))
+
+     (deftest a-run-counts-the-rows-that-failed
+       (register-probe-ops!)
+       (let [events #js []
+             l (trace/add-trace-listener (fn [e] (.push events e)))]
+         (-> (run/run-model (table-model "cg.probe/fail-even")
+                            {:input (dataset/->dataset {:n [1 2 3 4]})}
+                            {:timeout-ms 10000})
+             (.finally #(trace/remove-trace-listener l))
+             (.then (fn [_] (check-row-errors! (vec events)))))))
+
+     (deftest a-run-over-no-rows-ends-at-once
+       (register-probe-ops!)
+       (after (run/run-model (table-model "cg.probe/double-n")
+                             {:input (dataset/->dataset [])} {:timeout-ms 3000})
+              #(is (zero? (count (result-rows %))))))
+
+     (deftest per-geometry-op-maps-over-the-geometry-column
        (register-probe-ops!)
        (let [fc {:type "FeatureCollection"
                  :features [{:type "Feature" :properties {:n 1}
@@ -165,50 +181,13 @@
                             {:type "Feature" :properties {:n 3}
                              :geometry {:type "Point" :coordinates [2 2]}}]}
              d (dataset/geojson->dataset (js/JSON.stringify fc))
-             before @geometry-op-calls
-             result (await (run/run-model (table-model "cg.probe/identity-geom")
-                                          {:input d} {:timeout-ms 10000}))
-             rows (result-rows result)]
-         (is (= 3 (count rows)))
-         (is (= 3 (- @geometry-op-calls before)) "the op runs once per geometry")
-         (is (every? (fn [r] (some? (:geometry r))) rows))))
-
-     (defn ^:async run-per-row! []
-       (register-probe-ops!)
-       (let [d (dataset/->dataset {:n [1 2 3 4]})
-             result (await (run/run-model (table-model "cg.probe/double-n")
-                                          {:input d} {:timeout-ms 10000}))]
-         (check-doubled-rows! (result-rows result))))
-
-     (defn ^:async run-row-errors! []
-       (register-probe-ops!)
-       (let [events #js []
-             l (trace/add-trace-listener (fn [e] (.push events e)))]
-         (try
-           (await (run/run-model (table-model "cg.probe/fail-even")
-                                 {:input (dataset/->dataset {:n [1 2 3 4]})}
-                                 {:timeout-ms 10000}))
-           (finally (trace/remove-trace-listener l)))
-         (check-row-errors! (vec events))))
-
-     (deftest per-row-op-runs-in-table-mode
-       (run-per-row!))
-
-     (deftest a-run-counts-the-rows-that-failed
-       (run-row-errors!))
-
-     (defn ^:async run-no-rows! []
-       (register-probe-ops!)
-       (let [result (await (run/run-model (table-model "cg.probe/double-n")
-                                          {:input (dataset/->dataset [])}
-                                          {:timeout-ms 3000}))]
-         (is (zero? (count (result-rows result))))))
-
-     (deftest a-run-over-no-rows-ends-at-once
-       (run-no-rows!))
-
-     (deftest per-geometry-op-maps-over-the-geometry-column
-       (run-per-geometry!))))
+             before @geometry-op-calls]
+         (after (run/run-model (table-model "cg.probe/identity-geom") {:input d} {:timeout-ms 10000})
+                (fn [result]
+                  (let [rows (result-rows result)]
+                    (is (= 3 (count rows)))
+                    (is (= 3 (- @geometry-op-calls before)) "the op runs once per geometry")
+                    (is (every? (fn [r] (some? (:geometry r))) rows)))))))))
 
 #?(:cljs (-> (init_wasmts_BANG_)
              (.then (fn [_] (dataset/init-arquero!)))

@@ -4,21 +4,22 @@
 ;; See LICENSE for license information.
 ;; SPDX-License-Identifier: Apache-2.0 WITH LLVM-exception
 
-;; cg.run/run-model on both runtimes. The models are literal data, and a cljs
-;; body is a named ^:async fn whose Promise the deftest returns.
+;; cg.run/run-model and run-file on both runtimes. A run gives a Promise on
+;; cljs, so a cross-runtime test checks it with cg.test-runner/after.
 (ns cg.run-exec-test
   #?(:clj (:require [clojure.test :refer [deftest is]]
                     [cg.run :as run]
                     [cg.model :as model]
                     [cg.geo :as geo]
-                    [cg.feature :as feature])
+                    [cg.feature :as feature]
+                    [cg.test-runner :refer [after error-message]])
      :cljs (:require [cljs.test :refer [deftest is]]
                      ["../../src/cg/run.mjs" :as run]
                      ["../../src/cg/geo.mjs" :as geo]
                      ["../../src/cg/feature.mjs" :as feature]
                      ["../../src/cg/dataset.mjs" :as ds]
                      ["./wasmts_setup.mjs" :refer [init_wasmts_BANG_]]
-                     ["./test_runner.mjs" :refer [run_tests_and_exit_BANG_]])))
+                     ["./test_runner.mjs" :refer [run_tests_and_exit_BANG_ after error-message]])))
 
 #?(:clj (set! *warn-on-reflection* true))
 
@@ -110,83 +111,40 @@
     (is (= "Polygon" (geo/geometry-type buffered)))
     (is (> (double (geo/area buffered)) 0))))
 
-#?(:cljs
-   (do
-     (defn ^:async run-point! []
-       (check-one-point! (await (run/run-model point-model {} {:timeout-ms 5000}))))
-
-     (defn ^:async run-point-buffer! []
-       (check-one-buffer!
-        (await (run/run-model point-buffer-model {} {:timeout-ms 5000}))))
-
-     (defn ^:async run-bindings! []
-       (let [result (await (run/run-model buffer-binding-model
-                                          {:data [(feature/point 0 0)]}
-                                          {:timeout-ms 5000}))]
-         (is (= 1 (count result)))
-         (is (feature/is-geometry? (nth result 0)))))
-
-     (defn ^:async run-file-last! []
-       (let [r (await (run/run-file two-models))]
-         (is (= "centers" (:model r)))
-         (check-one-point! (:result r))))
-
-     (defn ^:async run-file-named! []
-       (let [r (await (run/run-file two-models {:model "buffered"}))]
-         (is (= "buffered" (:model r)))
-         (check-one-buffer! (:result r))))
-
-     (defn ^:async run-file-map-layers! []
-       (check-layers! (await (run/run-file layer-models {:map-layers true})))
-       (is (nil? (:layers (await (run/run-file layer-models))))))
-
-     (defn ^:async run-file-not-a-model! []
-       (let [e (try (await (run/run-file two-models {:model "pts"}))
-                    nil
-                    (catch :default e e))]
-         (is (re-find #"buffered.*centers" (str (.-message e)))
-             "the message names the models of the file")))))
-
 (deftest test-source-operation-point
-  #?(:clj (check-one-point! (run/run-model point-model {} {:timeout-ms 5000}))
-     :cljs (run-point!)))
+  (after (run/run-model point-model {} {:timeout-ms 5000}) check-one-point!))
 
 (deftest test-source-plus-transform
-  #?(:clj (check-one-buffer!
-           (run/run-model point-buffer-model {} {:timeout-ms 5000}))
-     :cljs (run-point-buffer!)))
+  (after (run/run-model point-buffer-model {} {:timeout-ms 5000}) check-one-buffer!))
 
 (deftest test-simple-flow-with-bindings
-  #?(:clj (let [result (run/run-model buffer-binding-model
-                                      {:data [(feature/point 0 0)]}
-                                      {:timeout-ms 5000})]
-            (is (= 1 (count result)))
-            (is (feature/is-geometry? (nth result 0))))
-     :cljs (run-bindings!)))
+  (after (run/run-model buffer-binding-model {:data [(feature/point 0 0)]} {:timeout-ms 5000})
+         (fn [result]
+           (is (= 1 (count result)))
+           (is (feature/is-geometry? (nth result 0))))))
 
 (deftest run-file-runs-the-last-model
-  #?(:clj (let [r (run/run-file two-models)]
-            (is (= "centers" (:model r)))
-            (check-one-point! (:result r)))
-     :cljs (run-file-last!)))
+  (after (run/run-file two-models)
+         (fn [r]
+           (is (= "centers" (:model r)))
+           (check-one-point! (:result r)))))
 
 (deftest run-file-runs-the-named-model
-  #?(:clj (let [r (run/run-file two-models {:model "buffered"})]
-            (is (= "buffered" (:model r)))
-            (check-one-buffer! (:result r)))
-     :cljs (run-file-named!)))
+  (after (run/run-file two-models {:model "buffered"})
+         (fn [r]
+           (is (= "buffered" (:model r)))
+           (check-one-buffer! (:result r)))))
 
 (deftest run-file-runs-the-other-map-layer-models-on-request
-  #?(:clj (do (check-layers! (run/run-file layer-models {:map-layers true}))
-              (is (nil? (:layers (run/run-file layer-models)))))
-     :cljs (run-file-map-layers!)))
+  (after (run/run-file layer-models {:map-layers true})
+         (fn [r]
+           (check-layers! r)
+           (after (run/run-file layer-models) #(is (nil? (:layers %)))))))
 
 (deftest run-file-rejects-a-binding-that-is-not-a-model
-  #?(:clj (let [e (try (run/run-file two-models {:model "pts"}) nil
-                       (catch clojure.lang.ExceptionInfo e e))]
-            (is (re-find #"buffered.*centers" (str (ex-message e)))
-                "the message names the models of the file"))
-     :cljs (run-file-not-a-model!)))
+  (after (error-message #(run/run-file two-models {:model "pts"}))
+         #(is (re-find #"buffered.*centers" (str %))
+              "the message names the models of the file")))
 
 #?(:clj
    (deftest run-file-runs-in-the-bound-context

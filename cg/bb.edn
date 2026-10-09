@@ -27,7 +27,50 @@
           (println "! GraalVM CE 25; activate it before running JVM tasks:")
           (println "!   direnv allow          # one-time; shells entering the repo then use it")
           (println "!   (or hook direnv into your shell, or: nix develop --command bb <task>)")
-          (println)))))
+          (println))))
+
+    ;; One list for squint:test and test:cljs, so that each suite that
+    ;; compiles also runs. The helpers compile first and do not run.
+    (def cljs-test-helpers
+      ["test/cg/test_runner.cljc"
+       "test/cg/wasmts_setup.cljc"
+       "test/cg/pool_setup.cljc"
+       "test/cg/parser/setup.cljc"])
+
+    (def cljs-test-suites
+      ["test/cg/geo_test.cljc"
+       "test/cg/loaders_test.cljc"
+       "test/cg/codegen_test.cljc"
+       "test/cg/introspect_test.cljc"
+       "test/cg/metadata_test.cljc"
+       "test/cg/pool_adapter_test.cljc"
+       "test/cg/run_exec_test.cljc"
+       "test/cg/dataset_exec_test.cljc"
+       "test/cg/trace_test.cljc"
+       "test/cg/util_fs_test.cljc"
+       "test/cg/run/when_row_runtime_test.cljc"
+       "test/cg/run/per_row_dispatch_test.cljc"
+       "test/cg/run/param_order_test.cljc"
+       "test/cg/run/eos_test.cljc"
+       "test/cg/run/flow_timeout_test.cljc"
+       "test/cg/def_events_test.cljc"
+       "test/cg/cli_file_test.cljc"
+       "test/cg/eval_destructuring_test.cljc"
+       "test/cg/run/op_rung_test.cljc"
+       "test/cg/op_eval_test.cljc"
+       "test/cg/load_module_test.cljc"
+       "test/cg/test_runner_test.cljc"
+       "test/cg/rung_args_test.cljc"
+       "test/cg/dataset_spatial_test.cljc"
+       "test/cg/parcel_js_test.cljc"
+       "test/cg/parcel_coverage_test.cljc"
+       "test/cg/zoning_load_test.cljc"
+       "test/cg/zoning_rules_test.cljc"
+       "test/cg/parser/extract_test.cljc"
+       "test/cg/parser/types_test.cljc"
+       "test/cg/parser/validate_test.cljc"
+       "test/cg/parser/op_defn_test.cljc"
+       "test/cg/dsl/signatures_test.cljc"]))
 
   npm:install
   {:doc "Install npm dependencies for ClojureScript build."
@@ -143,37 +186,7 @@ import are fresh. Compiles with --paths . --output-dir . so output lands in
 place (test/cg/*.mjs) and local requires resolve as relative module specifiers."
    :depends [squint]
    :task
-   (let [files ["test/cg/test_runner.cljc"
-                "test/cg/wasmts_setup.cljc"
-                "test/cg/pool_setup.cljc"
-                "test/cg/geo_test.cljc"
-                "test/cg/loaders_test.cljc"
-                "test/cg/codegen_test.cljc"
-                "test/cg/introspect_test.cljc"
-                "test/cg/metadata_test.cljc"
-                "test/cg/pool_adapter_test.cljc"
-                "test/cg/run_exec_test.cljc"
-                "test/cg/dataset_exec_test.cljc"
-                "test/cg/trace_test.cljc"
-                "test/cg/util_fs_test.cljc"
-                "test/cg/run/when_row_runtime_test.cljc"
-                "test/cg/run/per_row_dispatch_test.cljc"
-                "test/cg/run/param_order_test.cljc"
-                "test/cg/run/eos_test.cljc"
-                "test/cg/run/flow_timeout_test.cljc"
-                "test/cg/def_events_test.cljc"
-                "test/cg/cli_file_test.cljc"
-                "test/cg/eval_destructuring_test.cljc"
-                "test/cg/run/op_rung_test.cljc"
-                "test/cg/op_eval_test.cljc"
-                "test/cg/load_module_test.cljc"
-                "test/cg/test_runner_test.cljc"
-                "test/cg/rung_args_test.cljc"
-                "test/cg/dataset_spatial_test.cljc"
-                "test/cg/parcel_js_test.cljc"
-                "test/cg/parcel_coverage_test.cljc"
-                "test/cg/zoning_load_test.cljc"
-                "test/cg/zoning_rules_test.cljc"]]
+   (let [files (concat cljs-test-helpers cljs-test-suites)]
      (println "Compiling cljc test suites with squint...")
      (doseq [file files]
        (println (str "  Compiling " file "..."))
@@ -203,34 +216,7 @@ process.exit-s 0 on green / 1 on any failure. The same .cljc sources run under
      ;; PROJ and wasmts modules and does not yield, so a suite that starts the
      ;; worker pool never exits.
      (let [node "node --experimental-wasm-exnref --liftoff-only"]
-       (doseq [suite ["test/cg/geo_test.mjs"
-                      "test/cg/loaders_test.mjs"
-                      "test/cg/codegen_test.mjs"
-                      "test/cg/introspect_test.mjs"
-                      "test/cg/metadata_test.mjs"
-                      "test/cg/pool_adapter_test.mjs"
-                      "test/cg/run_exec_test.mjs"
-                      "test/cg/dataset_exec_test.mjs"
-                      "test/cg/trace_test.mjs"
-                      "test/cg/util_fs_test.mjs"
-                      "test/cg/run/when_row_runtime_test.mjs"
-                      "test/cg/run/per_row_dispatch_test.mjs"
-                      "test/cg/run/param_order_test.mjs"
-                      "test/cg/run/eos_test.mjs"
-                      "test/cg/run/flow_timeout_test.mjs"
-                      "test/cg/def_events_test.mjs"
-                      "test/cg/cli_file_test.mjs"
-                      "test/cg/eval_destructuring_test.mjs"
-                      "test/cg/run/op_rung_test.mjs"
-                      "test/cg/op_eval_test.mjs"
-                      "test/cg/load_module_test.mjs"
-                      "test/cg/test_runner_test.mjs"
-                      "test/cg/rung_args_test.mjs"
-                      "test/cg/dataset_spatial_test.mjs"
-                      "test/cg/parcel_js_test.mjs"
-                      "test/cg/parcel_coverage_test.mjs"
-                      "test/cg/zoning_load_test.mjs"
-                      "test/cg/zoning_rules_test.mjs"]]
+       (doseq [suite (map (fn [f] (str/replace f ".cljc" ".mjs")) cljs-test-suites)]
          (println (str "  " suite))
          (shell (str node " " suite)))))}
 

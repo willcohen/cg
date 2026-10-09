@@ -24,14 +24,14 @@
   #?(:clj (:require [clojure.test :refer [deftest is]]
                     [cg.run :as run]
                     [cg.dataset :as ds]
-                    cg.feature
                     [cg.macros :refer [table->]]
+                    [cg.test-runner :refer [after]]
                     [tech.v3.dataset :as tds])
      :cljs (:require [cljs.test :refer [deftest is]]
                      ["../../../src/cg/run.mjs" :as run]
                      ["../../../src/cg/dataset.mjs" :as ds]
                      ["../wasmts_setup.mjs" :refer [init_wasmts_BANG_]]
-                     ["../test_runner.mjs" :refer [run_tests_and_exit_BANG_]])))
+                     ["../test_runner.mjs" :refer [run_tests_and_exit_BANG_ after]])))
 
 #?(:clj (set! *warn-on-reflection* true))
 
@@ -42,56 +42,41 @@
   (let [d (if (sequential? result) (first result) result)]
     (if (nil? d) 0 (ds/row-count d))))
 
+#?(:clj
+   (defn- run-jvm [model]
+     (run/run-model model {:input (tds/->>dataset [{:n 1} {:n 2}])} {:timeout-ms 10000})))
+
 #?(:cljs
-   (do
-     (defn ^:async when-row-result [body]
-       (await (ds/init-arquero!))
-       ;; when-row resolves as "cg.run/when-row", and the pre-filled cljs
-       ;; registry holds cg.geo, cg.feature and cg.dataset only.
-       (run/register-namespace! "cg.run" run)
-       (let [model (run/eval-cg (str "(require '[cg.macros :refer [table->]])"
-                                     "(require '[cg.dataset :as ds])"
-                                     body))
-             d     (ds/->dataset {:n [1 2]})]
-         (await (run/run-model model {:input d} {:timeout-ms 10000}))))
-
-     (defn ^:async run-predicate-true! []
-       (let [r (await (when-row-result
-                       "(table-> :input (when-row {:has-column? :n} (ds/head 1)))"))]
-         (is (= 1 (row-count r)) "head 1 applied -> 1 row")))
-
-     (defn ^:async run-predicate-false-drop! []
-       (let [r (await (when-row-result
-                       (str "(table-> :input (when-row {:has-column? :nope"
-                            " :on-miss :drop} (ds/head 1)))")))]
-         (is (= 0 (row-count r)) "dropped -> 0 rows")))
-
-     (defn ^:async run-predicate-false-pass! []
-       (let [r (await (when-row-result
-                       "(table-> :input (when-row {:has-column? :nope} (ds/head 1)))"))]
-         (is (= 2 (row-count r)) "pass-through -> 2 rows")))))
+   (defn ^:async when-row-result [body]
+     (await (ds/init-arquero!))
+     ;; when-row resolves as "cg.run/when-row", and the pre-filled cljs
+     ;; registry holds cg.geo, cg.feature and cg.dataset only.
+     (run/register-namespace! "cg.run" run)
+     (let [model (run/eval-cg (str "(require '[cg.macros :refer [table->]])"
+                                   "(require '[cg.dataset :as ds])"
+                                   body))
+           d     (ds/->dataset {:n [1 2]})]
+       (await (run/run-model model {:input d} {:timeout-ms 10000})))))
 
 (deftest when-row-predicate-true
-  #?(:clj (let [d      (tds/->>dataset [{:n 1} {:n 2}])
-                model  (table-> :input (when-row {:has-column? :n} (ds/head 1)))
-                result (run/run-model model {:input d} {:timeout-ms 10000})]
-            (is (= 1 (row-count result)) "head 1 applied -> 1 row"))
-     :cljs (run-predicate-true!)))
+  (after #?(:clj (run-jvm (table-> :input (when-row {:has-column? :n} (ds/head 1))))
+            :cljs (when-row-result
+                   "(table-> :input (when-row {:has-column? :n} (ds/head 1)))"))
+         #(is (= 1 (row-count %)) "head 1 applied -> 1 row")))
 
 (deftest when-row-predicate-false-drop
-  #?(:clj (let [d      (tds/->>dataset [{:n 1} {:n 2}])
-                model  (table-> :input (when-row {:has-column? :nope :on-miss :drop}
-                                                 (ds/head 1)))
-                result (run/run-model model {:input d} {:timeout-ms 10000})]
-            (is (= 0 (row-count result)) "dropped -> 0 rows"))
-     :cljs (run-predicate-false-drop!)))
+  (after #?(:clj (run-jvm (table-> :input (when-row {:has-column? :nope :on-miss :drop}
+                                                    (ds/head 1))))
+            :cljs (when-row-result
+                   (str "(table-> :input (when-row {:has-column? :nope"
+                        " :on-miss :drop} (ds/head 1)))")))
+         #(is (= 0 (row-count %)) "dropped -> 0 rows")))
 
 (deftest when-row-predicate-false-pass-through
-  #?(:clj (let [d      (tds/->>dataset [{:n 1} {:n 2}])
-                model  (table-> :input (when-row {:has-column? :nope} (ds/head 1)))
-                result (run/run-model model {:input d} {:timeout-ms 10000})]
-            (is (= 2 (row-count result)) "pass-through -> 2 rows"))
-     :cljs (run-predicate-false-pass!)))
+  (after #?(:clj (run-jvm (table-> :input (when-row {:has-column? :nope} (ds/head 1))))
+            :cljs (when-row-result
+                   "(table-> :input (when-row {:has-column? :nope} (ds/head 1)))"))
+         #(is (= 2 (row-count %)) "pass-through -> 2 rows")))
 
 #?(:cljs (-> (init_wasmts_BANG_)
              (.then (fn [_] (run_tests_and_exit_BANG_ "cg.run.when-row-runtime-test")))))

@@ -17,9 +17,9 @@
    vertex."
   (:require [clojure.test :refer [deftest is testing]]
             [clojure.java.io :as jio]
-            [clojure.core.async :as async]
             [cg.featureserver-pbf :as pbf]
             [cg.io :as cio]
+            [cg.test-runner :refer [collect-events]]
             [cg.trace :as trace])
   (:import (org.locationtech.jts.geom Geometry Coordinate)))
 
@@ -182,19 +182,6 @@
 ;; scan of the fetch side reads it, and the parse throws on hasZ.
 (def ^:private has-z-page-with-flag
   (byte-array (map unchecked-byte [0x12 0x08 0x0A 0x06 0x48 0x01 0x50 0x01 0x7A 0x00])))
-
-(defn- collect-events
-  "Run f with a tap on the trace stream, then drain what it emitted."
-  [f]
-  (let [ch (async/chan 1024)]
-    (trace/tap-trace ch)
-    (try
-      (f)
-      (Thread/sleep 150)
-      (loop [acc []]
-        (if-let [e (async/poll! ch)] (recur (conj acc e)) acc))
-      (finally
-        (trace/untap-trace ch)))))
 
 (defn- events-of [events kind pid]
   (filter #(and (= kind (:kind %)) (= pid (:pid %))) events))

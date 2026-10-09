@@ -8,10 +8,11 @@
   "A run-flow that times out stops its flow, so that its procs do not run on
    after the caller gets the error."
   #?(:clj (:require [clojure.test :refer [deftest is]]
-                    [cg.run.flow :as cg-flow])
+                    [cg.run.flow :as cg-flow]
+                    [cg.test-runner :refer [after]])
      :cljs (:require [cljs.test :refer [deftest is]]
                      ["../../../src/cg/run/flow.mjs" :as cg-flow]
-                     ["../test_runner.mjs" :refer [run_tests_and_exit_BANG_]])))
+                     ["../test_runner.mjs" :refer [run_tests_and_exit_BANG_ after]])))
 
 #?(:clj (set! *warn-on-reflection* true))
 
@@ -67,23 +68,18 @@
        (let [deadline (+ (js/Date.now) stop-wait-ms)]
          (while (and (< (count @stopped) 2)
                      (< (js/Date.now) deadline))
-           (await (sleep 20)))))
+           (await (sleep 20)))))))
 
-     (defn ^:async run-timeout! []
-       (let [stopped (atom {})
-             e (await (-> (cg-flow/run-flow (never-done-flow stopped) {:timeout-ms 200})
-                          (.then (fn [_] nil))
-                          (.catch (fn [e] e))))]
-         (await (wait-for-stops stopped))
-         (check-timeout-stop e @stopped)))))
+(defn- timeout-error [stopped]
+  #?(:clj (try (cg-flow/run-flow (never-done-flow stopped) {:timeout-ms 200}) nil
+               (catch clojure.lang.ExceptionInfo e e))
+     :cljs (.then (cg-flow/run-flow (never-done-flow stopped) {:timeout-ms 200})
+                  (fn [_] nil) identity)))
 
 (deftest a-flow-that-times-out-stops
-  #?(:clj (let [stopped (atom {})
-                e (try (cg-flow/run-flow (never-done-flow stopped) {:timeout-ms 200})
-                       nil
-                       (catch clojure.lang.ExceptionInfo e e))]
-            (wait-for-stops stopped)
-            (check-timeout-stop e @stopped))
-     :cljs (run-timeout!)))
+  (let [stopped (atom {})]
+    (after (timeout-error stopped)
+           (fn [e]
+             (after (wait-for-stops stopped) (fn [_] (check-timeout-stop e @stopped)))))))
 
 #?(:cljs (run_tests_and_exit_BANG_ "cg.run.flow-timeout-test"))

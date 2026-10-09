@@ -5,8 +5,11 @@
 ;; SPDX-License-Identifier: Apache-2.0 WITH LLVM-exception
 
 (ns cg.dsl.signatures-test
-  (:require [clojure.test :refer [deftest is are]]
-            [cg.dsl.signatures :as sigs]))
+  #?(:clj (:require [clojure.test :refer [deftest is are]]
+                    [cg.dsl.signatures :as sigs])
+     :cljs (:require [cljs.test :refer [deftest is are]]
+                     ["../../../src/cg/dsl/signatures.mjs" :as sigs]
+                     ["../test_runner.mjs" :refer [run_tests_and_exit_BANG_]])))
 
 #?(:clj (set! *warn-on-reflection* true))
 
@@ -27,7 +30,7 @@
     "map"                 :groups
     "into"                :map))
 
-(deftest higher-order-and-demote-ops
+(deftest map-is-a-transformer
   (is (= :transformer (:kind (sigs/lookup "map")))))
 
 (deftest table-input-role
@@ -37,3 +40,5 @@
   (is (= :broadcast (sigs/role-kind "broadcast")))
   (is (= :reducer (sigs/role-kind "reducer")))
   (is (nil? (sigs/role-kind nil))))
+
+#?(:cljs (run_tests_and_exit_BANG_ "cg.dsl.signatures-test"))

@@ -9,15 +9,17 @@
    because a .cg file reads it with run/script-file. boston.cg runs its
    analysis only when run/script-file names it."
   #?(:clj (:require [clojure.test :refer [deftest is]]
+                    [clojure.java.io :as io]
                     [cg.cli :as cli]
-                    [cg.run :as run])
+                    [cg.run :as run]
+                    [cg.test-runner :refer [after]])
      :cljs (:require [cljs.test :refer [deftest is]]
                      ["node:fs" :as fs]
                      ["node:os" :as os]
                      ["node:path" :as node-path]
                      ["../../src/cg/cli.mjs" :as cli]
                      ["./wasmts_setup.mjs" :refer [init_wasmts_BANG_]]
-                     ["./test_runner.mjs" :refer [run_tests_and_exit_BANG_]]))
+                     ["./test_runner.mjs" :refer [run_tests_and_exit_BANG_ after]]))
   #?(:clj (:import (java.nio.file Files)
                    (java.nio.file.attribute FileAttribute))))
 
@@ -47,14 +49,21 @@
              (fs/writeFileSync f checked-text)
              f)))
 
-#?(:cljs
-   (defn ^:async run-checked! []
-     (is (= 0 (await (cli/run-model-file (checked-file)))))))
+(defn- delete-checked-file!
+  "Delete the file of checked-file and its folder."
+  [f]
+  #?(:clj (let [f (io/file f)]
+            (io/delete-file f true)
+            (io/delete-file (.getParentFile f) true))
+     :cljs (fs/rmSync (node-path/dirname f) #js {:recursive true :force true})))
 
 (deftest run-model-file-names-the-file-for-the-run
-  #?(:clj (do (is (= 0 (cli/run-model-file (checked-file))))
-              (is (nil? (run/script-file)) "nil outside a run"))
-     :cljs (run-checked!)))
+  (let [f (checked-file)]
+    (after (cli/run-model-file f)
+           (fn [code]
+             (delete-checked-file! f)
+             (is (= 0 code))
+             #?(:clj (is (nil? (run/script-file)) "nil outside a run"))))))
 
 #?(:cljs (-> (init_wasmts_BANG_)
              (.then (fn [_] (run_tests_and_exit_BANG_ "cg.cli-file-test")))))

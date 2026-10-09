@@ -14,7 +14,8 @@
                     [cg.feature :as feature]
                     [cg.geo :as geo]
                     [cg.run :as run]
-                    [cg.macros :refer [table->]])
+                    [cg.macros :refer [table->]]
+                    [cg.test-runner :refer [after error-message]])
      :cljs (:require [cljs.test :refer [deftest is testing]]
                      [clojure.string :as str]
                      ["../../src/cg/dataset.mjs" :as ds]
@@ -22,7 +23,7 @@
                      ["../../src/cg/geo.mjs" :as geo]
                      ["../../src/cg/run.mjs" :as run]
                      ["./pool_setup.mjs" :refer [init_cg_pool_BANG_]]
-                     ["./test_runner.mjs" :refer [run_tests_and_exit_BANG_]])))
+                     ["./test_runner.mjs" :refer [run_tests_and_exit_BANG_ after error-message]])))
 
 #?(:clj (set! *warn-on-reflection* true))
 
@@ -54,6 +55,9 @@
                              "(require '[cg.dataset :as ds])"
                              "(table-> :parcels"
                              " (ds/transform-crs \"EPSG:4326\" \"EPSG:2249\"))"))))
+
+(defn- run-flow [parcels]
+  (run/run-model (transform-crs-model) {:parcels parcels} {:timeout-ms 30000}))
 
 (defn- field-strs
   "A JVM model carries keywords and symbols where a cljs model carries
@@ -119,40 +123,18 @@
      (await (init_cg_pool_BANG_ {}))
      (await (ds/init-arquero!))))
 
-#?(:cljs
-   (defn ^:async run-reproject! []
-     (let [d (ds/geojson->dataset (wgs84-geojson two-points))
-           result (await (run/run-model (transform-crs-model)
-                                        {:parcels d}
-                                        {:timeout-ms 30000}))]
-       (check-reprojected! result))))
-
 (deftest table-flow-reprojects-4326-to-2249
   (testing "a table-> transform-crs flow reprojects the geometry column"
-    #?(:clj (let [d (ds/geojson->dataset (wgs84-geojson two-points))]
-              (check-reprojected!
-               (run/run-model (transform-crs-model) {:parcels d}
-                              {:timeout-ms 30000})))
-       :cljs (run-reproject!))))
+    (after (run-flow (ds/geojson->dataset (wgs84-geojson two-points))) check-reprojected!)))
 
 ;; arquero gives a table with no columns 0 rows, so a dataset with only the
 ;; geometry column once failed in the step that puts the column back.
 (defn- geometry-only-dataset []
   (ds/select-columns (ds/geojson->dataset (wgs84-geojson two-points)) [:geometry]))
 
-#?(:cljs
-   (defn ^:async run-geometry-only-reproject! []
-     (check-reprojected!
-      (await (run/run-model (transform-crs-model)
-                            {:parcels (geometry-only-dataset)}
-                            {:timeout-ms 30000})))))
-
 (deftest table-flow-reprojects-a-geometry-only-dataset
   (testing "a dataset whose only column is the geometry reprojects"
-    #?(:clj (check-reprojected!
-             (run/run-model (transform-crs-model) {:parcels (geometry-only-dataset)}
-                            {:timeout-ms 30000}))
-       :cljs (run-geometry-only-reproject!))))
+    (after (run-flow (geometry-only-dataset)) check-reprojected!)))
 
 ;; A geometry with a z takes the WasmTS path of the workers on the JS runtime.
 (def ^:private three-d-geojson
@@ -167,20 +149,9 @@
     (is (> (abs (first (first coords))) 1000.0) "x is in projected units")
     (is (= [12.5 30.0] (mapv (fn [c] (nth c 2)) coords)) "z passes through")))
 
-#?(:cljs
-   (defn ^:async run-reproject-z! []
-     (check-reprojected-z!
-      (await (run/run-model (transform-crs-model)
-                            {:parcels (ds/geojson->dataset three-d-geojson)}
-                            {:timeout-ms 30000})))))
-
 (deftest table-flow-reprojects-a-geometry-with-z
   (testing "a 3D line reprojects in x and y and keeps its z"
-    #?(:clj (check-reprojected-z!
-             (run/run-model (transform-crs-model)
-                            {:parcels (ds/geojson->dataset three-d-geojson)}
-                            {:timeout-ms 30000}))
-       :cljs (run-reproject-z!))))
+    (after (run-flow (ds/geojson->dataset three-d-geojson)) check-reprojected-z!)))
 
 ;; A transform-crs flow reprojects only the :geometry column, and it must
 ;; throw on a geometry column with another name, not pass it through.
@@ -195,34 +166,16 @@
     (is (str/includes? msg "no geometry column") msg)
     (is (str/includes? msg #?(:clj "\"geometry\"" :cljs "shape")) msg)))
 
-#?(:cljs
-   (defn ^:async run-misnamed-reproject! []
-     (let [msg (await (-> (run/run-model (transform-crs-model)
-                                         {:parcels (misnamed-geometry-dataset)}
-                                         {:timeout-ms 30000})
-                          (.then (fn [_] nil))
-                          (.catch (fn [e] (ex-message e)))))]
-       (check-names-the-columns! msg))))
-
 (deftest transform-crs-throws-without-a-geometry-column
   (testing "a dataset with rows and no geometry column throws and names its columns"
-    #?(:clj (check-names-the-columns!
-             (try
-               (run/run-model (transform-crs-model)
-                              {:parcels (misnamed-geometry-dataset)}
-                              {:timeout-ms 30000})
-               nil
-               (catch Exception e (ex-message e))))
-       :cljs (run-misnamed-reproject!))))
+    (after (error-message #(run-flow (misnamed-geometry-dataset))) check-names-the-columns!)))
 
 ;; A layer from a city server can hold a row with no geometry.
 #?(:clj
    (deftest transform-crs-passes-a-nil-geometry-through
      (let [d    (ds/geojson->dataset (wgs84-geojson two-points))
            rows (conj (vec (ds/rows d :as-maps)) {:id 3 :geometry nil})
-           out  (result-dataset
-                 (run/run-model (transform-crs-model) {:parcels (ds/->dataset rows)}
-                                {:timeout-ms 30000}))
+           out  (result-dataset (run-flow (ds/->dataset rows)))
            geoms (vec (ds/column out :geometry))]
        (is (= 3 (count geoms)) "the row with no geometry stays")
        (is (nil? (nth geoms 2)))

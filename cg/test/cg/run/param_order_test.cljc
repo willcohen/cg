@@ -16,13 +16,14 @@
   #?(:clj (:require [clojure.test :refer [deftest is testing]]
                     [cg.run :as run]
                     [cg.dataset :as ds]
-                    [cg.feature :as feature])
+                    [cg.feature :as feature]
+                    [cg.test-runner :refer [after]])
      :cljs (:require [cljs.test :refer [deftest is testing]]
                      ["../../../src/cg/run.mjs" :as run]
                      ["../../../src/cg/dataset.mjs" :as ds]
                      ["../../../src/cg/feature.mjs" :as feature]
                      ["../wasmts_setup.mjs" :refer [init_wasmts_BANG_]]
-                     ["../test_runner.mjs" :refer [run_tests_and_exit_BANG_]])))
+                     ["../test_runner.mjs" :refer [run_tests_and_exit_BANG_ after]])))
 
 #?(:clj (set! *warn-on-reflection* true))
 
@@ -97,52 +98,27 @@
   {:predicate {:kind "has-column?" :arg :n}
    :body {:fn "cg.param-order/dataset-op" :params params}})
 
-#?(:cljs
-   (do
-     (defn ^:async run-source! []
-       (register-ops!)
-       (let [result (await (run/run-model source-model {} {:timeout-ms 5000}))]
-         (is (= [in-order] (mapv vec result)))))
-
-     (defn ^:async run-item! []
-       (register-ops!)
-       (let [result (await (run/run-model item-model {:data [:x]} {:timeout-ms 5000}))]
-         (is (= [in-order] (mapv vec result)))))
-
-     (defn ^:async run-row-chain! []
-       (await (ds/init-arquero!))
-       (register-ops!)
-       (let [d (ds/->dataset {:n [1 2]})
-             result (await (run/run-model row-chain-model {:input d} {:timeout-ms 10000}))]
-         (check-rows! (result-rows result))))
-
-     (defn ^:async run-when-row! []
-       (await (ds/init-arquero!))
-       (register-ops!)
-       (is (= in-order (vec (run/when-row (ds/->dataset {:n [1 2]}) (when-row-args))))))))
-
 (deftest a-source-op-gets-its-params-in-schema-order
-  #?(:clj (do (register-ops!)
-              (is (= [in-order] (run/run-model source-model {} {:timeout-ms 5000}))))
-     :cljs (run-source!)))
+  (register-ops!)
+  (after (run/run-model source-model {} {:timeout-ms 5000})
+         #(is (= [in-order] (mapv vec %)))))
 
 (deftest an-item-op-gets-its-params-in-schema-order
-  #?(:clj (do (register-ops!)
-              (is (= [in-order] (run/run-model item-model {:data [:x]} {:timeout-ms 5000}))))
-     :cljs (run-item!)))
+  (register-ops!)
+  (after (run/run-model item-model {:data [:x]} {:timeout-ms 5000})
+         #(is (= [in-order] (mapv vec %)))))
 
 (deftest a-per-row-chain-gets-its-params-in-schema-order
   (testing "two per-row ops in table mode, fused into one step on the JVM"
-    #?(:clj (do (register-ops!)
-                (check-rows! (result-rows (run/run-model row-chain-model
-                                                         {:input (ds/->dataset {:n [1 2]})}
-                                                         {:timeout-ms 10000}))))
-       :cljs (run-row-chain!))))
+    (register-ops!)
+    (after (run/run-model row-chain-model {:input (ds/->dataset {:n [1 2]})}
+                          {:timeout-ms 10000})
+           (comp check-rows! result-rows))))
 
 (deftest a-when-row-body-gets-its-params-in-schema-order
-  #?(:clj (do (register-ops!)
-              (is (= in-order (run/when-row (ds/->dataset {:n [1 2]}) (when-row-args)))))
-     :cljs (run-when-row!)))
+  (register-ops!)
+  (is (= in-order (vec (run/when-row (ds/->dataset {:n [1 2]}) (when-row-args))))))
 
 #?(:cljs (-> (init_wasmts_BANG_)
+             (.then (fn [_] (ds/init-arquero!)))
              (.then (fn [_] (run_tests_and_exit_BANG_ "cg.run.param-order-test")))))
