@@ -238,16 +238,22 @@
                                       (.then (fn [_] nil) (fn [_] nil))))
 
                                 nil)))
-      (swap! !state update :extension/disposables conj
-             (.onDidChangeTextDocument vscode/workspace
-                                       (fn [^js event]
-                                         (when (= (str (.. event -document -uri)) (str (.-uri document)))
-                                           (when-let [existing @!debounce]
-                                             (js/clearTimeout existing))
-                                           (reset! !debounce
-                                                   (js/setTimeout
-                                                    (fn [] (extract-and-fan-out! !state panel document))
-                                                    debounce-ms))))))
+      (let [^js listener
+            (.onDidChangeTextDocument vscode/workspace
+                                      (fn [^js event]
+                                        (when (= (str (.. event -document -uri)) (str (.-uri document)))
+                                          (when-let [existing @!debounce]
+                                            (js/clearTimeout existing))
+                                          (reset! !debounce
+                                                  (js/setTimeout
+                                                   (fn [] (extract-and-fan-out! !state panel document))
+                                                   debounce-ms)))))]
+        (swap! !state update :extension/disposables conj listener)
+        (.onDidDispose panel
+                       (fn []
+                         (.dispose listener)
+                         (swap! !state update :extension/disposables
+                                (fn [ds] (filterv #(not (identical? listener %)) ds))))))
 
       (extract-and-fan-out! !state panel document)
       (ensure-text-editor! panel document))))
