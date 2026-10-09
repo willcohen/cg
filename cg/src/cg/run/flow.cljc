@@ -277,6 +277,10 @@
                           (resolve* v))
                 reject (fn [e]
                          ((:stop! watch))
+                         ;; Stop the procs on each error, also a timeout,
+                         ;; because a proc can own a producer that fetches
+                         ;; into an in-port.
+                         (flow/stop flow-obj)
                          (trace/emit! "flow-error"
                                       {:flow flow-name
                                        :ms (- (js/Date.now) flow-t0)
@@ -308,9 +312,7 @@
                                                 ;; It comes before @completed, because eos/eos
                                                 ;; completes the sink after a failed batch too.
                                                 (some? err)
-                                                (do
-                                                  (flow/stop flow-obj)
-                                                  (reject (flow-error-ex err)))
+                                                (reject (flow-error-ex err))
 
                                                 @completed
                                                 (do
