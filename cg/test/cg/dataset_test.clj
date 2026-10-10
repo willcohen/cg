@@ -89,6 +89,7 @@
         probe (f/to-feature (f/polygon [[0.5 0.5] [1.5 0.5] [1.5 1.5] [0.5 1.5] [0.5 0.5]])
                             {:id "probe"})
         dsi   (dataset/add-spatial-index ds :geometry)]
+    (is (= 2 (dataset/row-count (dataset/select-intersects ds probe :geometry))))
     (is (= 2 (dataset/row-count (dataset/select-intersects dsi probe :geometry))))))
 
 (deftest when-row-resolves-via-run

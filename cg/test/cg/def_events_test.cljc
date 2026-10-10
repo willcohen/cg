@@ -95,7 +95,8 @@
 (deftest eval-cg-emits-no-def-events
   (testing "only the run of a file lights the loader cards"
     (after (collect-events #(run/eval-cg "(def z 1)"))
-           #(is (= [] (def-events %))))))
+           #(do (is (= [] (def-events %)))
+                (is (= 1 (run/eval-cg "z")))))))
 
 #?(:cljs (-> (init_wasmts_BANG_)
              (.then (fn [_] (run_tests_and_exit_BANG_ "cg.def-events-test")))))

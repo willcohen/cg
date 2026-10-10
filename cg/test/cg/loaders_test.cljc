@@ -31,7 +31,7 @@
                      ["node:http" :as http]
                      ["node:path" :as node-path]
                      ["./pool_setup.mjs" :refer [init_cg_pool_BANG_]]
-                     ["./test_runner.mjs" :refer [run_tests_and_exit_BANG_ after]]))
+                     ["./test_runner.mjs" :refer [run_tests_and_exit_BANG_ after error-message]]))
   #?(:clj (:import (org.locationtech.jts.geom Geometry Polygon))))
 
 #?(:clj (set! *warn-on-reflection* true))
@@ -89,16 +89,17 @@
      "Serve the GeoServices paging fixtures. Call (f base-layer-url requests),
       and stop the server when the Promise of f settles. requests is an atom
       of {:uri :headers} maps. `fixture-for` gives the fixture file for the
-      URI of a request (default geoservices-fixture-for)."
+      URI of a request (default geoservices-fixture-for), or nil for a 404."
      ([f] (with-geoservices-server geoservices-fixture-for f))
      ([fixture-for f]
       (let [requests (atom [])
             server   (http/createServer
                       (fn [req res]
-                        (let [uri (.-url req)]
+                        (let [uri (.-url req)
+                              nm  (fixture-for uri)]
                           (swap! requests conj {:uri uri :headers (.-headers req)})
-                          (.writeHead res 200 #js {"Content-Type" "application/json"})
-                          (.end res (geoservices-body (fixture-for uri) uri)))))]
+                          (.writeHead res (if nm 200 404) #js {"Content-Type" "application/json"})
+                          (.end res (some-> nm (geoservices-body uri))))))]
         (-> (js/Promise. (fn [listening] (.listen server 0 "127.0.0.1" listening)))
             (.then (fn [_]
                      (f (str "http://127.0.0.1:" (.-port (.address server)) "/FeatureServer/0")
@@ -331,6 +332,15 @@
                   (is (= 2 (ds/row-count d)) "the repeated page adds no rows")
                   (is (< (count (filter #(str/includes? (:uri %) "/query") @requests)) 5)
                       "the fetch stops after the repeated page")))))))
+
+#?(:cljs
+   (deftest a-404-page-rejects-the-load
+     (with-geoservices-server
+       (fn [uri] (when-not (str/includes? uri "/query") "layer.json"))
+       (fn [layer-url _]
+         (after (error-message #(ds/load-gdal! layer-url nil))
+                (fn [msg]
+                  (is (str/starts-with? (str msg) "cg.io/load-gdal-source: HTTP 404 "))))))))
 
 #?(:cljs
    (deftest ensure-dataset-keeps-a-dataset-unless-keep-is-false

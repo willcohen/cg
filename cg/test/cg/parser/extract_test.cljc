@@ -874,7 +874,8 @@
                      "(run/load-module \"src/cg/parcel.cg\")\n"
                      "(clojure.core/require '[cg.parcel :as parcel])\n"))]
       (is (= [["cg.parcel" "parcel"]]
-             (mapv (juxt :namespace :alias) (:requires flow)))))))
+             (mapv (juxt :namespace :alias) (:requires flow))))
+      (is (= ["src/cg/parcel.cg"] (mapv :path (:loaded-modules flow)))))))
 
 (deftest a-module-defn-is-an-operation
   (testing "a defn is an operation whose card the canvas can draw and open"
