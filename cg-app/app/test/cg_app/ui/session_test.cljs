@@ -102,6 +102,15 @@
                     :json (fn [] (js/Promise.resolve (aget routes hit)))})
               (js/Promise.resolve #js {:ok false :status 500}))))))
 
+(deftest ^:async only-a-request-with-a-body-says-json
+  (reset! !reqs [])
+  (mock-json-fetch! #js {})
+  (await (session/send "GET" "/api/session/vars" #js {"X-Session-Id" "s-1"} nil))
+  (await (session/send "POST" "/api/session/load" nil #js {:code "x"}))
+  (let [[[_ get-opts] [_ post-opts]] @!reqs]
+    (is (nil? (aget (aget get-opts "headers") "Content-Type")))
+    (is (= "application/json" (aget (aget post-opts "headers") "Content-Type")))))
+
 (deftest ^:async load-session-code-lands-vars-with-header
   (reset! session/!session-id "s-1")
   (reset! !reqs [])

@@ -31,9 +31,12 @@
    body and the fetch options `extra`."
   [extra]
   (fn ^:async send [method path headers body]
+    ;; A JSON Content-Type needs a CORS preflight, so only a request with a
+    ;; body sends it.
     (let [opts (js/Object.assign #js {:method method
-                                      :headers (js/Object.assign #js {"Content-Type" "application/json"}
-                                                                 headers)}
+                                      :headers (js/Object.assign
+                                                (if body #js {"Content-Type" "application/json"} #js {})
+                                                headers)}
                                  extra)]
       (when body (aset opts "body" (js/JSON.stringify body)))
       (let [resp (await (js/fetch (str (rt/backend-url) path) opts))]
