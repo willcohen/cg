@@ -63,8 +63,9 @@
 
 (def ^:private undecodable
   "The `:data` value of decode-literal for a value that does not decode. It
-   cannot be nil, because nil is a literal that a source file can write."
-  ::undecodable)
+   cannot be a value that a source file can write, for example nil, a
+   keyword, or on JS a string."
+  #?(:clj (Object.) :cljs (js/Symbol "undecodable")))
 
 (declare decode-literal)
 

@@ -469,6 +469,14 @@
       (is (contains? (:value p) :data))
       (is (nil? (-> p :value :data))))))
 
+;; On JS a keyword is a string, so both literals spell the old marker.
+(deftest a-literal-that-spells-the-undecodable-marker-keeps-its-data
+  (let [flow (setup/extract-models
+              (str "(def s \"cg.parser.extract/undecodable\")\n"
+                   "(def k :cg.parser.extract/undecodable)"))]
+    (is (= ["cg.parser.extract/undecodable" :cg.parser.extract/undecodable]
+           (mapv #(-> % :value :data) (:parameters flow))))))
+
 (deftest a-def-name-drops-its-metadata
   (testing "^:private and a ^{...} map are not part of the bound name"
     (let [flow (setup/extract-models
