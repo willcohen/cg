@@ -815,30 +815,21 @@
        [(update state :results conj msg) {}]))))
 
 (defn- table-source-step
-  "A source step for table-> mode: it registers the dataset context and emits
-  `ds` in batches, each in a FlowDataset wrapper, then eos/eos."
+  "A source step for table-> mode: it emits `ds` in batches, each in a
+  FlowDataset wrapper, then eos/eos."
   [ds opts]
-  ;; No index in the cljs context: no step queries it, and its build walks
-  ;; each geometry of the table for each flow.
-  (let [ctx-id (dataset/register-dataset-context!
-                ds #?(:clj opts :cljs (assoc opts :build-index? false)))
-        batches (dataset/dataset->batches ds opts)
+  (let [batches (dataset/dataset->batches ds opts)
         table-meta {:cg.dataset/table-rows (dataset/row-count ds)}
         wrapped-batches (mapv #(dataset/wrap-dataset % table-meta) batches)]
     (fn step-fn
-      ([] {:params {:context-id ctx-id}
-           :ins {:trigger "Start signal"}
+      ([] {:ins {:trigger "Start signal"}
            :outs {:out "Dataset batches"}})
 
       ([_args]
        {:batches wrapped-batches
-        :context-id ctx-id
         :emitting false})
 
-      ([state lifecycle]
-       (when (= lifecycle :clojure.core.async.flow/stop)
-         (dataset/unregister-dataset-context! (:context-id state)))
-       state)
+      ([state _lifecycle] state)
 
       ([state _in-name _msg]
        (if (:emitting state)
@@ -1284,8 +1275,6 @@
 
     ;; See create-flow: the compute executor must exist before model->flow.
     #?(:clj (ensure-cg-workers!))
-    ;; Build the flow config one time. A table source registers a dataset
-    ;; context, and only the ::flow/stop of a flow that runs unregisters it.
     (let [flow-def (model->flow flow-model bindings opts)]
       (validate-flow-def flow-def flow-model bindings)
       (cg-flow/run-flow
