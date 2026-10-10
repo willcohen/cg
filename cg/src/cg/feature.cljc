@@ -553,29 +553,22 @@
              (range (quot (.-length flat) 3))))))
 
 (defn point? [geom]
-  #?(:clj (instance? org.locationtech.jts.geom.Point (geometry geom))
-     :cljs (= (.getGeometryType (geometry geom)) "Point")))
+  (= "Point" (.getGeometryType ^Geometry (geometry geom))))
 
 (defn linestring? [geom]
-  #?(:clj (instance? org.locationtech.jts.geom.LineString (geometry geom))
-     :cljs (= (.getGeometryType (geometry geom)) "LineString")))
+  (= "LineString" (.getGeometryType ^Geometry (geometry geom))))
 
 (defn polygon? [geom]
-  #?(:clj (instance? org.locationtech.jts.geom.Polygon (geometry geom))
-     :cljs (= (.getGeometryType (geometry geom)) "Polygon")))
+  (= "Polygon" (.getGeometryType ^Geometry (geometry geom))))
 
 (defn multi-point? [geom]
-  #?(:clj (instance? org.locationtech.jts.geom.MultiPoint (geometry geom))
-     :cljs (= (.getGeometryType (geometry geom)) "MultiPoint")))
+  (= "MultiPoint" (.getGeometryType ^Geometry (geometry geom))))
 
 (defn multi-linestring? [geom]
-  #?(:clj (instance? org.locationtech.jts.geom.MultiLineString (geometry geom))
-     :cljs (= (.getGeometryType (geometry geom)) "MultiLineString")))
+  (= "MultiLineString" (.getGeometryType ^Geometry (geometry geom))))
 
 (defn multi-polygon? [geom]
-  #?(:clj (instance? org.locationtech.jts.geom.MultiPolygon (geometry geom))
-     :cljs (= (.getGeometryType (geometry geom)) "MultiPolygon")))
+  (= "MultiPolygon" (.getGeometryType ^Geometry (geometry geom))))
 
 (defn geometry-collection? [geom]
-  #?(:clj (instance? org.locationtech.jts.geom.GeometryCollection (geometry geom))
-     :cljs (= (.getGeometryType (geometry geom)) "GeometryCollection")))
+  (= "GeometryCollection" (.getGeometryType ^Geometry (geometry geom))))
