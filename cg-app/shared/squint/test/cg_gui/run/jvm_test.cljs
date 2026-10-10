@@ -90,6 +90,11 @@
     (is (= {:port 7} r))
     (is (= "new" @!sid))))
 
+(deftest ^:async with-session-gives-an-error-when-the-new-session-expires-too
+  (let [send (stub-send #js [] {"POST /api/session/create" (ok #js {:session-id "new"})})]
+    (is (= {:error "HTTP 404 in a new session too"}
+           (await (jvm/with-session send (atom "old") (fn [_] (js/Promise.resolve {:expired true}))))))))
+
 (.then (js/Promise.resolve (t/run-tests))
        (fn [results]
          (let [fail (or (get results "fail") 0)

@@ -94,12 +94,14 @@
 
 (defn ^:async with-session
   "(f sid) with the session in the atom `!sid`, made when there is none, and
-   again with a new session when `f` gives {:expired true}."
+   again with a new session when `f` gives {:expired true}. {:error} when the
+   new session expires too, because no caller handles {:expired true}."
   [send !sid f]
   (when (nil? @!sid)
     (reset! !sid (await (create-session send))))
   (let [r (await (f @!sid))]
     (if (:expired r)
       (do (reset! !sid (await (create-session send)))
-          (await (f @!sid)))
+          (let [r2 (await (f @!sid))]
+            (if (:expired r2) {:error "HTTP 404 in a new session too"} r2)))
       r)))
