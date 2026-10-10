@@ -16,14 +16,21 @@
                     [cg.run :as run]
                     [cg.geo :as geo]
                     [cg.feature :as feature]
-                    [cg.test-runner :refer [after]])
+                    [cg.util :as util]
+                    [cg.test-runner :refer [after error-message]])
      :cljs (:require [cljs.test :refer [deftest is testing]]
                      ["../../src/cg/run.mjs" :as run]
                      ["../../src/cg/geo.mjs" :as geo]
                      ["../../src/cg/feature.mjs" :as feature]
+                     ["../../src/cg/util.mjs" :as util]
                      ["../../src/cg/parser/core.mjs" :as parser]
+                     ["node:fs" :as fs]
+                     ["node:os" :as os]
+                     ["node:path" :as node-path]
                      ["./wasmts_setup.mjs" :refer [init_wasmts_BANG_]]
-                     ["./test_runner.mjs" :refer [run_tests_and_exit_BANG_ after]])))
+                     ["./test_runner.mjs" :refer [run_tests_and_exit_BANG_ after error-message]]))
+  #?(:clj (:import (java.nio.file Files)
+                   (java.nio.file.attribute FileAttribute))))
 
 #?(:clj (set! *warn-on-reflection* true))
 
@@ -119,6 +126,27 @@
    (deftest a-path-that-is-not-a-file-loads-from-the-classpath
      (is (= "test.mod-res" (str (:ns-name (run/load-module "fixtures/modules/mod_res.cg")))))
      (is (= "resource" (run/eval-cg "(require '[test.mod-res :as res]) res/origin")))))
+
+(defn- temp-dir []
+  #?(:clj (str (Files/createTempDirectory "cg-load-module" (make-array FileAttribute 0)))
+     :cljs (fs/mkdtempSync (node-path/join (os/tmpdir) "cg-load-module"))))
+
+;; A module whose dep is missing fails. Once the dep exists, the next load
+;; must run the module again.
+(deftest a-module-that-fails-on-a-missing-dep-loads-again
+  (let [dir (temp-dir)
+        user (str dir "/user.cg")
+        dep (str dir "/dep.cg")]
+    (util/write-file! user (str "(ns test.mod-late-user (:require [cg.run :as run]))\n"
+                                "(run/load-module \"" dep "\")\n"
+                                "(def ran 1)\n"))
+    (after (error-message #(run/load-module user))
+           (fn [msg]
+             (is (some? msg))
+             (util/write-file! dep "(ns test.mod-late-dep)\n")
+             (after (run/load-module user)
+                    (fn [_]
+                      (is (= 1 (run/eval-cg "(require '[test.mod-late-user :as u]) u/ran")))))))))
 
 #?(:cljs (-> (init_wasmts_BANG_)
              (.then (fn [_] (parser/init! nil)))

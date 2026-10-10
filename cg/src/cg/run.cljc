@@ -2003,17 +2003,17 @@
        (when-not ns-name
          (throw (ex-info (str "Module must start with (ns ...) form: " path)
                          {:path path})))
-       (let [info {:ns-name ns-name :path path}
-             _ (swap! module-loads assoc path info)
-             _ (await (register-dep-ops! text (atom #{path})))
-             ;; The aliases first: the threading macros resolve them while
-             ;; the module compiles.
-             aliases (alias-values! text)
-             _ (await (register-module-ops! text ns-name))
-             module-fn ((js* "(0, eval)") (module-js text (keys aliases)))]
-         (set-globals! (eval-globals))
+       (let [info {:ns-name ns-name :path path}]
+         (swap! module-loads assoc path info)
          (try
-           (await (.apply module-fn nil (vec (cons (module-namespace ns-name) (vals aliases)))))
+           (await (register-dep-ops! text (atom #{path})))
+           ;; The aliases first: the threading macros resolve them while
+           ;; the module compiles.
+           (let [aliases (alias-values! text)
+                 _ (await (register-module-ops! text ns-name))
+                 module-fn ((js* "(0, eval)") (module-js text (keys aliases)))]
+             (set-globals! (eval-globals))
+             (await (.apply module-fn nil (vec (cons (module-namespace ns-name) (vals aliases))))))
            (catch :default e
              (swap! module-loads dissoc path)
              (throw e)))
