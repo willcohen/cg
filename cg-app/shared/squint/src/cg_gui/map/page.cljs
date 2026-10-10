@@ -43,6 +43,11 @@
                        (fn [^js e] (send "error" #js [(or (.-error e) (.-message e))])))
     (.addEventListener js/window "unhandledrejection"
                        (fn [^js e] (send "error" #js [(.-reason e)])))
+    ;; The browser logs a CSP violation without console.error.
+    (.addEventListener js/document "securitypolicyviolation"
+                       (fn [^js e]
+                         (send "error" #js [(str "CSP violation: " (.-violatedDirective e)
+                                                 " blocked " (.-blockedURI e))])))
     (doseq [level ["error" "warn" "log"]]
       (let [original (aget js/console level)]
         (aset js/console level
