@@ -343,3 +343,8 @@
       (is (false? (crs-4326? nil)))
       (is (false? (crs-4326? 4326)))
       (is (false? (crs-4326? {:authority "EPSG" :code 4326}))))))
+
+(deftest a-projjson-map-crs-gives-its-json
+  (let [crs (charred/read-json projjson-2249 :key-fn keyword)
+        crs-str (#'api/dataset-crs-str (vary-meta (ds/->dataset {:a [1]}) assoc :crs crs))]
+    (is (= crs (charred/read-json crs-str :key-fn keyword)))))

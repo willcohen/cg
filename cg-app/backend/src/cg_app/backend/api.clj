@@ -179,7 +179,7 @@
   (let [crs (get-dataset-crs dataset)]
     (cond
       (string? crs) crs
-      (map? crs) (get-in crs [:properties :name])
+      (map? crs) (or (get-in crs [:properties :name]) (charred/write-json-str crs))
       :else "EPSG:4326")))
 
 (defn- dataset-in-4326
