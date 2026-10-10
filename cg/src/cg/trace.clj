@@ -125,11 +125,12 @@
       (Files/createSymbolicLink latest rel (make-array FileAttribute 0))
       (catch java.nio.file.FileAlreadyExistsException _ nil)
       (catch Exception _
-        ;; No symlink support, or no privilege on win32: copy the file.
-        (Files/copy ^Path target ^Path latest
-                    ^"[Ljava.nio.file.CopyOption;"
-                    (into-array java.nio.file.CopyOption
-                                [java.nio.file.StandardCopyOption/REPLACE_EXISTING]))))))
+        ;; On win32 a symlink needs a privilege, and a hard link needs none.
+        ;; A hard link shows each later event. A copy of the new file is
+        ;; empty, so the run gets no latest.jsonl when the hard link fails.
+        (try
+          (Files/createLink latest target)
+          (catch Exception _ nil))))))
 
 (defonce ^:private active-writer-count (atom 0))
 
