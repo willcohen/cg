@@ -8,6 +8,7 @@
   "The SSE parser and the trace stream of the JVM client. No backend."
   (:require [cljs.test :as t :refer [deftest is]]
             ["child_process" :as cp]
+            ["http" :as http]
             ["../../src/cg_vscode/runtime/jvm_client.mjs" :as jvm]))
 
 (defn- kinds [events] (mapv (fn [e] (aget e "kind")) events))
@@ -52,5 +53,23 @@
                              "-e" network-inspection-script]
                         #js {:encoding "utf8" :timeout 20000})]
     (is (= "OK success café" (.trim (.-stdout r))) (.-stderr r))))
+
+(defn- outcome [p]
+  (js/Promise.race
+   #js [(.then p (fn [_] "resolved") (fn [e] (.-message e)))
+        (js/Promise. (fn [resolve] (js/setTimeout #(resolve "pending") 2000)))]))
+
+(deftest ^:async a-response-that-the-backend-cuts-rejects
+  (let [srv (http/createServer (fn [_ ^js res]
+                                 (.writeHead res 200 #js {"Content-Type" "text/event-stream"})
+                                 (.flushHeaders res)
+                                 (.destroy (.-socket res))))
+        _ (await (js/Promise. (fn [resolve] (.listen srv 0 resolve))))
+        port (.-port (.address srv))]
+    (is (= "the trace stream ended before the execution (backend gone?)"
+           (await (outcome (jvm/stream-trace port "x" (fn [_] nil))))))
+    (is (= "the backend closed the response"
+           (await (outcome ((jvm/send-to port nil) "GET" "/" #js {} nil)))))
+    (.close srv)))
 
 (.then (js/Promise.resolve (t/run-tests)) #(js/process.exit (if (t/successful? %) 0 1)))

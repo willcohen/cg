@@ -18,9 +18,10 @@
 
 (def default-row-limit 5000)
 
-(defn- read-response [^js res resolve]
+(defn- read-response [^js res resolve reject]
   (let [chunks #js []]
     (.on res "data" (fn [c] (.push chunks c)))
+    (.on res "close" (fn [] (when-not (.-complete res) (reject (js/Error. "the backend closed the response")))))
     (.on res "end"
          (fn []
            (resolve #js {:status (.-statusCode res)
@@ -39,7 +40,7 @@
              _ (when body (aset hs "Content-Length" (js/Buffer.byteLength body)))
              ^js req (http/request #js {:host "localhost" :port port :path path
                                         :method method :headers hs}
-                                   (fn [res] (read-response res resolve)))]
+                                   (fn [res] (read-response res resolve reject)))]
          (.on req "error" reject)
          (when timeout-ms
            (.setTimeout req timeout-ms (fn [] (.destroy req (js/Error. "timeout")))))
@@ -115,7 +116,7 @@
                                   (let [[events tail] (sse-events (str @!buf (.write decoder chunk)))]
                                     (reset! !buf tail)
                                     (.forEach events take!))))
-                           (.on res "end"
+                           (.on res "close"
                                 (fn []
                                   (when-not @!ended
                                     (reject (js/Error. "the trace stream ended before the execution (backend gone?)")))))))]
