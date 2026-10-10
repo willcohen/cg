@@ -11,6 +11,7 @@
    load. The observable is a rand-seeded def — re-evaluation moves it,
    a skipped evaluation cannot."
   (:require [clojure.test :refer [deftest is testing]]
+            [cg.dsl :as dsl]
             [cg.run :as run])
   (:import (java.nio.file Files)
            (java.nio.file.attribute FileAttribute)))
@@ -52,3 +53,11 @@
         (run/load-module path)
         (is (not= s1 (run/eval-cg "test.load-cache/stamp"))
             "a fresh context re-evaluates the same content")))))
+
+(deftest load-module-evaluates-once-per-context
+  (let [path (temp-module module-v1)]
+    (run/load-module path)
+    (binding [run/*cg-context* (dsl/create-cg-context)]
+      (run/load-module path)
+      (is (number? (run/eval-cg "test.load-cache/stamp"))
+          "the second context has the namespace of the module"))))

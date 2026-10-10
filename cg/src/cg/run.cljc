@@ -1294,8 +1294,8 @@
 
 #?(:clj
    (def ^:private loaded-module-hashes
-     "Module path -> content hash of the last load-module evaluation in the
-      current CG context. reset-context! clears it."
+     "SCI context -> module path -> content hash of the last load-module
+      evaluation in that context. reset-context! clears it."
      (atom {})))
 
 #?(:clj
@@ -1904,13 +1904,14 @@
        ;; BEFORE the eval, because a load cycle must end: module A loads B,
        ;; whose top loads A, which must read as loaded. A module that throws
        ;; removes its record and is evaluated again on the next load.
-       (let [h (hash content)]
-         (when-not (= h (get @loaded-module-hashes path))
-           (swap! loaded-module-hashes assoc path h)
+       (let [h (hash content)
+             ctx (or *cg-context* (get-cg-context))]
+         (when-not (= h (get-in @loaded-module-hashes [ctx path]))
+           (swap! loaded-module-hashes assoc-in [ctx path] h)
            (try
              (eval-cg content)
              (catch Throwable e
-               (swap! loaded-module-hashes dissoc path)
+               (swap! loaded-module-hashes update ctx dissoc path)
                (throw e)))))
        {:ns-name (:ns-name ns-info)
         :path path
