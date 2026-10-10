@@ -57,19 +57,21 @@
        :visible? true})
 
 (defn ^:async fetch-layers
-  "Gives {:layers}, in the order of `vars`, or {:expired true}. opts: :bbox
-   and :limit."
+  "Gives {:layers :warnings}, in the order of `vars`, or {:expired true}.
+   opts: :bbox and :limit."
   [send sid vars opts]
   (let [rs (await (js/Promise.all (.map vars (fn [v] (jvm/fetch-dataset send sid v opts)))))]
     (if (.some rs (fn [r] (:expired r)))
       {:expired true}
       {:layers (.filter (.map rs (fn [r i] (when-let [fc (:fc r)] (layer-of (aget vars i) fc))))
-                        some?)})))
+                        some?)
+       :warnings (.filter (.map rs (fn [r i] (when-let [e (:error r)] (str (aget vars i) ": " e))))
+                          some?)})))
 
 (defn ^:async load-layers
   "Loads `code` in the session, with its project dir `root`, and fetches its
-   dataset vars, or `:vars`, as layers. Gives {:layers}, {:expired true} or
-   {:error <msg>}."
+   dataset vars, or `:vars`, as layers. Gives {:layers :warnings}, {:expired
+   true} or {:error <msg>}."
   [send sid code filename {:keys [vars limit root]}]
   (let [loaded (await (jvm/load-session send sid code filename root))
         listed (when-not (or (:expired loaded) (:error loaded) (seq vars))

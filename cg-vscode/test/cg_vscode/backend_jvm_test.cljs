@@ -49,7 +49,8 @@
       (let [sid (await (api/create-session send))
             r (await (jvm/load-layers send sid code "map-bridge.cg"
                                       {:vars ["parcels" "does_not_exist"] :limit 100}))]
-        (is (= 1 (.-length (:layers r))) "a missing var is not fatal"))
+        (is (= 1 (.-length (:layers r))) "a missing var is not fatal")
+        (is (= 1 (.-length (:warnings r))) "the missing var is warned"))
 
       (let [r (await (jvm/load-layers send "not-a-real-session" code "map-bridge.cg"
                                       {:vars ["parcels"] :limit 100}))]

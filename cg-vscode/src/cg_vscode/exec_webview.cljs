@@ -77,8 +77,10 @@
   (let [send (jvm-client/send-to port nil)]
     (await (jvm/with-session send !map-session (fn [sid] (f send sid))))))
 
-(defn- render-jvm-result! [^js panel result]
+(defn- render-jvm-result! [^js panel ^js channel result]
   (let [layers (:layers result)]
+    (doseq [w (:warnings result)]
+      (.appendLine channel (str "CG map (JVM): " w)))
     (cond
       (:error result)
       (vscode/window.showErrorMessage (str "CG map (JVM) run failed: " (:error result)))
@@ -96,7 +98,7 @@
     (when (and layers (pos? (.-length layers)))
       (reset! !last-vars (.map layers (fn [^js l] (aget l "var")))))))
 
-(defn ^:async run-jvm-feed! [^js panel port ^js document]
+(defn ^:async run-jvm-feed! [^js panel ^js channel port ^js document]
   (reset! !jvm-port port)
   ;; session/load has no response timeout, and a first load can take minutes.
   (post-status! panel "loading session (a first-run full analysis takes minutes)")
@@ -108,11 +110,11 @@
                                                {:limit jvm-client/default-row-limit
                                                 :root (modules/bb-root-for-document document)}))))]
       (remember-fetched-vars! r)
-      (render-jvm-result! panel r))
+      (render-jvm-result! panel channel r))
     (catch :default e
       (vscode/window.showErrorMessage (str "CG map (JVM) failed: " (.-message e))))))
 
-(defn ^:async handle-viewport-settled! [^js panel bbox]
+(defn ^:async handle-viewport-settled! [^js panel ^js channel bbox]
   (let [sid  @!map-session
         port @!jvm-port
         vars @!last-vars]
@@ -123,7 +125,7 @@
                                                   {:bbox bbox :limit jvm-client/default-row-limit}))]
             (cond
               (:expired r) (reset! !map-session nil)
-              (= gen @!refetch-gen) (render-jvm-result! panel r)))
+              (= gen @!refetch-gen) (render-jvm-result! panel channel r)))
           (catch :default _ nil))))))
 
 (defn- post-js-run! [!state ^js panel ^js cg-uri text flow]
@@ -280,7 +282,7 @@
                               (doseq [send @!ready-sends] (send))
                               (reset! !ready-sends []))
     "cg/read-module"      (answer-module-read! panel msg)
-    "cg/viewport-settled" (handle-viewport-settled! panel (.-bbox msg))
+    "cg/viewport-settled" (handle-viewport-settled! panel (:runtime/output-channel @!state) (.-bbox msg))
     "cg/repl-result"      (answer-repl! msg)
     ("cg/run-started" "cg/trace-event") (relay! !state msg false)
     "cg/run-ended"        (relay! !state msg true)
@@ -408,7 +410,7 @@
      panel
      (fn ^:async show [^js document]
        (when-let [port (await (jvm-port! !state panel "CG: Show Datasets" nil))]
-         (await (run-jvm-feed! panel port document)))))))
+         (await (run-jvm-feed! panel (:runtime/output-channel @!state) port document)))))))
 
 (defn ^:async run-jvm-now! [!state ^js panel ^js document]
   (if-let [port (await (jvm-port! !state panel "CG: Eval (JVM)"
