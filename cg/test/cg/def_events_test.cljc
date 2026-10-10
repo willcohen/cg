@@ -83,6 +83,15 @@
                   ["def-start" "binding-bad"] ["def-error" "binding-bad"]]
                  (def-events %)))))
 
+;; A line of a string that starts with ( is not a form. The file has no
+;; model, so run-file throws after the eval.
+(deftest a-string-line-that-starts-with-a-paren-keeps-its-text
+  (after (collect-events #(run/run-file "(def wkt \"A\n(B)\")"))
+         (fn [events]
+           (is (= [["def-start" "binding-wkt"] ["def-complete" "binding-wkt"]]
+                  (def-events events)))
+           (is (= "A\n(B)" (run/eval-cg "wkt"))))))
+
 (deftest eval-cg-emits-no-def-events
   (testing "only the run of a file lights the loader cards"
     (after (collect-events #(run/eval-cg "(def z 1)"))

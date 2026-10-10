@@ -1476,6 +1476,24 @@
      (js/RegExp. "^\\(def\\s+(?:\\^\\S+\\s+)*([^\\s\\[\\]()\"]+)")))
 
 #?(:cljs
+   (defn- scan-line
+     "The [depth in-string?] at the end of `line`, from the state at its
+      start. A backslash escapes the next char, in a string and in a char
+      literal."
+     [[depth in-string?] line]
+     (loop [i 0 depth depth in-string? in-string?]
+       (let [c (.charAt line i)]
+         (cond
+           (>= i (count line)) [depth in-string?]
+           (= c "\\") (recur (+ i 2) depth in-string?)
+           (= c "\"") (recur (inc i) depth (not in-string?))
+           in-string? (recur (inc i) depth true)
+           (= c ";") [depth false]
+           (str/includes? "([{" c) (recur (inc i) (inc depth) false)
+           (str/includes? ")]}" c) (recur (inc i) (dec depth) false)
+           :else (recur (inc i) depth false))))))
+
+#?(:cljs
    (defn- mark-defs
      "`text` with a call on the line before each top-level form at the start of
       a line, for the def events of the loader cards. A def opens its card, and
@@ -1484,16 +1502,19 @@
       The calls go on their own lines, because module-def-names finds a def at
       the start of a line."
      [text]
-     (str (str/join "\n"
-                    (map (fn [line]
-                           (cond
-                             (not (str/starts-with? line "(")) line
-                             (re-find #"^\(ns[\s)]" line) line
-                             :else (if-let [m (.exec def-line line)]
-                                     (str "(js/globalThis.__cg_def_start \"" (aget m 1) "\")\n" line)
-                                     (str "(js/globalThis.__cg_def_end)\n" line))))
-                         (str/split text #"\n")))
-          "\n(js/globalThis.__cg_def_end)\n")))
+     (let [lines (str/split text #"\n")]
+       (str (str/join "\n"
+                      (map (fn [line [depth in-string?]]
+                             (cond
+                               (or (pos? depth) in-string?) line
+                               (not (str/starts-with? line "(")) line
+                               (re-find #"^\(ns[\s)]" line) line
+                               :else (if-let [m (.exec def-line line)]
+                                       (str "(js/globalThis.__cg_def_start \"" (aget m 1) "\")\n" line)
+                                       (str "(js/globalThis.__cg_def_end)\n" line))))
+                           lines
+                           (reductions scan-line [0 false] lines)))
+            "\n(js/globalThis.__cg_def_end)\n"))))
 
 #?(:cljs
    (defn- set-globals! [m]
