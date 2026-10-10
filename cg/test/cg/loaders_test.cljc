@@ -210,13 +210,16 @@
 ;; cg.test-runner/after and returns the result. cljs.test in squint waits for
 ;; a Promise that a test returns.
 
-(deftest write-geojson-writes-points-as-x-and-y
+(deftest write-geojson-writes-coordinates-as-x-and-y
   (let [p (geojson-coords (feature/point 1 2))
-        mp (geojson-coords (feature/multi-point [(feature/point 1 2) (feature/point 3 4)]))]
+        mp (geojson-coords (feature/multi-point [(feature/point 1 2) (feature/point 3 4)]))
+        ring (first (geojson-coords (feature/polygon [[0 0] [1 0] [1 1] [0 0]])))]
     (is (= 2 (count p)) "a Point is [x y]")
     (is (and (== 1 (first p)) (== 2 (second p))))
     (is (= 2 (count mp)) "a MultiPoint is a list of [x y]")
-    (is (and (== 3 (first (second mp))) (== 4 (second (second mp)))))))
+    (is (and (== 3 (first (second mp))) (== 4 (second (second mp)))))
+    (is (= [2 2 2 2] (mapv count ring)) "a Polygon ring is a list of [x y]")
+    (is (and (== 1 (first (nth ring 2))) (== 1 (second (nth ring 2)))))))
 
 (deftest load-gpkg-reads-the-fixture
   (after (ds/load-gpkg tiny-gpkg-path)

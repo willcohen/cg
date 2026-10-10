@@ -115,8 +115,8 @@
      (defn- parse-wkt-ring
        "Parse WKT ring string (including parens) to coordinate array"
        [ring-str]
-       (let [inner (-> ring-str str/trim (subs 1) (subs 0 (dec (count (str/trim ring-str)))))]
-         (parse-wkt-coords inner)))
+       (let [s (str/trim ring-str)]
+         (parse-wkt-coords (subs s 1 (dec (count s))))))
 
      (defn- wkt->geojson-geometry [wkt-str]
        (let [wkt (str/trim wkt-str)
