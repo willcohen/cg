@@ -189,6 +189,15 @@
              (is (= "cg/run-error" (last (post-types posts))))
              (is (= "boom" (aget (last posts) "message")))))))
 
+(deftest run-js-posts-the-end-when-arquero-fails
+  (aset js/globalThis "wasmts" #js {:geom #js {}})
+  (let [posts #js []
+        mod (traced-cg-module #js [1] nil)]
+    (aset mod "dataset" #js {:init_arquero_BANG_ (fn [] (js/Promise.reject (js/Error. "no arquero")))})
+    (.then (rc/run-js! mod "(x)" one-model-flow {:post (fn [m] (.push posts m))})
+           (fn [_] (is false "the run throws"))
+           (fn [_] (is (= ["cg/run-started" "cg/run-error"] (post-types posts)))))))
+
 (deftest scalar-text-reads-as-the-value
   (is (= "42" (rc/scalar-text 42)))
   (is (= "0" (rc/scalar-text 0)))

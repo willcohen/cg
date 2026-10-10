@@ -165,10 +165,10 @@
    each cg/trace-event and, on a failure, cg/run-error with `post`. opts:
    :post, :urls (of ensure-workers!), :read-module, :model and :file."
   [mod text flow {:keys [post urls read-module model file]}]
-  (await (ensure-wasmts! nil))
-  (await (ensure-arquero! mod))
   (post #js {:type "cg/run-started"})
   (try
+    (await (ensure-wasmts! nil))
+    (await (ensure-arquero! mod))
     (await (ensure-pool! mod urls post))
     (await (execute-js! mod text flow
                         (fn [evt] (post #js {:type "cg/trace-event" :event evt}))

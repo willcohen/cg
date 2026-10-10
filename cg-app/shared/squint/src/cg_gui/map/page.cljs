@@ -163,7 +163,12 @@
                                    {:post (:post ctx) :urls (:urls ctx)
                                     :read-module (:read-module ctx)
                                     :model (.-model m) :file (.-file m)}))
-          layers (run-js/run-result->layers mod r)
+          ;; The catch below does not post, because run-js! posts the end of
+          ;; its own failure.
+          layers (try (run-js/run-result->layers mod r)
+                      (catch :default e
+                        ((:post ctx) #js {:type "cg/run-error" :message (error-text e)})
+                        (throw e)))
           layer (last layers)
           n (aget r "count")]
       ((:post ctx) #js {:type "cg/run-ended" :outcome "success" :count n
