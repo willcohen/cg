@@ -13,7 +13,8 @@
 
 (defn overlay-positions
   "{node-id [x y]} from the overlay of the parsed `flow`, with no entry for a
-   node that has no :pos. {} when the file has no overlay."
+   node that has no :pos. {} when the file has no overlay, or one that
+   edn/read-overlay cannot read, so that a hand edit does not stop the load."
   [flow]
   (if-let [o (aget flow "overlay")]
     (reduce (fn [acc [id-k props]]
@@ -21,7 +22,13 @@
                 (assoc acc (edn/kw-name id-k) (vec pos))
                 acc))
             {}
-            (js/Object.entries (or (edn/kget (edn/read-overlay (aget o "raw")) "nodes") {})))
+            (js/Object.entries
+             (or (edn/kget (try (edn/read-overlay (aget o "raw"))
+                                (catch :default e
+                                  (js/console.warn "cg: the ^:cgproj overlay is not read:" e)
+                                  nil))
+                           "nodes")
+                 {})))
     {}))
 
 (defn- unq

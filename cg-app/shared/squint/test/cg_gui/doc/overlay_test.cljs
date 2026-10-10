@@ -51,6 +51,9 @@
   (is (= {} (ov/overlay-positions #js {:overlay #js {:raw "^:cgproj\n{:nodes {:a {:collapsed true}}}"}}))
       "a node with no :pos gives no entry"))
 
+(deftest an-overlay-the-reader-rejects-places-nothing
+  (is (= {} (ov/overlay-positions #js {:overlay #js {:raw "^:cgproj\n{:nodes {:a {:pos [1 2]}} :tags #{:x}}"}}))))
+
 (def flow
   #js {:bindings #js [#js {:name "parcels" :body-shape "function_call"}
                       #js {:name "buffered" :body-shape "threading_macro"
