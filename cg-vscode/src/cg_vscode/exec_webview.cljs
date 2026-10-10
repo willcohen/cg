@@ -261,8 +261,8 @@
     (.delete repl-waits (.-id msg))
     (res msg)))
 
-(defn- drop-repl-waits! []
-  (.forEach repl-waits (fn [res _] (res #js {:err "the CG Map tab closed" :out ""})))
+(defn- drop-repl-waits! [message]
+  (.forEach repl-waits (fn [res _] (res #js {:err message :out ""})))
   (.clear repl-waits))
 
 (defn- relay!
@@ -292,9 +292,11 @@
     "cg/map-error"        (if (or @!ready (.-level msg))
                             (run-status/post! !state (:uri (first @!run-docs))
                                               (relay/page-error-output msg))
-                            (relay! !state #js {:type "cg/run-error"
-                                                :message (str "the CG Map tab did not start: " (.-error msg))}
-                                    true))
+                            (let [message (str "the CG Map tab did not start: " (.-error msg))]
+                              (when (empty? @!run-docs) (vscode/window.showErrorMessage message))
+                              (relay! !state #js {:type "cg/run-error" :message message} true)
+                              (reset! !ready-sends [])
+                              (drop-repl-waits! message)))
     nil))
 
 (defn- serve-html! [^js webview roots port {:keys [public-dir wasmts-dir grammar-dir]}]
@@ -336,7 +338,7 @@
                           (reset! !panel nil) (reset! !ready false)
                           (reset! !last-run nil) (reset! !map-session nil)
                           (reset! !jvm-port nil) (reset! !last-vars nil)
-                          (reset! !refetch-gen 0) (reset! !ready-sends []) (drop-repl-waits!)))
+                          (reset! !refetch-gen 0) (reset! !ready-sends []) (drop-repl-waits! "the CG Map tab closed")))
     panel))
 
 (defn- ensure-panel!
