@@ -5,7 +5,8 @@
 // SPDX-License-Identifier: Apache-2.0 WITH LLVM-exception
 
 // Dev server for the app shell (bb dev:app). resolve() maps each page URL to
-// its file in the monorepo.
+// its file in the monorepo. It listens on 127.0.0.1 only, because /modules/
+// serves each file of cg/, and a host on the LAN must not read them.
 import { createServer } from 'node:http';
 import { readFile, stat } from 'node:fs/promises';
 import { join, dirname, extname, sep } from 'node:path';
@@ -22,8 +23,7 @@ const MIME = { '.html': 'text/html', '.mjs': 'text/javascript', '.js': 'text/jav
   '.json': 'application/json', '.map': 'application/json', '.cg': 'text/plain',
   '.ttf': 'font/ttf', '.woff': 'font/woff', '.woff2': 'font/woff2' };
 
-// The request path can hold '..', and the server listens on each interface.
-// Return null when the path goes out of root.
+// The request path can hold '..'. Return null when the path goes out of root.
 function under(root, rel) {
   const f = join(root, rel);
   return f === root || f.startsWith(root + sep) ? f : null;
@@ -118,4 +118,4 @@ createServer(async (req, res) => {
   } catch {
     res.writeHead(404); res.end('not found: ' + req.url);
   }
-}).listen(port, () => console.log(`cg-app dev server: http://localhost:${port}/`));
+}).listen(port, '127.0.0.1', () => console.log(`cg-app dev server: http://localhost:${port}/`));
