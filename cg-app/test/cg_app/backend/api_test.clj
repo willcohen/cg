@@ -150,6 +150,12 @@
                                 :body {:code layer-models-code}})]
     (is (= 404 (:status r)))))
 
+(deftest execution-start-needs-a-session-and-code-test
+  (is (= 400 (:status (api/execution-start {:body {:code "1"}}))))
+  (with-session
+    (fn [sid]
+      (is (= 400 (:status (api/execution-start {:headers {"x-session-id" sid} :body {}})))))))
+
 (defn- with-project [files f]
   (let [root (str (java.nio.file.Files/createTempDirectory
                    "cg-root" (make-array java.nio.file.attribute.FileAttribute 0)))]

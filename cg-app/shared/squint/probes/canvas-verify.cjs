@@ -102,6 +102,7 @@ const THREAD = {
       ops: [
         { 'qualified-name': 'geo/buffer',
           args: [{ kind: 'literal', literal: { kind: 'number', raw: '0.5' } }],
+          'emits-level': 'groups',
           location: { line: 5, column: 2 } },
         { 'qualified-name': 'check',
           args: [ref('limits'),
@@ -441,6 +442,10 @@ async function threadFrames(page, check) {
   check('the thread line has 3 segments, 4px wide, with the class cg-thread-line mode-table',
     line.every((l) => l && /cg-thread-line/.test(l.cls) && /mode-table/.test(l.cls) && l.width === '4px'),
     JSON.stringify(line));
+  const badges = await page.evaluate(() => document.querySelectorAll('.cg-edge-badge').length);
+  check('the line out of the groups step, and not the line into it, has cg-edge-groups and one ×N badge',
+    !!(line[0] && line[1]) && !/cg-edge-groups/.test(line[0].cls) && /cg-edge-groups/.test(line[1].cls) && badges === 1,
+    JSON.stringify({ line, badges }));
 
   const srcEnd = await edgeEnd(page, 'src__parcels->' + IDS.frame);
   check('the source line ends at the top of the frame, above the source port',
