@@ -126,7 +126,11 @@
            "the 1-arity cannot choose an index")
        (is (thrown-with-msg? clojure.lang.ExceptionInfo #"uses the id column :geometry-id"
                              (ds/add-spatial-index d :footprint :geometry-id))
-           "a second index cannot take the ids of another index"))))
+           "a second index cannot take the ids of another index")
+       (let [m (ds/map-geometry d identity {:geometry-column :footprint})]
+         (is (= [2] (ids (ds/select-intersects m (feature/point 5 5) :footprint))))
+         (is (= :footprint-id (:indexed-id-column (ds/get-spatial-index m :footprint)))
+             "the new index keeps the id column of the old one")))))
 
 (deftest map-geometry-on-an-indexed-dataset
   (let [moved (ds/map-geometry (indexed-squares) (fn [_] (square 1000 10)))]

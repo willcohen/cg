@@ -1231,7 +1231,8 @@
                                               (into [] (map f) geom-series)))]
           (if (and (has-spatial-index? dataset geom-col)
                    (not preserve-index?))
-            (add-spatial-index transformed geom-col)
+            (add-spatial-index transformed geom-col
+                               (:indexed-id-column (get-spatial-index dataset geom-col)))
             transformed))))
 
      ;; Three flow steps, because the batches can then pipeline.
