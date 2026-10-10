@@ -55,11 +55,13 @@
     (.. panel -webview (postMessage m))))
 
 (defn- post-status! [^js panel ^js text]
-  (.. panel -webview (postMessage #js {:type "cg/status" :text text})))
+  (when (identical? panel @!panel)
+    (.. panel -webview (postMessage #js {:type "cg/status" :text text}))))
 
 (defn- stash-and-post! [^js panel ^js msg]
-  (reset! !last-run msg)
-  (when @!ready (post-pending! panel)))
+  (when (identical? panel @!panel)
+    (reset! !last-run msg)
+    (when @!ready (post-pending! panel))))
 
 (defn- post-refused!
   "There is no fallback to JS."
