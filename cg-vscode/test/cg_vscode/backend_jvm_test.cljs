@@ -7,7 +7,7 @@
 (ns cg-vscode.backend-jvm-test
   "jvm-client against a running cg-app backend: the map feed, the debug layers
    of parcel-debug-smoke.cg, a session run and the nREPL. Set CG_JVM_PORT to
-   the bound port; with no reachable backend, each test skips."
+   the bound port. With no CG_JVM_PORT, each test skips."
   (:require [cljs.test :as t :refer [deftest is]]
             ["../../src/cg_vscode/runtime/jvm_client.mjs" :as jvm]
             ["../../../cg-app/shared/squint/src/cg_gui/run/jvm.mjs" :as api]
@@ -21,6 +21,13 @@
 
 (def ^:private send (when jvm-port (jvm/send-to jvm-port nil)))
 
+(def ^:private up (when jvm-port (api/health? (jvm/send-to jvm-port 1000))))
+
+(deftest ^:async a-set-port-has-a-backend
+  (if jvm-port
+    (is (await up) "no backend answers on CG_JVM_PORT")
+    (println "[skip] no CG_JVM_PORT (set it to the bound port after `bb backend:dev`)")))
+
 (def ^:private map-bridge-path "../cg-app/app/probes/fixtures/map-bridge.cg")
 
 (defn- features [layer]
@@ -30,8 +37,7 @@
 (defn- feature-count [layer] (or (some-> (features layer) .-length) 0))
 
 (deftest ^:async jvm-map-feed-against-running-backend
-  (if-not (and jvm-port (await (api/health? (jvm/send-to jvm-port 1000))))
-    (println "[skip] no reachable backend (set CG_JVM_PORT=<bound port> after `bb backend:dev`)")
+  (when (await up)
     (let [code (.toString (fs/readFileSync map-bridge-path))]
       (let [sid (await (api/create-session send))
             r (await (jvm/load-layers send sid code "map-bridge.cg"
@@ -64,8 +70,7 @@
         (is (= "parcels" (and layers (aget (aget layers 0) "var"))))))))
 
 (deftest ^:async refetch-reuses-loaded-session-without-rerun
-  (if-not (and jvm-port (await (api/health? (jvm/send-to jvm-port 1000))))
-    (println "[skip] no reachable backend (set CG_JVM_PORT after `bb backend:dev`)")
+  (when (await up)
     (let [code (.toString (fs/readFileSync map-bridge-path))
           sid  (await (api/create-session send))]
       (let [r (await (jvm/load-layers send sid code "map-bridge.cg"
@@ -93,8 +98,7 @@
       (set (map (fn [f] (aget (aget f "properties") "category")) feats)))))
 
 (deftest ^:async parcel-debug-emit-fetchable-via-jvm-feed
-  (if-not (and jvm-port (await (api/health? (jvm/send-to jvm-port 1000))))
-    (println "[skip] no reachable backend (set CG_JVM_PORT=<bound port> after `bb backend:dev`)")
+  (when (await up)
     (let [code (.toString (fs/readFileSync parcel-debug-path))
           sid (await (api/create-session send))
           r (await (jvm/load-layers send sid code "parcel-debug-smoke.cg"
@@ -121,8 +125,7 @@
 ;; reproject the bbox before it filters, or a bbox fetch is empty. The test
 ;; boxes the 4326 coordinates of a whole fetch.
 (deftest ^:async viewport-bbox-reprojects-to-dataset-crs
-  (if-not (and jvm-port (await (api/health? (jvm/send-to jvm-port 1000))))
-    (println "[skip] no reachable backend")
+  (when (await up)
     (let [code (.toString (fs/readFileSync parcel-debug-path))
           sid  (await (api/create-session send))
           full (await (jvm/load-layers send sid code "parcel-debug-smoke.cg"
@@ -148,8 +151,7 @@
 (def dots (table-> :shapes (map-layer {:name \"dots\" :kind :point})))")
 
 (deftest ^:async a-session-run-gives-the-trace-and-the-layers
-  (if-not (and jvm-port (await (api/health? (jvm/send-to jvm-port 1000))))
-    (println "[skip] no reachable backend (set CG_JVM_PORT=<bound port> after `bb backend:dev`)")
+  (when (await up)
     (let [sid (await (api/create-session send))
           !events (atom [])
           r (await (jvm/run-in-session jvm-port sid #js {:code layer-models :filename "layers.cg"}
@@ -163,7 +165,7 @@
       (is (= "fill" (when layers (aget (aget (first layers) "spec") "kind")))))))
 
 (deftest ^:async an-unknown-session-is-expired
-  (when (and jvm-port (await (api/health? (jvm/send-to jvm-port 1000))))
+  (when (await up)
     (is (:expired (await (jvm/run-in-session jvm-port "no-such-session"
                                              #js {:code layer-models} (fn [_] nil)))))))
 
@@ -175,7 +177,7 @@
        (.on sock "error" (fn [_] (resolve false)))))))
 
 (deftest ^:async the-repl-of-a-session-starts-one-time
-  (when (and jvm-port (await (api/health? (jvm/send-to jvm-port 1000))))
+  (when (await up)
     (let [sid (await (api/create-session send))
           r1 (await (api/start-repl send sid))
           r2 (await (api/start-repl send sid))]
