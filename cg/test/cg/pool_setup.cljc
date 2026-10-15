@@ -36,16 +36,6 @@
      "node_modules/gdal-wasm/proj.db"))
 
 #?(:cljs
-   (defn wasmts-handler-url
-     "The file URL of the squint-compiled cg wasmts handler. Each worker
-      imports this module. The bundled build has a sibling copy of it next to
-      dist/cg.mjs, but the test suites import the source, which has no such
-      sibling."
-     []
-     (.-href (node-url/pathToFileURL
-              (node-path/resolve "src/cg/wasmts_handler.mjs")))))
-
-#?(:cljs
    (defn ^:async init-cg-pool!
      "Install globalThis.wasmts and start the joint pool. Returns the pool.
 
@@ -58,25 +48,13 @@
       call apply to that process."
      [opts]
      (await (init_wasmts_BANG_))
-     (let [assets (wasmts_assets)
-           base   {:wasmts-js-url      (:wasmts-js-url assets)
-                   :wasmts-wasm-binary (:wasmts-wasm-binary assets)
-                   ;; The suites import the unbundled src/cg/run.mjs. The
-                   ;; default handler URL is the sibling of the bundle, which
-                   ;; does not exist next to the source.
-                   :wasmts-handler-url (wasmts-handler-url)}
-           base   (if (:size opts) (assoc base :size (:size opts)) base)
-           full   (if (:gdal opts)
-                    (assoc base :gdal-init {:dbBytes (fs/readFileSync proj-db-path)})
-                    base)]
-       (await (run/init-cg-workers! full)))))
-
-#?(:cljs
-   (defn ^:async shutdown-cg-pool!
-     "Stop the joint pool. This function does nothing when no pool started.
-
-      A suite that exits through cg.test-runner does not need this function,
-      because process.exit releases the workers. A suite that wants a clean
-      handle count can give this function to the runner as its teardown fn."
-     []
-     (await (run/terminate-cg-workers!))))
+     (await (run/init-cg-workers!
+             (cond-> (assoc (wasmts_assets)
+                            ;; The suites import the unbundled src/cg/run.mjs.
+                            ;; The default handler URL is the sibling of the
+                            ;; bundle, which does not exist next to the source.
+                            :wasmts-handler-url
+                            (.-href (node-url/pathToFileURL
+                                     (node-path/resolve "src/cg/wasmts_handler.mjs"))))
+               (:size opts) (assoc :size (:size opts))
+               (:gdal opts) (assoc :gdal-init {:dbBytes (fs/readFileSync proj-db-path)}))))))

@@ -9,14 +9,23 @@
    write-csv, partition-by and grouped? (the reducers are in
    cg.dataset.agg-test), and cg.run/when-row with the cg.macros
    parse-operation-form hook."
-  (:require [clojure.test :refer [deftest is testing]]
-            [cg.dataset :as dataset]
-            [cg.feature :as f]
-            [cg.run :as run]
-            [cg.macros :as macros]
-            #?(:clj [charred.api :as charred])))
+  #?(:clj (:require [clojure.test :refer [deftest is testing]]
+                    [cg.dataset :as dataset]
+                    [cg.feature :as f]
+                    [cg.run :as run]
+                    [cg.macros :as macros]
+                    [charred.api :as charred])
+     :cljs (:require [cljs.test :refer [deftest is testing]]
+                     ["../../src/cg/dataset.mjs" :as dataset]
+                     ["../../src/cg/feature.mjs" :as f]
+                     ["../../src/cg/run.mjs" :as run]
+                     ["./wasmts_setup.mjs" :refer [init_wasmts_BANG_]]
+                     ["./test_runner.mjs" :refer [run_tests_and_exit_BANG_]])))
 
 #?(:clj (set! *warn-on-reflection* true))
+
+(defn- parse-json [s]
+  #?(:clj (charred/read-json s) :cljs (js/JSON.parse s)))
 
 (deftest coalesce-direct
   (testing "coalesce substitutes default for nil"
@@ -29,13 +38,12 @@
     (is (= "" (dataset/coalesce "" "default"))
         "empty string is non-nil — coalesce is nil-only, not falsy")))
 
-#?(:clj
-   (deftest coalesce-resolves-via-run
-     (testing "bare 'coalesce' resolves to cg.dataset/coalesce via cg.run/resolve-operation"
-       (let [resolved (run/resolve-operation "coalesce")]
-         (is (some? resolved) "resolver returned a value")
-         (is (= 7 (resolved nil 7)) "resolved fn behaves like cg.dataset/coalesce")
-         (is (= 1 (resolved 1 99)))))))
+(deftest coalesce-resolves-via-run
+  (testing "bare 'coalesce' resolves to cg.dataset/coalesce via cg.run/resolve-operation"
+    (let [resolved (run/resolve-operation "coalesce")]
+      (is (some? resolved) "resolver returned a value")
+      (is (= 7 (resolved nil 7)) "resolved fn behaves like cg.dataset/coalesce")
+      (is (= 1 (resolved 1 99))))))
 
 #?(:clj
    (deftest write-geojson-roundtrip
@@ -47,7 +55,7 @@
          (try
            (is (= :ok (dataset/write-geojson ds path)))
            (is (.exists tmp))
-           (let [parsed (charred/read-json (slurp path))]
+           (let [parsed (parse-json (slurp path))]
              (is (= "FeatureCollection" (get parsed "type")))
              (is (= 1 (count (get parsed "features"))))
              (let [feat (-> parsed (get "features") first)]
@@ -58,23 +66,22 @@
                (is (= "Point" (get-in feat ["geometry" "type"])))))
            (finally (.delete tmp)))))))
 
-#?(:clj
-   (deftest geojson-drops-non-scalar-properties
-     (testing "dataset->geojson-string keeps scalar property columns and drops
+(deftest geojson-drops-non-scalar-properties
+  (testing "dataset->geojson-string keeps scalar property columns and drops
                nested and geometry columns, because a nested column such as
                :edges must not corrupt the FeatureCollection of the map"
-       (let [pt  (f/point 1 2)
-             ds  (dataset/->dataset [{:geometry pt :name "a" :units 3 :grade :low
-                                      :edges [1 2 3] :env (f/point 0 0)}])
-             parsed (charred/read-json (dataset/dataset->geojson-string ds))
-             props  (get-in parsed ["features" 0 "properties"])]
-         (is (= "a" (get props ":name")) "scalar string column survives")
-         (is (= 3 (get props ":units")) "scalar number column survives")
-         (is (= "low" (get props ":grade")) "a keyword value goes as its name")
-         (is (not (contains? props ":edges")) "nested vector column dropped")
-         (is (not (contains? props ":env")) "geometry-valued column dropped")
-         (is (= "Point" (get-in parsed ["features" 0 "geometry" "type"]))
-             "the geometry column still serializes")))))
+    (let [pt  (f/point 1 2)
+          ds  (dataset/->dataset [{:geometry pt :name "a" :units 3 :grade :low
+                                   :edges [1 2 3] :env (f/point 0 0)}])
+          parsed (parse-json (dataset/dataset->geojson-string ds))
+          props  (get-in parsed ["features" 0 "properties"])]
+      (is (= "a" (get props (str :name))) "scalar string column survives")
+      (is (= 3 (get props (str :units))) "scalar number column survives")
+      (is (= "low" (get props (str :grade))) "a keyword value goes as its name")
+      (is (not (contains? props (str :edges))) "nested vector column dropped")
+      (is (not (contains? props (str :env))) "geometry-valued column dropped")
+      (is (= "Point" (get-in parsed ["features" 0 "geometry" "type"]))
+          "the geometry column still serializes"))))
 
 #?(:clj
    (deftest write-csv-roundtrip
@@ -126,11 +133,12 @@
              (is (= 2 (dataset/row-count (dataset/select-within dsi big :geometry)))
                  "squares a and c are within big")))))))
 
-#?(:clj
-   (deftest when-row-resolves-via-run
-     (testing "bare 'when-row' resolves to cg.run/when-row via cg.run/resolve-operation"
-       (let [resolved (run/resolve-operation "when-row")]
-         (is (some? resolved) "resolver returned a value"))
+(deftest when-row-resolves-via-run
+  (testing "bare 'when-row' resolves to cg.run/when-row via cg.run/resolve-operation"
+    (let [resolved (run/resolve-operation "when-row")]
+      (is (some? resolved) "resolver returned a value"))
+    ;; JS resolve-operation throws for a name with no entry. The JVM gives nil.
+    #?(:clj
        (testing "the (when ...) head is sugar at the parser/macro layer only"
          ;; parse-when-row-form collapses both heads to :fn 'cg.run/when-row,
          ;; so (run/resolve-operation \"when\") is intentionally unmapped —
@@ -138,60 +146,56 @@
          (is (nil? (run/resolve-operation "when"))
              "no runtime resolver entry for the sugar head")))))
 
-#?(:clj
-   (deftest when-row-pass-through-when-predicate-false
-     (testing "predicate false + default on-miss returns the dataset unchanged"
-       (let [ds (dataset/->dataset [{:id 1 :name "alpha"}
-                                    {:id 2 :name "beta"}])
-             result (run/when-row ds
-                                  {:predicate {:kind "has-column?" :arg :missing}
-                                   :options {"on-miss" "pass-through"}
-                                   ;; Body shape is required by the hook but
-                                   ;; never invoked on the false path; a stub
-                                   ;; with a nil :fn would still pass through.
-                                   :body {:fn "cg.dataset/select-rows" :params [[]]}})]
-         (is (identical? ds result)
-             "pass-through must return the same dataset reference (no rebuild)")))))
+(deftest when-row-pass-through-when-predicate-false
+  (testing "predicate false + default on-miss returns the dataset unchanged"
+    (let [ds (dataset/->dataset [{:id 1 :name "alpha"}
+                                 {:id 2 :name "beta"}])
+          result (run/when-row ds
+                               {:predicate {:kind "has-column?" :arg :missing}
+                                :options {"on-miss" "pass-through"}
+                                ;; Body shape is required by the hook but
+                                ;; never invoked on the false path; a stub
+                                ;; with a nil :fn would still pass through.
+                                :body {:fn "cg.dataset/select-rows" :params [[]]}})]
+      (is (identical? ds result)
+          "pass-through must return the same dataset reference (no rebuild)"))))
 
-#?(:clj
-   (deftest when-row-drop-when-predicate-false
-     (testing "predicate false + on-miss drop returns an empty dataset preserving column shape"
-       (let [ds (dataset/->dataset [{:id 1 :name "alpha"}
-                                    {:id 2 :name "beta"}])
-             result (run/when-row ds
-                                  {:predicate {:kind "has-column?" :arg :missing}
-                                   :options {"on-miss" "drop"}
-                                   :body {:fn "cg.dataset/select-rows" :params [[]]}})]
-         (is (zero? (dataset/row-count result))
-             "drop must produce a zero-row dataset")
-         (is (= (set (dataset/column-names ds))
-                (set (dataset/column-names result)))
-             "drop must preserve column names")))))
+(deftest when-row-drop-when-predicate-false
+  (testing "predicate false + on-miss drop returns an empty dataset preserving column shape"
+    (let [ds (dataset/->dataset [{:id 1 :name "alpha"}
+                                 {:id 2 :name "beta"}])
+          result (run/when-row ds
+                               {:predicate {:kind "has-column?" :arg :missing}
+                                :options {"on-miss" "drop"}
+                                :body {:fn "cg.dataset/select-rows" :params [[]]}})]
+      (is (zero? (dataset/row-count result))
+          "drop must produce a zero-row dataset")
+      (is (= (set (dataset/column-names ds))
+             (set (dataset/column-names result)))
+          "drop must preserve column names"))))
 
-#?(:clj
-   (deftest when-row-applies-body-when-predicate-true
-     (testing "predicate true routes the dataset through the body op"
-       (let [ds (dataset/->dataset [{:id 1 :name "alpha"}
-                                    {:id 2 :name "beta"}])
-             result (run/when-row ds
-                                  {:predicate {:kind "has-column?" :arg :id}
-                                   :options {"on-miss" "pass-through"}
-                                   ;; select-rows ds [0] → first row only
-                                   :body {:fn "cg.dataset/select-rows" :params [[0]]}})]
-         (is (= 1 (dataset/row-count result))
-             "body op ran (select-rows produced a single-row dataset)")))))
+(deftest when-row-applies-body-when-predicate-true
+  (testing "predicate true routes the dataset through the body op"
+    (let [ds (dataset/->dataset [{:id 1 :name "alpha"}
+                                 {:id 2 :name "beta"}])
+          result (run/when-row ds
+                               {:predicate {:kind "has-column?" :arg :id}
+                                :options {"on-miss" "pass-through"}
+                                ;; select-rows ds [0] → first row only
+                                :body {:fn "cg.dataset/select-rows" :params [[0]]}})]
+      (is (= 1 (dataset/row-count result))
+          "body op ran (select-rows produced a single-row dataset)"))))
 
-#?(:clj
-   (deftest when-row-throws-on-unimplemented-predicate-kind
-     (testing "an unrecognised predicate kind throws clearly rather than silently passing"
-       (let [ds (dataset/->dataset [{:id 1}])]
-         (is (thrown-with-msg?
-              clojure.lang.ExceptionInfo
-              #"is not yet implemented at runtime"
-              (run/when-row ds
-                            {:predicate {:kind "totally-made-up" :arg :geometry}
-                             :options {"on-miss" "pass-through"}
-                             :body {:fn "cg.dataset/select-rows" :params [[]]}})))))))
+(deftest when-row-throws-on-unimplemented-predicate-kind
+  (testing "an unrecognised predicate kind throws clearly rather than silently passing"
+    (let [ds (dataset/->dataset [{:id 1}])]
+      (is (thrown-with-msg?
+           #?(:clj clojure.lang.ExceptionInfo :cljs js/Error)
+           #"is not yet implemented at runtime"
+           (run/when-row ds
+                         {:predicate {:kind "totally-made-up" :arg :geometry}
+                          :options {"on-miss" "pass-through"}
+                          :body {:fn "cg.dataset/select-rows" :params [[]]}}))))))
 
 #?(:clj
    (deftest parse-when-row-form-shape
@@ -250,79 +254,74 @@
          (is (= via-when via-when-row)
              "the two heads produce identical operation-node shapes")))))
 
-#?(:clj
-   (deftest partition-by-groups-rows-by-column
-     (let [d (dataset/->dataset {:zone ["A" "B" "A" "B" "A"]
-                                 :area [10 20 30 40 50]})
-           grouped (dataset/partition-by d :zone)]
-       (testing "returns a map keyed by distinct column values"
-         (is (map? grouped))
-         (is (= #{"A" "B"} (set (keys grouped)))))
-       (testing "each value is a sub-dataset with the matching rows"
-         (is (every? dataset/dataset? (vals grouped)))
-         (is (= 3 (dataset/row-count (get grouped "A"))))
-         (is (= 2 (dataset/row-count (get grouped "B"))))))))
+(deftest partition-by-groups-rows-by-column
+  (let [d (dataset/->dataset {:zone ["A" "B" "A" "B" "A"]
+                              :area [10 20 30 40 50]})
+        grouped (dataset/partition-by d :zone)]
+    (testing "returns a map keyed by distinct column values"
+      (is (map? grouped))
+      (is (= #{"A" "B"} (set (keys grouped)))))
+    (testing "each value is a sub-dataset with the matching rows"
+      (is (every? dataset/dataset? (vals grouped)))
+      (is (= 3 (dataset/row-count (get grouped "A"))))
+      (is (= 2 (dataset/row-count (get grouped "B")))))))
 
-#?(:clj
-   (deftest partition-by-resolves-via-run
-     (testing "bare 'partition-by' resolves to cg.dataset/partition-by via cg.run/resolve-operation"
-       (let [resolved (run/resolve-operation "partition-by")]
-         (is (some? resolved))
-         (let [d (dataset/->dataset {:zone ["A" "B"] :area [1 2]})
-               grouped (resolved d :zone)]
-           (is (dataset/grouped? grouped)))))))
+(deftest partition-by-resolves-via-run
+  (testing "bare 'partition-by' resolves to cg.dataset/partition-by via cg.run/resolve-operation"
+    (let [resolved (run/resolve-operation "partition-by")]
+      (is (some? resolved))
+      (let [d (dataset/->dataset {:zone ["A" "B"] :area [1 2]})
+            grouped (resolved d :zone)]
+        (is (dataset/grouped? grouped))))))
 
-#?(:clj
-   (deftest grouped-predicate-discriminates-partition-by-output
-     (testing "true for partition-by output"
-       (let [d (dataset/->dataset {:zone ["A" "B" "A"] :area [10 20 30]})]
-         (is (true? (dataset/grouped? (dataset/partition-by d :zone))))))
-     (testing "false for a plain dataset"
-       (is (false? (dataset/grouped? (dataset/->dataset {:area [1 2 3]})))))
-     (testing "false for nil, non-maps, and the empty map"
-       (is (false? (dataset/grouped? nil)))
-       (is (false? (dataset/grouped? [])))
-       (is (false? (dataset/grouped? {})))
-       (is (false? (dataset/grouped? "not a map"))))
-     (testing "false for maps whose values aren't datasets"
-       (is (false? (dataset/grouped? {:a 1 :b 2})))
-       (is (false? (dataset/grouped? {"A" [1 2 3]}))))))
+(deftest grouped-predicate-discriminates-partition-by-output
+  (testing "true for partition-by output"
+    (let [d (dataset/->dataset {:zone ["A" "B" "A"] :area [10 20 30]})]
+      (is (true? (dataset/grouped? (dataset/partition-by d :zone))))))
+  (testing "false for a plain dataset"
+    (is (false? (dataset/grouped? (dataset/->dataset {:area [1 2 3]})))))
+  (testing "false for nil, non-maps, and the empty map"
+    (is (false? (dataset/grouped? nil)))
+    (is (false? (dataset/grouped? [])))
+    (is (false? (dataset/grouped? {})))
+    (is (false? (dataset/grouped? "not a map"))))
+  (testing "false for maps whose values aren't datasets"
+    (is (false? (dataset/grouped? {:a 1 :b 2})))
+    (is (false? (dataset/grouped? {"A" [1 2 3]})))))
 
-#?(:clj
-   (deftest filter-serializable-form
-     (let [d (dataset/->dataset {:zone ["a" "b" "c" "a"] :n [1 2 3 4]})]
-       (testing ":in keeps rows whose column value is in the value collection"
-         (let [out (dataset/filter d :zone :in ["a" "b"])]
-           (is (dataset/dataset? out))
-           (is (= 3 (dataset/row-count out)))
-           (is (= #{"a" "b"} (set (mapv :zone (dataset/rows out :as-maps)))))))
-       (testing ":equals keeps exact matches"
-         (is (= 2 (dataset/row-count (dataset/filter d :zone :equals "a")))))
-       (testing ":gt is a numeric comparison"
-         (is (= 2 (dataset/row-count (dataset/filter d :n :gt 2)))))
-       (testing "the 2-arg fn-predicate form is unchanged"
-         (is (= 1 (dataset/row-count (dataset/filter d #(= 3 (:n %))))))))))
+(deftest filter-serializable-form
+  (let [d (dataset/->dataset {:zone ["a" "b" "c" "a"] :n [1 2 3 4]})]
+    (testing ":in keeps rows whose column value is in the value collection"
+      (let [out (dataset/filter d :zone :in ["a" "b"])]
+        (is (dataset/dataset? out))
+        (is (= 3 (dataset/row-count out)))
+        (is (= #{"a" "b"} (set (mapv :zone (dataset/rows out :as-maps)))))))
+    (testing ":equals keeps exact matches"
+      (is (= 2 (dataset/row-count (dataset/filter d :zone :equals "a")))))
+    (testing ":gt is a numeric comparison"
+      (is (= 2 (dataset/row-count (dataset/filter d :n :gt 2)))))
+    (testing "the 2-arg fn-predicate form is unchanged"
+      (is (= 1 (dataset/row-count (dataset/filter d #(= 3 (:n %)))))))))
 
-#?(:clj
-   (deftest into-map-realizes-groups
-     (let [d (dataset/->dataset {:zone ["a" "a" "b"] :v [1 2 3]})
-           groups (dataset/group-by d :zone)
-           result (dataset/into-map groups)]
-       (testing "realizes a groups container to a plain keyed map"
-         (is (map? result))
-         (is (= #{"a" "b"} (set (keys result))))
-         (is (dataset/dataset? (get result "a")))
-         (is (= 2 (dataset/row-count (get result "a"))))
-         (is (= 1 (dataset/row-count (get result "b")))))
-       (testing "identity in shape for an already-realized keyed map (post-map)"
-         (let [realized {"a" (dataset/->dataset {:v [1 2]})
-                         "b" (dataset/->dataset {:v [3]})}
-               out (dataset/into-map realized)]
-           (is (map? out))
-           (is (= #{"a" "b"} (set (keys out))))
-           (is (dataset/dataset? (get out "a")))))
-       (testing "nil yields the empty map"
-         (is (= {} (dataset/into-map nil)))))))
+(deftest into-map-realizes-groups
+  (let [d (dataset/->dataset {:zone ["a" "a" "b"] :v [1 2 3]})
+        groups (dataset/group-by d :zone)
+        result (dataset/into-map groups)]
+    (testing "realizes a groups container to a plain keyed map"
+      (is (map? result))
+      (is (= #{"a" "b"} (set (keys result))))
+      (is (dataset/dataset? (get result "a")))
+      (is (= 2 (dataset/row-count (get result "a"))))
+      (is (= 1 (dataset/row-count (get result "b")))))
+    (testing "identity in shape for an already-realized keyed map (post-map)"
+      (let [realized {"a" (dataset/->dataset {:v [1 2]})
+                      "b" (dataset/->dataset {:v [3]})}
+            out (dataset/into-map realized)]
+        (is (map? out))
+        (is (= #{"a" "b"} (set (keys out))))
+        (is (dataset/dataset? (get out "a")))))
+    (testing "nil yields the empty map"
+      (is (= {} (dataset/into-map nil))))))
 
 #?(:clj
    (deftest aggregate-dispatches-to-registered-reducers
@@ -346,26 +345,24 @@
            (is (= 3 (:rows (get by-zone "A"))))
            (is (= 2 (:rows (get by-zone "B")))))))))
 
-#?(:clj
-   (deftest aggregate-rejects-non-grouped-input
-     (testing "passing a flat dataset throws"
-       (is (thrown-with-msg?
-            clojure.lang.ExceptionInfo
-            #"partition-by-shaped"
-            (run/aggregate (dataset/->dataset {:area [1 2 3]})
-                           {:total {:op :sum :over :area}}))))))
+(deftest aggregate-rejects-non-grouped-input
+  (testing "passing a flat dataset throws"
+    (is (thrown-with-msg?
+         #?(:clj clojure.lang.ExceptionInfo :cljs js/Error)
+         #"partition-by-shaped"
+         (run/aggregate (dataset/->dataset {:area [1 2 3]})
+                        {:total {:op :sum :over :area}})))))
 
-#?(:clj
-   (deftest aggregate-rejects-non-reducer-op
-     (let [grouped (dataset/partition-by
-                    (dataset/->dataset {:zone ["A"] :area [1]})
-                    :zone)]
-       (testing "typo / non-reducer op fires a clear error"
-         (is (thrown-with-msg?
-              clojure.lang.ExceptionInfo
-              #"does not resolve to a registered reducer"
-              (run/aggregate grouped
-                             {:total {:op :sumz :over :area}})))))))
+(deftest aggregate-rejects-non-reducer-op
+  (let [grouped (dataset/partition-by
+                 (dataset/->dataset {:zone ["A"] :area [1]})
+                 :zone)]
+    (testing "typo / non-reducer op fires a clear error"
+      (is (thrown-with-msg?
+           #?(:clj clojure.lang.ExceptionInfo :cljs js/Error)
+           #"does not resolve to a registered reducer"
+           (run/aggregate grouped
+                          {:total {:op :sumz :over :area}}))))))
 
 #?(:clj
    (deftest aggregate-handles-mean-min-max
@@ -398,21 +395,19 @@
       (is (= :b (:k (dataset/max-by items :v))))
       (is (= :b (:k (dataset/min-by items :v)))))))
 
-#?(:clj
-   (deftest max-by-and-min-by-on-dataset
-     (testing "max-by / min-by accept a dataset, returning the row as a map"
-       (let [d (dataset/->dataset {:zone ["A" "B" "C"] :area [10 30 20]})]
-         (is (= 30 (:area (dataset/max-by d :area))))
-         (is (= 10 (:area (dataset/min-by d :area))))))))
+(deftest max-by-and-min-by-on-dataset
+  (testing "max-by / min-by accept a dataset, returning the row as a map"
+    (let [d (dataset/->dataset {:zone ["A" "B" "C"] :area [10 30 20]})]
+      (is (= 30 (:area (dataset/max-by d :area))))
+      (is (= 10 (:area (dataset/min-by d :area)))))))
 
-#?(:clj
-   (deftest max-by-min-by-resolve-via-run
-     (testing "bare 'max-by' and 'min-by' resolve to cg.dataset/* via cg.run"
-       (let [mb (run/resolve-operation "max-by")
-             mn (run/resolve-operation "min-by")
-             items [{:n 1} {:n 5} {:n 3}]]
-         (is (= 5 (:n (mb items :n))))
-         (is (= 1 (:n (mn items :n))))))))
+(deftest max-by-min-by-resolve-via-run
+  (testing "bare 'max-by' and 'min-by' resolve to cg.dataset/* via cg.run"
+    (let [mb (run/resolve-operation "max-by")
+          mn (run/resolve-operation "min-by")
+          items [{:n 1} {:n 5} {:n 3}]]
+      (is (= 5 (:n (mb items :n))))
+      (is (= 1 (:n (mn items :n)))))))
 
 (deftest reduce-fold-kinds
   (let [nums [3 1 4 1 5 9 2 6]]
@@ -438,19 +433,17 @@
          #"unknown reducer-kind"
          (dataset/reduce [1 2 3] :bogus)))))
 
-#?(:clj
-   (deftest reduce-resolves-via-run
-     (testing "bare 'reduce' resolves to cg.dataset/reduce"
-       (let [r (run/resolve-operation "reduce")]
-         (is (= 6 (r [1 2 3] :sum)))))))
+(deftest reduce-resolves-via-run
+  (testing "bare 'reduce' resolves to cg.dataset/reduce"
+    (let [r (run/resolve-operation "reduce")]
+      (is (= 6 (r [1 2 3] :sum))))))
 
-#?(:clj
-   (deftest filter-and-group-by-resolve-via-run
-     (let [f (run/resolve-operation "filter")
-           g (run/resolve-operation "group-by")
-           d (dataset/->dataset {:zone ["A" "B" "A"] :area [10 20 30]})]
-       (is (= 2 (dataset/row-count (f d #(= "A" (:zone %))))))
-       (is (= #{"A" "B"} (set (keys (g d :zone))))))))
+(deftest filter-and-group-by-resolve-via-run
+  (let [f (run/resolve-operation "filter")
+        g (run/resolve-operation "group-by")
+        d (dataset/->dataset {:zone ["A" "B" "A"] :area [10 20 30]})]
+    (is (= 2 (dataset/row-count (f d #(= "A" (:zone %))))))
+    (is (= #{"A" "B"} (set (keys (g d :zone)))))))
 
 #?(:clj
    (deftest filter-macro-dispatches-by-first-arg-shape
@@ -464,112 +457,111 @@
                      '(filter :keep?))]
          (is (not= 'cg.run/when-row (:fn parsed)))))))
 
-#?(:clj
-   (deftest loader-op-registrations
-     (testing "each loader is registered with :type :source"
-       (doseq [op-name ["cg.dataset/load-geojson"
-                        "cg.dataset/load-vector"
-                        "cg.dataset/load-gpkg"
-                        "cg.dataset/load-shapefile"
-                        "cg.dataset/load-gdb"
-                        "cg.dataset/load-gdal!"]]
-         (let [info (f/get-operation-info op-name)]
-           (is (some? info)
-               (str op-name " is registered"))
-           (is (= :source (:type info))
-               (str op-name " is :type :source"))
-           (is (vector? (:params info))
-               (str op-name " has :params vector")))))))
+(deftest loader-op-registrations
+  (testing "each loader is registered with :type :source"
+    (doseq [op-name ["cg.dataset/load-geojson"
+                     "cg.dataset/load-vector"
+                     "cg.dataset/load-gpkg"
+                     "cg.dataset/load-shapefile"
+                     "cg.dataset/load-gdb"
+                     "cg.dataset/load-gdal!"]]
+      (let [info (f/get-operation-info op-name)]
+        (is (some? info)
+            (str op-name " is registered"))
+        (is (= :source (:type info))
+            (str op-name " is :type :source"))
+        (is (vector? (:params info))
+            (str op-name " has :params vector"))))))
 
-#?(:clj
-   (deftest map-layer-sink-states-drawing-intent
-     (testing "the map-layer sink returns pure layer data: the FeatureCollection
+(deftest map-layer-sink-states-drawing-intent
+  (testing "the map-layer sink returns pure layer data: the FeatureCollection
                plus the spec the host compiles into a style"
-       (let [ds  (dataset/->dataset [{:geometry (f/point 0 0) :zoning "R1" :setback 12}
-                                     {:geometry (f/point 1 1) :zoning "R2" :setback 8}])
-             out (dataset/map-layer ds {:name "parcels" :kind :line
-                                        :color-by :zoning :offset 2 :opacity 0.4})]
-         (is (true? (:layer out)) "tagged so the host can tell it from a dataset")
-         (is (= "parcels" (:var out)))
-         (is (= "line" (get-in out [:spec :kind])))
-         (is (= 2 (get-in out [:spec :offset])))
-         (is (= 0.4 (get-in out [:spec :opacity])))
-         ;; the host matches this against a geojson property name, and those
-         ;; emit through (str k)
-         (is (= ":zoning" (get-in out [:spec :color-by])))
-         (let [parsed (charred/read-json (:geojson out))]
-           (is (= "FeatureCollection" (get parsed "type")))
-           (is (= 2 (count (get parsed "features"))))
-           (is (= "R1" (get-in parsed ["features" 0 "properties" ":zoning"]))
-               "the color-by column reaches the map under the name the spec gives"))))))
+    (let [ds  (dataset/->dataset [{:geometry (f/point 0 0) :zoning "R1" :setback 12}
+                                  {:geometry (f/point 1 1) :zoning "R2" :setback 8}])
+          out (dataset/map-layer ds {:name "parcels" :kind :line
+                                     :color-by :zoning :offset 2 :opacity 0.4})]
+      (is (true? (:layer out)) "tagged so the host can tell it from a dataset")
+      (is (= "parcels" (:var out)))
+      (is (= "line" (get-in out [:spec :kind])))
+      (is (= 2 (get-in out [:spec :offset])))
+      (is (= 0.4 (get-in out [:spec :opacity])))
+      ;; the host matches this against a geojson property name, and those
+      ;; emit through (str k)
+      (is (= (str :zoning) (get-in out [:spec :color-by])))
+      (let [parsed (parse-json (:geojson out))]
+        (is (= "FeatureCollection" (get parsed "type")))
+        (is (= 2 (count (get parsed "features"))))
+        (is (= "R1" (get-in parsed ["features" 0 "properties" (str :zoning)]))
+            "the color-by column reaches the map under the name the spec gives")))))
 
-#?(:clj
-   (deftest map-layer-label-by-writes-the-property-the-map-reads
-     (testing ":label-by is the one option that changes the data: the named
+(deftest map-layer-label-by-writes-the-property-the-map-reads
+  (testing ":label-by is the one option that changes the data: the named
                column is copied to a plain `label` property, which is what the
                map's symbol layer annotates a line from"
-       (let [ds  (dataset/->dataset [{:geometry (f/point 0 0) :setback 12}])
-             out (dataset/map-layer ds {:label-by :setback})
-             props (-> (charred/read-json (:geojson out))
-                       (get-in ["features" 0 "properties"]))]
-         (is (= "12" (get props "label"))
-             "plain `label`, not \":label\" — a keyword column would emit the latter
+    (let [ds  (dataset/->dataset [{:geometry (f/point 0 0) :setback 12}])
+          out (dataset/map-layer ds {:label-by :setback})
+          props (-> (parse-json (:geojson out))
+                    (get-in ["features" 0 "properties"]))]
+      (is (= "12" (get props "label"))
+          "plain `label`, not \":label\" — a keyword column would emit the latter
               and the symbol layer would find nothing")
-         (is (= 12 (get props ":setback")) "the source column is left alone")))))
+      (is (= 12 (get props (str :setback))) "the source column is left alone"))))
 
-#?(:clj
-   (deftest map-layer-passes-the-colors-in-their-order
-     (let [ds    (dataset/->dataset [{:geometry (f/point 0 0) :grade "good"}])
-           out   (dataset/map-layer ds {:color-by :grade
-                                        :colors {:good "#111111" :bad "#222222"}})
-           value (-> (charred/read-json (:geojson out))
-                     (get-in ["features" 0 "properties" ":grade"]))]
-       (is (= [["good" "#111111"] ["bad" "#222222"]] (get-in out [:spec :colors]))
-           "pairs, because JSON keeps the order of an array")
-       (is (= value (ffirst (get-in out [:spec :colors])))
-           "the value of the feature is the name that the pair gives it")
-       (is (nil? (get-in (dataset/map-layer ds) [:spec :colors]))))))
+(deftest map-layer-passes-the-colors-in-their-order
+  (let [ds    (dataset/->dataset [{:geometry (f/point 0 0) :grade "good"}])
+        out   (dataset/map-layer ds {:color-by :grade
+                                     :colors {:good "#111111" :bad "#222222"}})
+        value (-> (parse-json (:geojson out))
+                  (get-in ["features" 0 "properties" (str :grade)]))]
+    (is (= [["good" "#111111"] ["bad" "#222222"]] (get-in out [:spec :colors]))
+        "pairs, because JSON keeps the order of an array")
+    (is (= value (ffirst (get-in out [:spec :colors])))
+        "the value of the feature is the name that the pair gives it")
+    (is (nil? (get-in (dataset/map-layer ds) [:spec :colors])))))
 
-#?(:clj
-   (deftest map-layer-passes-the-popup-with-names-for-keywords
-     (let [ds  (dataset/->dataset [{:geometry (f/point 0 0) :grade :good}])
-           out (dataset/map-layer ds {:popup {:title [:name :num]
-                                              :rules [{:actual :width :min :min-width}]
-                                              :facts [{:value :share :format :percent}]}})]
-       (is (= {"title" ["name" "num"]
-               "rules" [{"actual" "width" "min" "min-width"}]
-               "facts" [{"value" "share" "format" "percent"}]}
-              (get-in out [:spec :popup])))
-       (is (nil? (get-in (dataset/map-layer ds) [:spec :popup]))))))
+(deftest map-layer-passes-the-popup-with-names-for-keywords
+  (let [ds  (dataset/->dataset [{:geometry (f/point 0 0) :grade :good}])
+        out (dataset/map-layer ds {:popup {:title [:name :num]
+                                           :rules [{:actual :width :min :min-width}]
+                                           :facts [{:value :share :format :percent}]}})]
+    (is (= {"title" ["name" "num"]
+            "rules" [{"actual" "width" "min" "min-width"}]
+            "facts" [{"value" "share" "format" "percent"}]}
+           (get-in out [:spec :popup])))
+    (is (nil? (get-in (dataset/map-layer ds) [:spec :popup])))))
 
-#?(:clj
-   (deftest map-layer-defaults-are-quiet
-     (testing "with no opts the sink still produces a drawable layer and a spec
+(deftest map-layer-defaults-are-quiet
+  (testing "with no opts the sink still produces a drawable layer and a spec
                that asks for nothing, so the map styles it as it always has"
-       (let [out (dataset/map-layer (dataset/->dataset [{:geometry (f/point 0 0)}]))]
-         (is (= "result" (:var out)))
-         (is (nil? (get-in out [:spec :kind])))
-         (is (nil? (get-in out [:spec :color])))
-         (is (nil? (get-in out [:spec :color-by])))
-         (is (nil? (get-in out [:spec :offset])))))))
+    (let [out (dataset/map-layer (dataset/->dataset [{:geometry (f/point 0 0)}]))]
+      (is (= "result" (:var out)))
+      (is (nil? (get-in out [:spec :kind])))
+      (is (nil? (get-in out [:spec :color])))
+      (is (nil? (get-in out [:spec :color-by])))
+      (is (nil? (get-in out [:spec :offset]))))))
 
-#?(:clj
-   (deftest map-layer-is-a-registered-sink
-     (testing "a threading pipeline may terminate in the bare map-layer, the
+(deftest map-layer-is-a-registered-sink
+  (testing "a threading pipeline may terminate in the bare map-layer, the
                way it may terminate in report-table. The ds/ spelling is an
                alias a .cg file's own require creates, not a resolver entry."
-       (is (= "cg.dataset" (f/get-bare-op-namespace "map-layer")))
-       (let [resolved (run/resolve-operation "map-layer")]
-         (is (some? resolved))
-         (is (true? (:layer (resolved (dataset/->dataset [{:geometry (f/point 0 0)}])
-                                      nil))))))))
+    (is (= "cg.dataset" (f/get-bare-op-namespace "map-layer")))
+    (let [resolved (run/resolve-operation "map-layer")]
+      (is (some? resolved))
+      (is (true? (:layer (resolved (dataset/->dataset [{:geometry (f/point 0 0)}])
+                                   nil)))))))
 
 ;; This build has no GeoParquet support. A call must fail with one error that
 ;; names the cause, not with a missing namespace.
-#?(:clj
-   (deftest geoparquet-calls-fail-with-one-clear-error
-     (doseq [f [#(dataset/write-geoparquet (dataset/->dataset [{:a 1}]) "x.parquet")
-                #(dataset/read-geoparquet "x.parquet")]]
-       (is (thrown-with-msg? clojure.lang.ExceptionInfo
-                             #"GeoParquet is not available"
-                             (f))))))
+(deftest geoparquet-calls-fail-with-one-clear-error
+  (doseq [f [#(dataset/write-geoparquet (dataset/->dataset [{:a 1}]) "x.parquet")
+             #(dataset/read-geoparquet "x.parquet")]]
+    (is (thrown-with-msg? #?(:clj clojure.lang.ExceptionInfo :cljs js/Error)
+                          #"GeoParquet is not available"
+                          (f)))))
+
+#?(:cljs (-> (init_wasmts_BANG_)
+             (.then (fn [_] (dataset/init-arquero!)))
+             ;; when-row resolves as "cg.run/when-row", and the pre-filled cljs
+             ;; registry holds cg.geo, cg.feature and cg.dataset only.
+             (.then (fn [_] (run/register-namespace! "cg.run" run)))
+             (.then (fn [_] (run_tests_and_exit_BANG_ "cg.dataset-test")))))

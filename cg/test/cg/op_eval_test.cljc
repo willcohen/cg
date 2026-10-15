@@ -12,7 +12,8 @@
                     [cg.run :as run]
                     [cg.geo :as geo]
                     [cg.dataset :as ds]
-                    [cg.feature :as feature])
+                    [cg.feature :as feature]
+                    [cg.test-runner :refer [after]])
      :cljs (:require [cljs.test :refer [deftest is testing]]
                      ["../../src/cg/run.mjs" :as run]
                      ["../../src/cg/geo.mjs" :as geo]
@@ -20,7 +21,7 @@
                      ["../../src/cg/feature.mjs" :as feature]
                      ["../../src/cg/parser/core.mjs" :as parser]
                      ["./wasmts_setup.mjs" :refer [init_wasmts_BANG_]]
-                     ["./test_runner.mjs" :refer [run_tests_and_exit_BANG_]])))
+                     ["./test_runner.mjs" :refer [run_tests_and_exit_BANG_ after]])))
 
 #?(:clj (set! *warn-on-reflection* true))
 
@@ -76,18 +77,6 @@
 (defn- rows-dataset []
   (ds/maps->dataset [{:id 1 :geometry (square 10)} {:id 2 :geometry (square 20)}]))
 
-#?(:cljs
-   (do
-     (defn ^:async run-item-rung! []
-       (check-rung-areas!
-        (await (run/run-model (run/eval-cg item-rung-src)
-                              {:squares [(square 10) (square 20)]} {}))))
-
-     (defn ^:async run-table-rung! []
-       (check-tagged-rows!
-        (await (run/run-model (run/eval-cg table-rung-src)
-                              {:rows (rows-dataset)} {}))))))
-
 (deftest an-op-defined-through-eval-cg-gives-its-value
   (testing "measure-parcel from typed-clean.cg, on one 10 x 10 square"
     (run/eval-cg measure-parcel-src)
@@ -95,17 +84,14 @@
 
 (deftest an-op-as-an-item-rung
   (testing "(item-> :squares (measure-parcel)) over two squares"
-    #?(:clj (check-rung-areas!
-             (run/run-model (run/eval-cg item-rung-src)
-                            {:squares [(square 10) (square 20)]} {}))
-       :cljs (run-item-rung!))))
+    (after (run/run-model (run/eval-cg item-rung-src)
+                          {:squares [(square 10) (square 20)]} {})
+           check-rung-areas!)))
 
 (deftest an-op-as-a-table-rung
   (testing "(table-> :rows (tag-area)) over two rows"
-    #?(:clj (check-tagged-rows!
-             (run/run-model (run/eval-cg table-rung-src)
-                            {:rows (rows-dataset)} {}))
-       :cljs (run-table-rung!))))
+    (after (run/run-model (run/eval-cg table-rung-src) {:rows (rows-dataset)} {})
+           check-tagged-rows!)))
 
 (deftest an-op-with-a-map-arg-gives-its-value
   (testing "(tag-one {:a 1}) is the row, not a Promise of it"

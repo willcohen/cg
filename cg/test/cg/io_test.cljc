@@ -47,6 +47,8 @@
 
 ;; The fixture server serves two GeoServices pages (2 + 1 features), and 3
 ;; rows show that paging ran. It records the headers for the :auth test.
+;; with-fixture-server and with-geoservices-server are public, because other
+;; test namespaces use them.
 
 #?(:clj
    (def ^:private geoservices-fixture-dir
@@ -65,11 +67,11 @@
        :else                                    "layer.json")))
 
 #?(:clj
-   (defn- with-fixture-server
-     "Spin up an HttpServer whose handler answers each request with
-      (respond uri) => [content-type ^bytes body], call
-      (f base-layer-url requests-atom), then stop. requests-atom accumulates
-      {:uri :headers} per request (headers lower-cased)."
+   (defn with-fixture-server
+     "Starts an HttpServer that answers each request with (respond uri) =>
+      [content-type ^bytes body]. Calls (f base-layer-url requests-atom), then
+      stops the server. requests-atom holds one {:uri :headers} map for each
+      request, with lower-case header names."
      [respond f]
      (let [requests (atom [])
            server   (HttpServer/create (InetSocketAddress. "127.0.0.1" 0) 0)
@@ -94,7 +96,7 @@
            (.stop server 0))))))
 
 #?(:clj
-   (defn- with-geoservices-server
+   (defn with-geoservices-server
      "Serve the GeoServices paging fixtures, which are f=json only.
       A request for f=pbf gets the same JSON, which is how a server that does
       not serve PBF behaves: HTTP 200 with a body the decoder cannot read."

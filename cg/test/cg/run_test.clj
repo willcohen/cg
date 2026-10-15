@@ -22,6 +22,7 @@
             [cg.dataset :as dataset]
             [cg.trace :as trace]
             [cg.macros :refer [table->]]
+            [cg.test-runner :refer [poll]]
             [sci.core :as sci]
             [tech.v3.dataset :as ds])
   (:import [org.locationtech.jts.geom Geometry TopologyException]))
@@ -89,15 +90,13 @@
   "The :item-id of each worker-busy-end event whose id is in `ids`. Polls,
    because recent-events drains the trace channel on another thread."
   [ids]
-  (loop [tries 0]
-    (let [seen (->> (trace/recent-events)
-                    (filter #(= "worker-busy-end" (:kind %)))
-                    (keep :item-id)
-                    (filter ids)
-                    set)]
-      (if (or (= ids seen) (>= tries 40))
-        seen
-        (do (Thread/sleep 50) (recur (inc tries)))))))
+  (poll #(->> (trace/recent-events)
+              (filter (fn [e] (= "worker-busy-end" (:kind e))))
+              (keep :item-id)
+              (filter ids)
+              set)
+        #(= ids %)
+        40))
 
 (deftest run-component-labels-trace-rows-by-row-id-keys
   ;; The fused per-row chain tags each row's worker-busy events with an
@@ -121,12 +120,10 @@
    event for each id arrives, because recent-events drains the trace
    channel on another thread."
   [kind ids]
-  (loop [tries 0]
-    (let [evs (filterv #(and (= kind (:kind %)) (contains? ids (:item-id %)))
-                       (trace/recent-events))]
-      (if (or (>= (count evs) (count ids)) (>= tries 60))
-        evs
-        (do (Thread/sleep 50) (recur (inc tries)))))))
+  (poll #(filterv (fn [e] (and (= kind (:kind e)) (contains? ids (:item-id e))))
+                  (trace/recent-events))
+        #(>= (count %) (count ids))
+        60))
 
 (deftest fused-chain-runs-each-row-once-on-the-compute-pool
   ;; The fused step splits the rows into one chunk per compute worker and

@@ -10,33 +10,19 @@
    stream itself stays on: see trace_test."
   (:require [clojure.test :refer [deftest is]]
             [cg.trace :as trace]
+            [cg.test-runner :refer [with-system-property]]
             [clojure.java.io :as io])
   (:import (java.nio.file Files)
            (java.nio.file.attribute FileAttribute)))
 
 (set! *warn-on-reflection* true)
 
-(defn- with-trace-dir-property
-  "Call f with the cg.trace.dir system property set to v (nil clears it), then
-   put the old value back."
-  [v f]
-  (let [old (System/getProperty "cg.trace.dir")]
-    (try
-      (if v
-        (System/setProperty "cg.trace.dir" v)
-        (System/clearProperty "cg.trace.dir"))
-      (f)
-      (finally
-        (if old
-          (System/setProperty "cg.trace.dir" old)
-          (System/clearProperty "cg.trace.dir"))))))
-
 (defn- file-names [dir]
   (set (.list (io/file dir))))
 
 (deftest no-folder-named-writes-no-file
   (when-not (System/getenv "CG_TRACE_DIR")
-    (with-trace-dir-property nil
+    (with-system-property "cg.trace.dir" nil
       (fn []
         (let [before  (file-names "tmp/cg-traces")
               session (trace/open-file-writer! "trace-file-test")]
@@ -48,7 +34,7 @@
 (deftest the-property-names-the-folder
   (let [dir (.toFile (Files/createTempDirectory "cg-trace-file-test"
                                                 (make-array FileAttribute 0)))]
-    (with-trace-dir-property (.getPath dir)
+    (with-system-property "cg.trace.dir" (.getPath dir)
       (fn []
         (let [session (trace/open-file-writer! "trace-file-test")]
           (trace/close-file-writer! session)

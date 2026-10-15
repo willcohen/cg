@@ -5,20 +5,18 @@
 ;; SPDX-License-Identifier: Apache-2.0 WITH LLVM-exception
 
 (ns cg.dsl.signatures-test
-  (:require [clojure.test :refer [deftest testing is are]]
-            [cg.dsl.signatures :as sigs]))
+  #?(:clj (:require [clojure.test :refer [deftest is are]]
+                    [cg.dsl.signatures :as sigs])
+     :cljs (:require [cljs.test :refer [deftest is are]]
+                     ["../../../src/cg/dsl/signatures.mjs" :as sigs]
+                     ["../test_runner.mjs" :refer [run_tests_and_exit_BANG_]])))
 
 #?(:clj (set! *warn-on-reflection* true))
 
 (deftest output-level-metadata
-  (testing "output sig carries an optional :level"
-    (let [o (sigs/output "result" :dataset :level :groups)]
-      (is (= :groups (:level o)))))
-  (testing "level defaults to nil (back-compat)"
-    (let [o (sigs/output "result" :dataset)]
-      (is (nil? (:level o)))))
-  (testing "level-kinds is the closed set"
-    (is (= #{:feature :collection :dataset :groups :map} sigs/level-kinds))))
+  (is (= :groups (:level (sigs/output "result" :dataset :level :groups))))
+  (is (nil? (:level (sigs/output "result" :dataset))) "back-compat")
+  (is (= #{:feature :collection :dataset :groups :map} sigs/level-kinds)))
 
 (deftest builtin-op-levels
   ;; Keys are source spellings (ds/load-geojson, bare filter), not the
@@ -28,22 +26,19 @@
     "filter"              :dataset
     "ds/filter-by-column" :dataset
     "group-by"            :groups
-    "partition-by"        :groups))
+    "partition-by"        :groups
+    "map"                 :groups
+    "into"                :map))
 
-(deftest higher-order-and-demote-ops
-  (testing "map is a higher-order op whose output stays at :groups"
-    (let [s (sigs/lookup "map")]
-      (is (= :groups (-> s :outputs first :level)))
-      (is (= :transformer (:kind s)))))
-  (testing "into demotes groups -> a keyed map"
-    (let [s (sigs/lookup "into")]
-      (is (= :map (-> s :outputs first :level))))))
+(deftest map-is-a-transformer
+  (is (= :transformer (:kind (sigs/lookup "map")))))
 
 (deftest table-input-role
   (is (= :table (sigs/role-kind "table")))
   (is (= :table (sigs/role-kind :table)))
-  (testing "existing roles unchanged"
-    (is (= :row (sigs/role-kind "row")))
-    (is (= :broadcast (sigs/role-kind "broadcast")))
-    (is (= :reducer (sigs/role-kind "reducer")))
-    (is (nil? (sigs/role-kind nil)))))
+  (is (= :row (sigs/role-kind "row")))
+  (is (= :broadcast (sigs/role-kind "broadcast")))
+  (is (= :reducer (sigs/role-kind "reducer")))
+  (is (nil? (sigs/role-kind nil))))
+
+#?(:cljs (run_tests_and_exit_BANG_ "cg.dsl.signatures-test"))

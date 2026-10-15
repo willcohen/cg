@@ -9,8 +9,6 @@
 
    Verifies the dispatch path that unwraps a batch, iterates its rows,
    applies a per-row operation to each row-map, and rebuilds the dataset.
-   Foundation for the fusion path: a fusion group of length 1 must work
-   before chains of 2+ can collapse onto it.
 
    ONE .cljc suite covers both runtimes, but each runtime registers its
    operation its own way. The JVM registers a host defn with ^:op through
@@ -19,27 +17,24 @@
    run/register-namespace! for the code. The dispatch under test, and the
    assertions on the rows, are the same. The per-geometry shape has no JVM
    twin here, so it runs on cljs only."
-  #?(:clj (:require [clojure.test :refer [deftest is testing]]
+  #?(:clj (:require [clojure.test :refer [deftest is]]
                     [cg.run :as run]
                     cg.feature
                     [cg.macros :refer [table->]]
                     [tech.v3.dataset :as ds])
-     :cljs (:require [cljs.test :refer [deftest is testing]]
+     :cljs (:require [cljs.test :refer [deftest is]]
                      ["../../../src/cg/run.mjs" :as run]
                      ["../../../src/cg/dataset.mjs" :as dataset]
                      ["../../../src/cg/feature.mjs" :as feature]
                      ["../wasmts_setup.mjs" :refer [init_wasmts_BANG_]]
-                     ["../test_runner.mjs" :refer [run_tests_and_exit_BANG_]])))
+                     ["../test_runner.mjs" :refer [run_tests_and_exit_BANG_ after]])))
 
 #?(:clj (set! *warn-on-reflection* true))
 
-(defn- check-doubled-rows!
-  "Each row keeps its :n and gains a :doubled of twice that value."
-  [rows]
+(defn- check-doubled-rows! [rows]
   (is (= 4 (count rows)) "all 4 rows pass through")
-  (is (= [2 4 6 8] (vec (mapv :doubled rows)))
-      "each row :doubled is 2x the input :n")
-  (is (= [1 2 3 4] (vec (mapv :n rows))) ":n preserved on the row"))
+  (is (= [2 4 6 8] (vec (mapv :doubled rows))))
+  (is (= [1 2 3 4] (vec (mapv :n rows)))))
 
 #?(:clj
    (do
@@ -59,33 +54,27 @@
      (register-op! #'tdt-incr-doubled)
 
      (deftest per-row-op-runs-in-table-mode
-       (testing "a single per-row op inside table-> sees each row as a map"
-         (let [d (ds/->>dataset [{:n 1} {:n 2} {:n 3} {:n 4}])
-               model (table-> :input (tdt-double-n))
-               result (run/run-model model {:input d} {:timeout-ms 10000})]
-           (check-doubled-rows! (ds/rows result :as-maps)))))
+       (let [d (ds/->>dataset [{:n 1} {:n 2} {:n 3} {:n 4}])
+             model (table-> :input (tdt-double-n))
+             result (run/run-model model {:input d} {:timeout-ms 10000})]
+         (check-doubled-rows! (ds/rows result :as-maps))))
 
      (deftest per-row-op-chain-fuses-in-table-mode
-       (testing "a 2-op per-row chain in table-> compiles to ONE fused proc + applies both fns per row"
-         (let [d (ds/->>dataset [{:n 1} {:n 2} {:n 3} {:n 4}])
-               model (table-> :input (tdt-double-n) (tdt-incr-doubled))
-               ;; Inspect the flow config to assert fusion collapsed the two
-               ;; per-row operation nodes into a single proc. Source + sink
-               ;; stay separate; before fusion we'd have 4 procs (src + 2 ops
-               ;; + sink); with fusion the two ops collapse → 3 procs.
-               flow-cfg (run/model->flow model {:input d} {})
-               op-procs (filter (fn [[pid _]]
-                                  (and (not= pid :input-src)
-                                       (not= pid :result)))
-                                (:procs (:config flow-cfg)))
-               result (run/run-model model {:input d} {:timeout-ms 10000})
-               rows (ds/rows result :as-maps)]
-           (is (= 1 (count op-procs))
-               (str "expected exactly 1 operation proc after fusion, got: "
-                    (mapv first op-procs)))
-           (is (= 4 (count rows)) "all 4 rows pass through")
-           (is (= [3 5 7 9] (mapv :doubled rows))
-               ":doubled = 2n + 1 after both ops apply"))))))
+       (let [d (ds/->>dataset [{:n 1} {:n 2} {:n 3} {:n 4}])
+             model (table-> :input (tdt-double-n) (tdt-incr-doubled))
+             flow-cfg (run/model->flow model {:input d} {})
+             op-procs (filter (fn [[pid _]]
+                                (and (not= pid :input-src)
+                                     (not= pid :result)))
+                              (:procs (:config flow-cfg)))
+             result (run/run-model model {:input d} {:timeout-ms 10000})
+             rows (ds/rows result :as-maps)]
+         (is (= 1 (count op-procs))
+             (str "expected exactly 1 operation proc after fusion, got: "
+                  (mapv first op-procs)))
+         (is (= 4 (count rows)) "all 4 rows pass through")
+         (is (= [3 5 7 9] (mapv :doubled rows))
+             ":doubled = 2n + 1 after both ops apply")))))
 
 ;; resolve-operation qualifies a bare namespace to "cg.<ns>", so the probe ops
 ;; are registered under "cg.probe". squint munges a name with a dash, so the
@@ -117,8 +106,13 @@
      (defn- result-rows [result]
        (if (array? result) result (dataset/rows result)))
 
-     (defn ^:async run-per-geometry! []
-       (await (dataset/init-arquero!))
+     (deftest per-row-op-runs-in-table-mode
+       (register-probe-ops!)
+       (after (run/run-model (table-model "cg.probe/double-n")
+                             {:input (dataset/->dataset {:n [1 2 3 4]})} {:timeout-ms 10000})
+              (comp check-doubled-rows! result-rows)))
+
+     (deftest per-geometry-op-maps-over-the-geometry-column
        (register-probe-ops!)
        (let [fc {:type "FeatureCollection"
                  :features [{:type "Feature" :properties {:n 1}
@@ -128,30 +122,14 @@
                             {:type "Feature" :properties {:n 3}
                              :geometry {:type "Point" :coordinates [2 2]}}]}
              d (dataset/geojson->dataset (js/JSON.stringify fc))
-             before @geometry-op-calls
-             result (await (run/run-model (table-model "cg.probe/identity-geom")
-                                          {:input d} {:timeout-ms 10000}))
-             rows (result-rows result)]
-         (is (= 3 (count rows)) "all 3 rows pass through")
-         (is (= 3 (- @geometry-op-calls before)) "the op runs once per geometry")
-         (is (every? (fn [r] (some? (:geometry r))) rows)
-             "every row keeps its geometry")))
-
-     (defn ^:async run-per-row! []
-       (await (dataset/init-arquero!))
-       (register-probe-ops!)
-       (let [d (dataset/->dataset {:n [1 2 3 4]})
-             result (await (run/run-model (table-model "cg.probe/double-n")
-                                          {:input d} {:timeout-ms 10000}))]
-         (check-doubled-rows! (result-rows result))))
-
-     (deftest per-row-op-runs-in-table-mode
-       (testing "a registered per-row op sees each row as a map"
-         (run-per-row!)))
-
-     (deftest per-geometry-op-maps-over-the-geometry-column
-       (testing "a registered per-geometry op maps over the geometry column"
-         (run-per-geometry!)))))
+             before @geometry-op-calls]
+         (after (run/run-model (table-model "cg.probe/identity-geom") {:input d} {:timeout-ms 10000})
+                (fn [result]
+                  (let [rows (result-rows result)]
+                    (is (= 3 (count rows)))
+                    (is (= 3 (- @geometry-op-calls before)) "the op runs once per geometry")
+                    (is (every? (fn [r] (some? (:geometry r))) rows)))))))))
 
 #?(:cljs (-> (init_wasmts_BANG_)
+             (.then (fn [_] (dataset/init-arquero!)))
              (.then (fn [_] (run_tests_and_exit_BANG_ "cg.run.per-row-dispatch-test")))))

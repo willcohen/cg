@@ -90,6 +90,13 @@
           (await (wait-for-es (inc i)))))))
 
 (defn- frame [m] #js {:data (js/JSON.stringify m)})
+
+(defn- backend-fetch [!req id]
+  (fn [url opts]
+    (reset! !req {:url (str url) :body (js/JSON.parse (aget opts "body"))})
+    (js/Promise.resolve #js {:ok true :status 200
+                             :json (fn [] (js/Promise.resolve #js {:execution-id id}))})))
+
 (defn- post-types [posts] (mapv (fn [m] (aget m "type")) posts))
 
 (deftest ^:async execute-js-forwards-trace-events-with-named-pids
@@ -108,12 +115,7 @@
   (let [!posts (stub-window!)
         !req (atom nil)]
     (install-mock-es!)
-    (set! (.-fetch js/globalThis)
-          (fn [url opts]
-            (reset! !req {:url (str url) :body (js/JSON.parse (aget opts "body"))})
-            (js/Promise.resolve
-             #js {:ok true :status 200
-                  :json (fn [] (js/Promise.resolve #js {:execution-id "abc-123"}))})))
+    (set! (.-fetch js/globalThis) (backend-fetch !req "abc-123"))
     (rt/set-backend-url! "http://localhost:3000")
     (let [p (ex/execute-jvm! "RAW TEXT" flow-fixture)
           es (await (wait-for-es 0))]
@@ -141,10 +143,7 @@
 (deftest ^:async execute-jvm-error-sentinel-rejects-and-posts-run-error
   (let [!posts (stub-window!)]
     (install-mock-es!)
-    (set! (.-fetch js/globalThis)
-          (fn [_ _] (js/Promise.resolve
-                     #js {:ok true :status 200
-                          :json (fn [] (js/Promise.resolve #js {:execution-id "e1"}))})))
+    (set! (.-fetch js/globalThis) (backend-fetch (atom nil) "e1"))
     (let [p (ex/execute-jvm! "X" flow-fixture)
           es (await (wait-for-es 0))]
       ((aget es "onmessage") (frame #js {:kind "execution-ended" :outcome "error" :message "boom"}))
@@ -172,10 +171,7 @@
 (deftest ^:async execute-jvm-stream-break-rejects-loudly
   (let [!posts (stub-window!)]
     (install-mock-es!)
-    (set! (.-fetch js/globalThis)
-          (fn [_ _] (js/Promise.resolve
-                     #js {:ok true :status 200
-                          :json (fn [] (js/Promise.resolve #js {:execution-id "e2"}))})))
+    (set! (.-fetch js/globalThis) (backend-fetch (atom nil) "e2"))
     (let [p (ex/execute-jvm! "X" flow-fixture)
           es (await (wait-for-es 0))]
       ((aget es "onmessage") (frame #js {:kind "proc-start" :pid "buffered__buffer-1" :seq 2}))
@@ -185,12 +181,15 @@
       (is (= true (aget es "closed")))
       (is (= ["cg/run-started" "cg/trace-event" "cg/run-error"] (post-types @!posts))))))
 
-(deftest ^:async execute!-refuses-explicit-jvm-when-unreachable
-  (when-let [ls (.-localStorage js/globalThis)] (.removeItem ls "cg-runtime"))
+(defn- load-fixture! [choice]
   (swap! state/app-state assoc
          :loaded-file {:name "f.cg" :text "T"} :flow flow-fixture
          :module-status "loaded" :backend-available false)
-  (rt/set-choice! "jvm" false)
+  (rt/set-choice! choice false))
+
+(deftest ^:async execute!-refuses-explicit-jvm-when-unreachable
+  (when-let [ls (.-localStorage js/globalThis)] (.removeItem ls "cg-runtime"))
+  (load-fixture! "jvm")
   (set! (.-fetch js/globalThis) (fn [_ _] (throw (js/Error. "must not fetch on refusal"))))
   (await (ex/execute!))
   (let [e (:exec @state/app-state)]
@@ -198,15 +197,12 @@
     (is (= "jvm" (:runtime e)))
     (is (string? (:message e)))))
 
+(aset js/globalThis "wasmts" #js {:geom #js {}})   ; satisfy ensure-wasmts!
+
 (deftest ^:async execute!-js-backend-through-loader-module
-  (aset js/globalThis "wasmts" #js {:geom #js {}})   ; satisfy ensure-wasmts!
-  (let [!evals (atom [])
-        !posts (stub-window!)]
-    (reset! loader/cg-module (mock-module !evals #js [1 2]))
-    (swap! state/app-state assoc
-           :loaded-file {:name "f.cg" :text "T"} :flow flow-fixture
-           :module-status "loaded" :backend-available false)
-    (rt/set-choice! "js" false)
+  (let [!posts (stub-window!)]
+    (reset! loader/cg-module (mock-module (atom []) #js [1 2]))
+    (load-fixture! "js")
     (await (ex/execute!))
     (let [e (:exec @state/app-state)]
       (is (= "ok" (:status e)))
@@ -217,14 +213,11 @@
     (is (= 2 (aget (nth @!posts 3) "count")))))
 
 (deftest ^:async execute!-runs-the-selected-model
-  (aset js/globalThis "wasmts" #js {:geom #js {}})
   (let [!runs (atom [])]
     (stub-window!)
     (reset! loader/cg-module (mock-module !runs #js [1]))
-    (swap! state/app-state assoc
-           :loaded-file {:name "f.cg" :text "T"} :flow flow-fixture
-           :module-status "loaded" :backend-available false :run-model "other")
-    (rt/set-choice! "js" false)
+    (swap! state/app-state assoc :run-model "other")
+    (load-fixture! "js")
     (await (ex/execute!))
     (swap! state/app-state assoc :run-model nil)
     (is (= "other" (second (first @!runs))))))
@@ -233,29 +226,20 @@
   (stub-window!)
   (install-mock-es!)
   (let [!req (atom nil)]
-    (set! (.-fetch js/globalThis)
-          (fn [_url opts]
-            (reset! !req (js/JSON.parse (aget opts "body")))
-            (js/Promise.resolve
-             #js {:ok true :status 200
-                  :json (fn [] (js/Promise.resolve #js {:execution-id "m-1"}))})))
+    (set! (.-fetch js/globalThis) (backend-fetch !req "m-1"))
     (let [p (ex/execute-jvm! "RAW" flow-fixture "other")
           es (await (wait-for-es 0))]
       ((aget es "onmessage") (frame #js {:kind "execution-ended" :outcome "success" :count 1}))
       (await p)
-      (is (= "other" (aget (aget @!req "opts") "model")))
-      (is (= "other" (aget (aget @!req "opts") "name"))))))
+      (is (= "other" (aget (aget (:body @!req) "opts") "model")))
+      (is (= "other" (aget (aget (:body @!req) "opts") "name"))))))
 
 (deftest ^:async execute!-routes-a-scalar-result-to-the-badge
-  (aset js/globalThis "wasmts" #js {:geom #js {}})
   (let [!posts (stub-window!)]
     (reset! loader/cg-module (mock-module (atom []) 42))
     ;; a report from an earlier run must not survive under this one
     (state/set-report-result! #js {:title "stale" :columns #js [] :rows #js []})
-    (swap! state/app-state assoc
-           :loaded-file {:name "f.cg" :text "T"} :flow flow-fixture
-           :module-status "loaded" :backend-available false)
-    (rt/set-choice! "js" false)
+    (load-fixture! "js")
     (await (ex/execute!))
     (is (= "ok" (:status (:exec @state/app-state))))
     (let [sc (:scalar-result @state/app-state)]

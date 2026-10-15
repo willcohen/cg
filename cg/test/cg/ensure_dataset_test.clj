@@ -6,57 +6,18 @@
 
 (ns cg.ensure-dataset-test
   "ensure-dataset (cache-or-fetch over load-gdal!) tests. The cache file is
-   GeoJSON.
-
-   The HttpServer fixture mirrors io_test's with-geoservices-server (same
-   2-page GeoServices JSON fixture set in test/fixtures/geoservices);
-   consolidate into a shared test util if a third consumer appears."
+   GeoJSON."
   (:require [clojure.test :refer [deftest is testing]]
             [clojure.java.io :as jio]
             [cg.dataset :as cds]
-            [cg.feature :as f])
-  (:import (com.sun.net.httpserver HttpServer HttpHandler HttpExchange)
-           (java.net InetSocketAddress)
-           (java.nio.file Files)
+            [cg.feature :as f]
+            [cg.cache-root-test :refer [with-cache-dir-property]]
+            [cg.io-test :refer [with-geoservices-server]])
+  (:import (java.nio.file Files)
            (java.nio.file.attribute FileAttribute)
            (org.locationtech.jts.geom Geometry)))
 
 (set! *warn-on-reflection* true)
-
-(def ^:private geoservices-fixture-dir
-  (.getCanonicalPath (jio/file "test/fixtures/geoservices")))
-
-(defn- geoservices-fixture-bytes ^bytes [nm]
-  (Files/readAllBytes (.toPath (jio/file geoservices-fixture-dir nm))))
-
-(defn- geoservices-fixture-for [uri]
-  (cond
-    (.contains ^String uri "resultOffset=2") "page2.json"
-    (.contains ^String uri "/query")         "page1.json"
-    :else                                    "layer.json"))
-
-(defn- with-geoservices-server
-  "Spin up an HttpServer serving the GeoServices paging fixtures,
-   call (f base-layer-url requests-atom), then stop."
-  [f]
-  (let [requests (atom [])
-        server   (HttpServer/create (InetSocketAddress. "127.0.0.1" 0) 0)
-        handler  (reify HttpHandler
-                   (^void handle [_ ^HttpExchange ex]
-                     (let [uri  (str (.getRequestURI ex))
-                           body (geoservices-fixture-bytes (geoservices-fixture-for uri))]
-                       (swap! requests conj {:uri uri})
-                       (.set (.getResponseHeaders ex) "Content-Type" "application/json")
-                       (.sendResponseHeaders ex 200 (alength body))
-                       (with-open [os (.getResponseBody ex)]
-                         (.write os body)))))]
-    (.createContext server "/" handler)
-    (.start server)
-    (try
-      (let [port (.getPort (.getAddress server))]
-        (f (str "http://127.0.0.1:" port "/FeatureServer/0") requests))
-      (finally
-        (.stop server 0)))))
 
 (defn- temp-cache-dir []
   (str (Files/createTempDirectory "cg-ensure-dataset" (make-array FileAttribute 0))))
@@ -103,16 +64,11 @@
 (deftest ensure-dataset-caches-under-the-cache-root-by-default
   (with-geoservices-server
     (fn [layer-url _requests]
-      (let [root (temp-cache-dir)
-            old  (System/getProperty "cg.cache.dir")]
-        (try
-          (System/setProperty "cg.cache.dir" root)
-          (cds/ensure-dataset {:url layer-url :version "v1"})
-          (is (= 1 (count (cache-data-files (str root "/geoparquet")))))
-          (finally
-            (if old
-              (System/setProperty "cg.cache.dir" old)
-              (System/clearProperty "cg.cache.dir"))))))))
+      (let [root (temp-cache-dir)]
+        (with-cache-dir-property root
+          (fn []
+            (cds/ensure-dataset {:url layer-url :version "v1"})
+            (is (= 1 (count (cache-data-files (str root "/geoparquet")))))))))))
 
 (deftest ensure-dataset-version-and-refresh-refetch
   (with-geoservices-server
