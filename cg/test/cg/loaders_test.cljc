@@ -134,10 +134,6 @@
 (defn- query-uri [requests]
   (first (first-page-uris requests)))
 
-(defn- second-page-requested? [requests]
-  (some? (first (filter (fn [u] (str/includes? u "resultOffset=2"))
-                        (map :uri @requests)))))
-
 ;; :geometry reads the geometry column on both runtimes, because squint compiles
 ;; a keyword to its name. An attribute column name is a string on both runtimes.
 (defn- check-tiny-gpkg! [d]
@@ -148,16 +144,15 @@
   (is (= ["a" "b" "c"] (sorted-names d "name")) "the name column carries a/b/c"))
 
 (defn- check-paged-result! [d requests]
-  (is (= 3 (ds/row-count d)) "3 features across 2 pages prove the driver paged")
   (is (= ["A" "B" "C"] (sorted-names d "NAME")) "NAME round-trips from both pages")
   (let [q (query-uri requests)]
-    (is (some? q) "the driver issued a query request")
     (is (str/includes? q "f=json") "the query asks for JSON")
     (is (str/includes? q "where=1%3D1") "the default where is 1=1")
     (is (str/includes? q "outFields=*") "the default field list is *")
     (is (str/includes? q "orderByFields=OBJECTID") "paging orders by OBJECTID")
     (is (str/includes? q "resultRecordCount=1000") "the default page size is 1000"))
-  (is (second-page-requested? requests) "the driver asked for a second page"))
+  (is (some #(str/includes? (:uri %) "resultOffset=2") @requests)
+      "the driver asked for a second page"))
 
 (defn- shape
   "[type, part count, point count, hole count of the first part] of `g`."
@@ -190,7 +185,6 @@
 
 (defn- check-source-crs! [result]
   (let [crs (source-crs result)]
-    (is (some? crs) "load-source returns a CRS descriptor")
     (is (= "EPSG" (:authority crs)) "tiny.gpkg is an EPSG CRS")
     (is (= "4326" (:code crs)) "tiny.gpkg is EPSG:4326")
     ;; The descriptor always carries the fully-expressive form, so a code-less
@@ -219,7 +213,9 @@
   (after (ds/load-gpkg tiny-gpkg-path)
          (fn [d]
            (check-tiny-gpkg! d)
-           (check-names! d))))
+           (check-names! d)
+           (is (= "EPSG:4326" (feature/get-crs (nth (ds/column d :geometry) 0)))
+               "an exact registry match stays compact, not PROJJSON"))))
 
 (deftest load-vector-dispatches-by-driver-discovery
   (after (ds/load-vector tiny-gpkg-path) check-tiny-gpkg!))
@@ -251,10 +247,9 @@
                  (is (str/includes? q "resultType=standard") "extra params thread through"))
                ;; The JVM sends the token as a header. The JS runtime adds it to
                ;; the query string. Each runtime asserts on its own form.
-               #?(:clj (do (is (pos? (count @requests)) "the server received a request")
-                           (doseq [r @requests]
-                             (is (= "Bearer sekrit" (get (:headers r) "x-esri-authorization"))
-                                 (str "the auth header is on " (:uri r)))))
+               #?(:clj (doseq [r @requests]
+                         (is (= "Bearer sekrit" (get (:headers r) "x-esri-authorization"))
+                             (str "the auth header is on " (:uri r))))
                   :cljs (is (str/includes? (query-uri requests) "token=sekrit")
                             "the auth token rides the query string on the JS runtime")))))))
 
@@ -303,18 +298,8 @@
 (deftest load-source-captures-the-layer-crs
   (after (cio/load-source tiny-gpkg-path) check-source-crs!))
 
-(deftest load-gpkg-tags-geometries-with-a-compact-crs
-  (testing "a coded CRS stays authority:code on the geometry"
-    (after (ds/load-gpkg tiny-gpkg-path)
-           (fn [d]
-             (is (= "EPSG:4326" (feature/get-crs (nth (ds/column d :geometry) 0)))
-                 "an exact registry match stays compact, not PROJJSON")))))
-
 (deftest load-gdal-passes-local-paths-through
-  (after (ds/load-gdal! tiny-gpkg-path nil)
-         (fn [d]
-           (is (= 3 (ds/row-count d)) "a local .gpkg path routes to load-source")
-           (check-names! d))))
+  (after (ds/load-gdal! tiny-gpkg-path nil) check-names!))
 
 #?(:cljs
    (defn ^:async setup! []

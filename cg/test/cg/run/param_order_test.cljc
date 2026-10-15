@@ -13,12 +13,12 @@
    ONE .cljc suite runs on both runtimes. Each path that changes a params map to
    positional args has a test: a source op, an item op, a per-row chain (fused
    on the JVM), and the body of a when-row."
-  #?(:clj (:require [clojure.test :refer [deftest is testing]]
+  #?(:clj (:require [clojure.test :refer [deftest is]]
                     [cg.run :as run]
                     [cg.dataset :as ds]
                     [cg.feature :as feature]
                     [cg.test-runner :refer [after]])
-     :cljs (:require [cljs.test :refer [deftest is testing]]
+     :cljs (:require [cljs.test :refer [deftest is]]
                      ["../../../src/cg/run.mjs" :as run]
                      ["../../../src/cg/dataset.mjs" :as ds]
                      ["../../../src/cg/feature.mjs" :as feature]
@@ -91,7 +91,6 @@
     (if (sequential? d) d (ds/rows d :as-maps))))
 
 (defn- check-rows! [rows]
-  (is (= 2 (count rows)) "both rows pass through")
   (is (= ["123456789" "123456789"] (mapv :got-1 rows)) "the first op gets 1 to 9")
   (is (= ["123456789" "123456789"] (mapv :got-2 rows)) "the second op gets 1 to 9"))
 
@@ -110,11 +109,10 @@
          #(is (= [in-order] (mapv vec %)))))
 
 (deftest a-per-row-chain-gets-its-params-in-schema-order
-  (testing "two per-row ops in table mode, fused into one step on the JVM"
-    (register-ops!)
-    (after (run/run-model row-chain-model {:input (ds/->dataset {:n [1 2]})}
-                          {:timeout-ms 10000})
-           (comp check-rows! result-rows))))
+  (register-ops!)
+  (after (run/run-model row-chain-model {:input (ds/->dataset {:n [1 2]})}
+                        {:timeout-ms 10000})
+         (comp check-rows! result-rows)))
 
 (deftest a-when-row-body-gets-its-params-in-schema-order
   (register-ops!)

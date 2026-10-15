@@ -33,8 +33,7 @@
   (is (= [] (vec (rc/model-names #js {})))))
 
 (defn- mock-module
-  "Mocks the cg module surface that execute-js! uses, with a trace_js listener
-   registry. __listener_count lets tests check that a listener is removed."
+  "__listener_count lets tests check that a listener is removed."
   [!runs run-result]
   (let [!listeners (atom [])
         emit-1 (fn [evt] (doseq [f @!listeners] (f evt)))]
@@ -55,12 +54,6 @@
                                                         (fn [ls] (filterv (fn [g] (not (identical? g f))) ls)))
                                                  true)
                         :__listener_count (fn [] (count @!listeners))}}))
-
-(deftest ^:async execute-js-runs-the-stripped-code
-  (let [!runs (atom [])
-        r (await (rc/execute-js! (mock-module !runs #js [1 2 3]) "TEXT" flow-fixture nil))]
-    (is (= 3 (:count r)))
-    (is (= [["STRIPPED:TEXT" "buffered"]] @!runs))))
 
 (defn- stub-window! []
   (let [!posts (atom [])]
@@ -101,10 +94,12 @@
 
 (deftest ^:async execute-js-forwards-trace-events-with-named-pids
   (let [!seen (atom [])
-        mod (mock-module (atom []) #js [1 2 3])
+        !runs (atom [])
+        mod (mock-module !runs #js [1 2 3])
         r (await (rc/execute-js! mod "TEXT" flow-fixture
                                  (fn [evt] (swap! !seen conj evt))))]
     (is (= 3 (:count r)))
+    (is (= [["STRIPPED:TEXT" "buffered"]] @!runs))
     (is (= ["proc-start" "proc-complete"] (mapv (fn [e] (aget e "kind")) @!seen)))
     (let [evt (first @!seen)]
       (is (= "buffered__buffer-1" (aget evt "pid")))

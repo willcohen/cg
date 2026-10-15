@@ -4,8 +4,7 @@
 ;; See LICENSE for license information.
 ;; SPDX-License-Identifier: Apache-2.0 WITH LLVM-exception
 
-;; cg.run/run-model and run-file on both runtimes. A run gives a Promise on
-;; cljs, so a cross-runtime test checks it with cg.test-runner/after.
+;; cg.run/run-model and run-file on both runtimes.
 (ns cg.run-exec-test
   #?(:clj (:require [clojure.test :refer [deftest is]]
                     [cg.run :as run]
@@ -100,7 +99,6 @@
 (defn- check-one-point! [result]
   (is (= 1 (count result)))
   (let [point (nth result 0)]
-    (is (some? point) "Point should exist")
     (is (feature/is-geometry? point))
     (is (= "Point" (geo/geometry-type point)))))
 
@@ -143,10 +141,8 @@
 
 (deftest run-file-rejects-a-binding-that-is-not-a-model
   (after (error-message #(run/run-file two-models {:model "pts"}))
-         (fn [e]
-           (is (some? e) "a binding that is not a model fails")
-           (is (re-find #"buffered.*centers" (str e))
-               "the message names the models of the file"))))
+         #(is (re-find #"buffered.*centers" (str %))
+              "the message names the models of the file")))
 
 #?(:clj
    (deftest test-eval-and-run-model
@@ -155,7 +151,6 @@
        (is (model/model? my-model))
        (let [test-geoms [(feature/point 0 0) (feature/point 1 1)]
              result (run/run-model my-model {:parcels test-geoms} {})]
-         (is (some? result) "Should return results")
          (is (coll? result))))))
 
 #?(:cljs (-> (init_wasmts_BANG_)

@@ -11,13 +11,13 @@
    this way, (cg.parcel/analyze-parcel parcels buildings opts). A
    literal map is a map value on both runtimes, as
    (determine-effective-boundary {}) needs."
-  #?(:clj (:require [clojure.test :refer [deftest is testing]]
+  #?(:clj (:require [clojure.test :refer [deftest is]]
                     [cg.run :as run]
                     [cg.geo :as geo]
                     [cg.dataset :as ds]
                     [cg.feature :as feature]
                     [cg.test-runner :refer [after]])
-     :cljs (:require [cljs.test :refer [deftest is testing]]
+     :cljs (:require [cljs.test :refer [deftest is]]
                      ["../../src/cg/run.mjs" :as run]
                      ["../../src/cg/geo.mjs" :as geo]
                      ["../../src/cg/dataset.mjs" :as ds]
@@ -98,17 +98,15 @@
      (check-area! "a param of a table op" (await (run-op-call)))))
 
 (deftest a-rung-argument-evaluates-where-the-macro-is
-  (testing "a def, a let local, a call and a table op param as geo/buffer's distance"
-    #?(:clj (do (check-area! "a def" (run-src def-src))
-                (check-area! "a let local" (run-src let-src))
-                (check-area! "a call" (run-src call-src))
-                (check-area! "a param of a table op" (run-op-call)))
-       :cljs (run-all!))))
+  #?(:clj (do (check-area! "a def" (run-src def-src))
+              (check-area! "a let local" (run-src let-src))
+              (check-area! "a call" (run-src call-src))
+              (check-area! "a param of a table op" (run-op-call)))
+     :cljs (run-all!)))
 
 (deftest a-literal-map-argument-is-a-map
-  (testing "(tag-from-opts {:k 7}) as a table-> rung"
-    (after (run/run-model (run/eval-cg map-arg-src) {:rows (rows-dataset)} {})
-           check-map-arg!)))
+  (after (run/run-model (run/eval-cg map-arg-src) {:rows (rows-dataset)} {})
+         check-map-arg!))
 
 #?(:cljs (-> (init_wasmts_BANG_)
              (.then (fn [_] (parser/init! nil)))

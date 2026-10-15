@@ -11,7 +11,7 @@
             [clojure.java.io :as jio]
             [cg.dataset :as cds]
             [cg.feature :as f]
-            [cg.cache-root-test :refer [with-cache-dir-property]]
+            [cg.test-runner :refer [with-system-property]]
             [cg.io-test :refer [with-geoservices-server]])
   (:import (java.nio.file Files)
            (java.nio.file.attribute FileAttribute)
@@ -31,10 +31,7 @@
 (defn- comparable-rows
   "Row maps with geometry replaced by WKT so datasets compare with =."
   [dataset]
-  (mapv (fn [row]
-          (-> row
-              (assoc :geometry (str (:geometry row)))))
-        (cds/rows dataset :as-maps)))
+  (mapv #(assoc % :geometry (str (:geometry %))) (cds/rows dataset :as-maps)))
 
 (deftest ensure-dataset-fetches-once-then-serves-from-cache
   (with-geoservices-server
@@ -65,7 +62,7 @@
   (with-geoservices-server
     (fn [layer-url _requests]
       (let [root (temp-cache-dir)]
-        (with-cache-dir-property root
+        (with-system-property "cg.cache.dir" root
           (fn []
             (cds/ensure-dataset {:url layer-url :version "v1"})
             (is (= 1 (count (cache-data-files (str root "/geoparquet")))))))))))
@@ -76,9 +73,6 @@
       (let [cache-dir (temp-cache-dir)]
         (cds/ensure-dataset {:url layer-url :version "v1" :cache-dir cache-dir})
         (let [n1 (count @requests)]
-          (testing "same key: no refetch"
-            (cds/ensure-dataset {:url layer-url :version "v1" :cache-dir cache-dir})
-            (is (= n1 (count @requests))))
           (testing "new :version refetches into a new cache entry"
             (cds/ensure-dataset {:url layer-url :version "v2" :cache-dir cache-dir})
             (is (> (count @requests) n1))

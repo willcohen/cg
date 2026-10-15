@@ -10,12 +10,8 @@
    runtimes.
 
    squint + node keeps the process alive in some suites (wasmts timers,
-   worker pools), so a bare `(run-tests)` footer can hang on success.
-   `run-tests-and-exit!` always exits explicitly: 0 on green, 1 on any
-   failure or error. On the JVM, the clojure.test runner ends the process.
-
-   The optional leading teardown fn is for suites whose runtime state
-   outlives run-tests resolving (a worker pool, a PROJ context)."
+   worker pools), so a bare `(run-tests)` footer can hang on success. On the
+   JVM, the clojure.test runner ends the process."
   #?(:clj (:require [clojure.core.async :as a]
                     [cg.trace :as trace])
      :cljs (:require [cljs.test :as cljs-test])))
@@ -40,7 +36,8 @@
       process.exit with 0 on green, 1 on any failure or error.
 
       An optional leading teardown fn (zero-arg; sync or Promise-returning)
-      runs between run-tests resolving and process.exit."
+      runs between run-tests resolving and process.exit, for state that
+      outlives the tests (a worker pool, a PROJ context)."
      [& args]
      (let [first-arg (first args)
            teardown  (when (fn? first-arg) first-arg)

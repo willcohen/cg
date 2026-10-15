@@ -14,8 +14,7 @@
 
 (set! *warn-on-reflection* true)
 
-;; Public, because ensure_dataset_test uses it too.
-(defn with-cache-dir-property [v f]
+(defn- with-cache-dir-property [v f]
   (with-system-property "cg.cache.dir" v f))
 
 (deftest the-home-cache-is-the-default

@@ -14,11 +14,11 @@
 
    The op takes 9 params, more than an array map keeps in order on the
    JVM."
-  #?(:clj (:require [clojure.test :refer [deftest is testing]]
+  #?(:clj (:require [clojure.test :refer [deftest is]]
                     [clojure.string :as str]
                     [cg.run :as run]
                     [cg.test-runner :refer [after error-message]])
-     :cljs (:require [cljs.test :refer [deftest is testing]]
+     :cljs (:require [cljs.test :refer [deftest is]]
                      [clojure.string :as str]
                      ["../../../src/cg/run.mjs" :as run]
                      ["../../../src/cg/parser/core.mjs" :as parser]
@@ -82,11 +82,10 @@
     (after (run/run-model m {:xs [0]} {}) #(check-same-eval! m %))))
 
 (deftest a-module-op-is-a-rung
-  (testing "(item-> :xs (test.op-mod/rung-sub 1)) over 10 and 20"
-    (after (run/load-module "test/fixtures/modules/op_mod.cg")
-           (fn [_]
-             (after (run/run-model (run/eval-cg module-rung-src) {:xs [10 20]} {})
-                    check-module-rung!)))))
+  (after (run/load-module "test/fixtures/modules/op_mod.cg")
+         (fn [_]
+           (after (run/run-model (run/eval-cg module-rung-src) {:xs [10 20]} {})
+                  check-module-rung!))))
 
 (deftest a-rung-gives-an-option-map
   #?(:clj (check-option-map! (mapv (fn [m] (run/run-model m {:xs [1 2]} {}))

@@ -8,7 +8,7 @@
 ;; runtimes. The JVM expands transform-crs into three steps and cljs into one,
 ;; and the shared assertions hold on both.
 (ns cg.dataset-exec-test
-  #?(:clj (:require [clojure.test :refer [deftest is testing]]
+  #?(:clj (:require [clojure.test :refer [deftest is]]
                     [clojure.string :as str]
                     [cg.dataset :as ds]
                     [cg.feature :as feature]
@@ -16,7 +16,7 @@
                     [cg.run :as run]
                     [cg.macros :refer [table->]]
                     [cg.test-runner :refer [after error-message]])
-     :cljs (:require [cljs.test :refer [deftest is testing]]
+     :cljs (:require [cljs.test :refer [deftest is]]
                      [clojure.string :as str]
                      ["../../src/cg/dataset.mjs" :as ds]
                      ["../../src/cg/feature.mjs" :as feature]
@@ -143,13 +143,11 @@
 
 (defn- check-reprojected-z! [result]
   (let [coords (feature/coordinates (nth (ds/column (result-dataset result) :geometry) 0))]
-    (is (= 2 (count coords)) "both vertices survive")
     (is (> (abs (first (first coords))) 1000.0) "x is in projected units")
     (is (= [12.5 30.0] (mapv (fn [c] (nth c 2)) coords)) "z passes through")))
 
 (deftest table-flow-reprojects-a-geometry-with-z
-  (testing "a 3D line reprojects in x and y and keeps its z"
-    (after (run-flow (ds/geojson->dataset three-d-geojson)) check-reprojected-z!)))
+  (after (run-flow (ds/geojson->dataset three-d-geojson)) check-reprojected-z!))
 
 ;; A transform-crs flow reprojects only the :geometry column, and it must
 ;; throw on a geometry column with another name, not pass it through.

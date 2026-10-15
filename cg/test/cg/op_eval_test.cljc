@@ -78,20 +78,17 @@
   (ds/maps->dataset [{:id 1 :geometry (square 10)} {:id 2 :geometry (square 20)}]))
 
 (deftest an-op-defined-through-eval-cg-gives-its-value
-  (testing "measure-parcel from typed-clean.cg, on one 10 x 10 square"
-    (run/eval-cg measure-parcel-src)
-    (check-area! (run/eval-cg call-src))))
+  (run/eval-cg measure-parcel-src)
+  (check-area! (run/eval-cg call-src)))
 
 (deftest an-op-as-an-item-rung
-  (testing "(item-> :squares (measure-parcel)) over two squares"
-    (after (run/run-model (run/eval-cg item-rung-src)
-                          {:squares [(square 10) (square 20)]} {})
-           check-rung-areas!)))
+  (after (run/run-model (run/eval-cg item-rung-src)
+                        {:squares [(square 10) (square 20)]} {})
+         check-rung-areas!))
 
 (deftest an-op-as-a-table-rung
-  (testing "(table-> :rows (tag-area)) over two rows"
-    (after (run/run-model (run/eval-cg table-rung-src) {:rows (rows-dataset)} {})
-           check-tagged-rows!)))
+  (after (run/run-model (run/eval-cg table-rung-src) {:rows (rows-dataset)} {})
+         check-tagged-rows!))
 
 (deftest an-op-with-a-map-arg-gives-its-value
   (testing "(tag-one {:a 1}) is the row, not a Promise of it"

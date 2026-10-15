@@ -57,8 +57,6 @@
   (let [got (decoded nm)
         want (oracle nm)
         gr (:rows got) wr (:rows want)]
-    (testing (str nm ": row count")
-      (is (= (count wr) (count gr))))
     (testing (str nm ": geometry types")
       (is (= (mapv geom-type wr) (mapv geom-type gr))))
     (testing (str nm ": vertex counts")

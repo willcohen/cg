@@ -38,7 +38,6 @@
       (fn []
         (let [session (trace/open-file-writer! "trace-file-test")]
           (trace/close-file-writer! session)
-          (is (some? (:path session)))
           (is (= (.getCanonicalPath dir)
                  (.getCanonicalPath (.toFile (.getParent ^java.nio.file.Path (:path session))))))
           (is (contains? (file-names dir) "latest.jsonl")))))))

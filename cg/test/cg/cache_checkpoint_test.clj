@@ -105,9 +105,7 @@
                     "(table-> :rows (cg.cache/checkpoint {:dir " (pr-str dir)
                     " :prefix \"t\" :layer \"doubled\" :key [3]} cp-double))"))
         node  (first (filter #(= "cg.cache/checkpoint" (str (:fn %))) (:nodes model)))]
-    (testing "the model node carries the component's name"
-      (is (= "cp-double" (:component node))))
-    (testing "the rung runs the checkpoint over the table"
-      (is (= [{:id "a" :n2 2 :parity :odd} {:id "b" :n2 4 :parity :even}]
-             (mapv #(select-keys % [:id :n2 :parity])
-                   (plain-rows (run/run-model model {:rows @input} {:timeout-ms 60000}))))))))
+    (is (= "cp-double" (:component node)))
+    (is (= [{:id "a" :n2 2 :parity :odd} {:id "b" :n2 4 :parity :even}]
+           (mapv #(select-keys % [:id :n2 :parity])
+                 (plain-rows (run/run-model model {:rows @input} {:timeout-ms 60000})))))))

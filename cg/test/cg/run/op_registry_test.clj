@@ -12,16 +12,12 @@
    row reads and writes."
   (:require [clojure.test :refer [deftest is testing]]
             [cg.run :as run]
-            [cg.feature :as feature]
-            [cg.model :as model]))
+            [cg.feature :as feature]))
 
 (set! *warn-on-reflection* true)
 
 (def ^:private prelude
   "(require '[cg.macros :refer [item->]])")
-
-(defn- op-info [qualified-name]
-  (feature/get-operation-info qualified-name))
 
 (defn- op-params [m]
   (mapv :params (filter #(= :operation (:type %)) (:nodes m))))
@@ -37,7 +33,7 @@
             :reads #{:geometry}
             :writes #{:tag}
             :params [{:name :size :type :number} {:name :label}]}
-           (op-info "user/reg-tag"))))
+           (feature/get-operation-info "user/reg-tag"))))
   (testing "the fn resolves under the qualified name and the bare name"
     (is (= {:tag [1 "a"]} ((run/resolve-operation "user/reg-tag") {} 1 "a")))
     (is (= "user" (feature/get-bare-op-namespace "reg-tag")))))
@@ -59,7 +55,7 @@
 
 (deftest a-defn-without-op-is-not-an-op
   (run/eval-cg "(defn reg-plain [x] x)")
-  (is (nil? (op-info "user/reg-plain"))))
+  (is (nil? (feature/get-operation-info "user/reg-plain"))))
 
 (deftest a-table-op-keeps-its-table-param
   (run/eval-cg "(defn ^:op reg-whole [^:table rows ^{:type :component} step n] rows)")
@@ -70,17 +66,7 @@
           :params [{:name :rows :role :table}
                    {:name :step :type :component}
                    {:name :n}]}
-         (op-info "user/reg-whole"))))
-
-(deftest a-rung-in-the-same-eval-gets-its-params-in-arglist-order
-  (testing "9 params, more than an array map keeps in order"
-    (let [m (run/eval-cg (str prelude
-                              " (defn ^:op reg-nine [^:row x a b c d e f g h i]
-                                  [x a b c d e f g h i])
-                                (item-> :xs (reg-nine 1 2 3 4 5 6 7 8 9))"))]
-      (is (model/model? m))
-      (is (= [(zipmap [:a :b :c :d :e :f :g :h :i] (range 1 10))] (op-params m)))
-      (is (= [[0 1 2 3 4 5 6 7 8 9]] (vec (run/run-model m {:xs [0]} {})))))))
+         (feature/get-operation-info "user/reg-whole"))))
 
 (deftest the-forms-of-a-top-level-do-are-top-level-forms
   (let [m (run/eval-cg (str prelude
@@ -90,7 +76,7 @@
 
 (deftest a-module-op-registers-under-its-namespace
   (run/eval-cg "(ns test.op-registry-mod) (defn ^:op reg-mod [^:row x a] [x a])")
-  (is (= [{:name :a}] (:params (op-info "test.op-registry-mod/reg-mod"))))
+  (is (= [{:name :a}] (:params (feature/get-operation-info "test.op-registry-mod/reg-mod"))))
   (testing "the eval does not change the namespace of the next eval"
     (is (= "user" (run/eval-cg "(str *ns*)")))))
 
@@ -98,7 +84,7 @@
   (run/eval-cg "(defn ^:op reg-arity
                   ([^:row x a] (reg-arity x a 1))
                   ([^:row x a b] [x a b]))")
-  (is (= [{:name :a} {:name :b}] (:params (op-info "user/reg-arity"))))
+  (is (= [{:name :a} {:name :b}] (:params (feature/get-operation-info "user/reg-arity"))))
   (is (= [false false true]
          (mapv :optional (:inputs (run/var-op-decl (run/eval-cg "#'user/reg-arity")))))))
 

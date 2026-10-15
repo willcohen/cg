@@ -9,7 +9,7 @@
    name the failing proc and the underlying exception in its MESSAGE and
    carry that exception as the CAUSE — a bare \"Flow execution error\"
    hides which step died."
-  (:require [clojure.test :refer [deftest is testing]]
+  (:require [clojure.test :refer [deftest is]]
             [cg.run]))
 
 (set! *warn-on-reflection* true)
@@ -22,16 +22,13 @@
                           :clojure.core.async.flow/op :step
                           :clojure.core.async.flow/count 3
                           :clojure.core.async.flow/ex inner})]
-    (testing "message carries proc, op, message count, and exception class"
-      (is (= (str "Flow execution error in :transform-coords-56567 during "
-                  ":step (message 3): java.util.concurrent.TimeoutException")
-             (ex-message e))))
-    (testing "underlying exception is the cause"
-      (is (identical? inner (ex-cause e))))
-    (testing "full report stays in ex-data"
-      (is (= :flow-error (:type (ex-data e))))
-      (is (= :transform-coords-56567
-             (get-in (ex-data e) [:error :clojure.core.async.flow/pid]))))))
+    (is (= (str "Flow execution error in :transform-coords-56567 during "
+                ":step (message 3): java.util.concurrent.TimeoutException")
+           (ex-message e)))
+    (is (identical? inner (ex-cause e)))
+    (is (= :flow-error (:type (ex-data e))))
+    (is (= :transform-coords-56567
+           (get-in (ex-data e) [:error :clojure.core.async.flow/pid])))))
 
 (deftest inner-message-appended-when-present
   (let [e (flow-error-ex {:clojure.core.async.flow/pid :p1

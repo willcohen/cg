@@ -32,7 +32,6 @@
 #?(:clj (set! *warn-on-reflection* true))
 
 (defn- check-doubled-rows! [rows]
-  (is (= 4 (count rows)) "all 4 rows pass through")
   (is (= [2 4 6 8] (vec (mapv :doubled rows))))
   (is (= [1 2 3 4] (vec (mapv :n rows)))))
 
@@ -72,7 +71,6 @@
          (is (= 1 (count op-procs))
              (str "expected exactly 1 operation proc after fusion, got: "
                   (mapv first op-procs)))
-         (is (= 4 (count rows)) "all 4 rows pass through")
          (is (= [3 5 7 9] (mapv :doubled rows))
              ":doubled = 2n + 1 after both ops apply")))))
 

@@ -5,12 +5,7 @@
 ;; SPDX-License-Identifier: Apache-2.0 WITH LLVM-exception
 
 (ns cg.run.when-row-runtime-test
-  "Runtime tests for when-row (cg.run/when-row) driven through run-model,
-   exercising the predicate routing:
-
-     predicate true                  -> body applied
-     predicate false + on-miss drop  -> empty dataset
-     predicate false + pass-through  -> dataset unchanged
+  "Runtime tests for when-row (cg.run/when-row) driven through run-model.
 
    when-row is a :whole-dataset table op. operation->step routes it through the
    :whole-dataset branch (cg.run), which threads the entire batch through
@@ -18,9 +13,8 @@
    op-info classifies it. (Without that branch, when-row falls into the
    per-geometry map-geometry path and fails.)
 
-   ONE .cljc suite covers both runtimes. The JVM expands the table-> macro at
-   compile time. cljs sends the same DSL text through eval-cg, because squint
-   has no macro expansion at run time. The assertions are the same."
+   The JVM expands the table-> macro at compile time. cljs sends the same DSL
+   text through eval-cg, because squint has no macro expansion at run time."
   #?(:clj (:require [clojure.test :refer [deftest is]]
                     [cg.run :as run]
                     [cg.dataset :as ds]

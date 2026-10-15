@@ -8,13 +8,6 @@
   "Joint worker-router pool setup for the dual-runtime .cljc test suites. cljs
    side only.
 
-   This ns installs globalThis.wasmts. Then it starts the pool with the
-   wasmts asset paths. It adds the gdal handler when the caller asks for it.
-
-   A worker is a separate JS context. It cannot see the main-thread fetch shim
-   that init-wasmts! installs. Because of this, the wasmts loader URL and the
-   .wasm bytes go to each worker in the pool init args.
-
    The gdal handler is optional, for the reason cg.run makes it optional. The
    gdal init throws without dbBytes, and a worker that throws in its init does
    not answer. JVM callers do not use this ns."
