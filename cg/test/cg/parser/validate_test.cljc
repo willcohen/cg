@@ -14,9 +14,11 @@
    The fixtures below populate that shape.
 
    Run with: clojure -M:test-parser"
-  (:require [cg.parser.validate :as validate]
-            #?(:clj [clojure.test :refer [deftest is testing]]
-               :cljs [cljs.test :refer-macros [deftest is testing]])))
+  #?(:clj (:require [clojure.test :refer [deftest is testing]]
+                    [cg.parser.validate :as validate])
+     :cljs (:require [cljs.test :refer [deftest is testing]]
+                     ["../../../src/cg/parser/validate.mjs" :as validate]
+                     ["../test_runner.mjs" :refer [run_tests_and_exit_BANG_]])))
 
 #?(:clj (set! *warn-on-reflection* true))
 
@@ -186,3 +188,5 @@
                 :diagnostics []}
           out (validate/validate flow)]
       (is (not (contains? (diagnostic-codes out) :name-collision))))))
+
+#?(:cljs (run_tests_and_exit_BANG_ "cg.parser.validate-test"))

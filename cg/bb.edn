@@ -34,7 +34,8 @@
     (def cljs-test-helpers
       ["test/cg/test_runner.cljc"
        "test/cg/wasmts_setup.cljc"
-       "test/cg/pool_setup.cljc"])
+       "test/cg/pool_setup.cljc"
+       "test/cg/parser/setup.cljc"])
 
     (def cljs-test-suites
       ["test/cg/geo_test.cljc"
@@ -61,6 +62,10 @@
        "test/cg/parcel_coverage_test.cljc"
        "test/cg/zoning_load_test.cljc"
        "test/cg/zoning_rules_test.cljc"
+       "test/cg/parser/extract_test.cljc"
+       "test/cg/parser/types_test.cljc"
+       "test/cg/parser/validate_test.cljc"
+       "test/cg/parser/op_defn_test.cljc"
        "test/cg/dsl/signatures_test.cljc"
        "test/cg/dataset_test.cljc"]))
 

@@ -11,10 +11,13 @@
    must name an op, and a row op must return a value.
 
    Run with: clojure -M:test-parser"
-  (:require [cg.parser.core :as parser]
-            [clojure.test :refer [deftest is testing]]))
+  #?(:clj (:require [clojure.test :refer [deftest is testing]]
+                    [cg.parser.setup :as setup])
+     :cljs (:require [cljs.test :refer [deftest is testing]]
+                     ["./setup.mjs" :as setup]
+                     ["../test_runner.mjs" :refer [run_tests_and_exit_BANG_]])))
 
-(set! *warn-on-reflection* true)
+#?(:clj (set! *warn-on-reflection* true))
 
 (defn- diagnostic-codes [flow]
   (into #{} (map :code) (:diagnostics flow)))
@@ -34,7 +37,7 @@
        "  (assoc row :tag [size label]))\n"))
 
 (deftest an-op-defn-is-an-operation-in-a-flow-file
-  (let [flow (parser/extract-models (str "(ns city)\n" tag-src))
+  (let [flow (setup/extract-models (str "(ns city)\n" tag-src))
         op (op-named flow "tag")]
     (is (empty? (:diagnostics flow)))
     (is (= [["row" "any" :row false]
@@ -48,19 +51,19 @@
     (is (every? (set (:flags op)) ["op" "idempotent" "defn"]))))
 
 (deftest an-op-defn-in-a-module-ns-reads-its-metadata
-  (let [flow (parser/extract-models (str "(ns cg.m)\n" tag-src))]
+  (let [flow (setup/extract-models (str "(ns cg.m)\n" tag-src))]
     (is (empty? (:diagnostics flow)))
     (is (= [:row nil nil] (mapv :role (:inputs (op-named flow "tag")))))))
 
 (deftest an-op-defn-without-an-attr-map-has-one-output
-  (let [flow (parser/extract-models "(ns city)\n(defn ^:op one [^:table rows] rows)\n")
+  (let [flow (setup/extract-models "(ns city)\n(defn ^:op one [^:table rows] rows)\n")
         op (op-named flow "one")]
     (is (empty? (:diagnostics flow)))
     (is (= [["result" "any"]] (mapv (juxt :name :type) (:outputs op))))
     (is (nil? (:row-reads op)))))
 
 (deftest a-table-op-body-keeps-its-pipeline
-  (let [flow (parser/extract-models
+  (let [flow (setup/extract-models
               (str "(ns city)\n"
                    "(defn ^:op run-all [^:table rows d]\n"
                    "  (table-> :rows (geo/buffer d) (geo/centroid)))\n"))
@@ -72,31 +75,31 @@
 (deftest a-row-op-that-returns-a-model-is-an-error
   (testing "a threading form as the body"
     (is (contains? (diagnostic-codes
-                    (parser/extract-models
+                    (setup/extract-models
                      "(ns city)\n(defn ^:op area [^:row p] (item-> :p (geo/area)))\n"))
                    :row-op-returns-model)))
   (testing "a threading form as the tail of a let"
     (is (contains? (diagnostic-codes
-                    (parser/extract-models
+                    (setup/extract-models
                      (str "(ns city)\n"
                           "(defn ^:op area2 [^:row p] (let [d 1] (item-> :p (geo/buffer d))))\n")))
                    :row-op-returns-model)))
   (testing "a table op can return a model"
     (is (not (contains? (diagnostic-codes
-                         (parser/extract-models
+                         (setup/extract-models
                           "(ns city)\n(defn ^:op t [^:table rows] (table-> :rows (geo/centroid)))\n"))
                         :row-op-returns-model)))))
 
 (deftest a-role-param-comes-first
   (is (contains? (diagnostic-codes
-                  (parser/extract-models "(ns city)\n(defn ^:op late [n ^:row row] row)\n"))
+                  (setup/extract-models "(ns city)\n(defn ^:op late [n ^:row row] row)\n"))
                  :op-malformed))
   (is (contains? (diagnostic-codes
-                  (parser/extract-models "(ns city)\n(defn ^:op two [^:row a ^:table b] a)\n"))
+                  (setup/extract-models "(ns city)\n(defn ^:op two [^:row a ^:table b] a)\n"))
                  :op-malformed)))
 
 (deftest an-op-rung-counts-its-row-param-as-implicit
-  (let [flow (parser/extract-models
+  (let [flow (setup/extract-models
               (str "(ns city)\n" tag-src
                    "(def m (table-> :rows (tag 1 \"a\")))\n"))]
     (is (empty? (:diagnostics flow)))))
@@ -104,7 +107,7 @@
 (deftest a-rung-must-name-an-op
   (testing "a plain defn as a rung gets :rung-not-op, not an arity error"
     (let [codes (diagnostic-codes
-                 (parser/extract-models
+                 (setup/extract-models
                   (str "(ns cg.m)\n"
                        "(defn helper [row x] row)\n"
                        "(def m (table-> :rows (helper 1)))\n")))]
@@ -112,7 +115,7 @@
       (is (not (contains? codes :op-arity-mismatch)))))
   (testing "a plain defn called as a fn is not a rung"
     (is (empty? (:diagnostics
-                 (parser/extract-models
+                 (setup/extract-models
                   (str "(ns cg.m)\n"
                        "(defn helper [row x] row)\n"
                        "(defn caller [r] (helper r 1))\n")))))))
@@ -129,7 +132,7 @@
        "  rows)\n"))
 
 (deftest an-op-reads-its-option-map
-  (let [flow (parser/extract-models option-map-src)
+  (let [flow (setup/extract-models option-map-src)
         in (last (:inputs (op-named flow "opts-op")))]
     (is (empty? (:diagnostics flow)))
     (testing "the keys in source order, and the source text of each default"
@@ -142,7 +145,7 @@
       (is (= ["arg1" false] ((juxt :name :optional) in))))))
 
 (deftest an-option-map-with-no-required-key-is-optional
-  (let [flow (parser/extract-models
+  (let [flow (setup/extract-models
               (str "(ns cg.m)\n"
                    "(defn ^:op only-optional [^:row x & {:keys [b]}] x)\n"
                    "(defn ^:op two-arities ([^:row x] x) ([^:row x & {:keys! [a]}] x))\n"))]
@@ -153,7 +156,7 @@
 (deftest a-rung-must-give-a-required-option-map
   (let [codes (fn [rung]
                 (diagnostic-codes
-                 (parser/extract-models
+                 (setup/extract-models
                   (str "(ns cg.m)\n"
                        "(defn ^:op o [^:row x & {:keys! [a] :keys [b]}] x)\n"
                        "(def m (item-> :xs " rung "))\n"))))]
@@ -162,9 +165,12 @@
     (is (empty? (codes "(o :a 1 :b 2)")))))
 
 (deftest only-a-map-rest-param-is-an-option-map
-  (let [flow (parser/extract-models
+  (let [flow (setup/extract-models
               (str "(ns cg.m)\n"
                    "(defn ^:op more [^:row x & more] x)\n"
                    "(defn ^:op fixed [^:row x {:keys [d]}] x)\n"))]
     (is (nil? (:options (last (:inputs (op-named flow "more"))))))
     (is (nil? (:options (last (:inputs (op-named flow "fixed"))))))))
+
+#?(:cljs (-> (setup/init!)
+             (.then (fn [_] (run_tests_and_exit_BANG_ "cg.parser.op-defn-test")))))
