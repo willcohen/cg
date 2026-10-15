@@ -2,7 +2,6 @@ name: CI
 
 on:
   push:
-    branches: [main]
   pull_request:
 
 concurrency:
@@ -28,10 +27,16 @@ jobs:
         run: |
           (cd cg && bb npm:install)
           (cd cg-app && bb setup && bb vendor-deps)
+          (cd cg-vscode && npm ci)
       - name: Test on the JS runtime
         run: cd cg && bb test:cljs
       - name: Build the demo
         run: cd cg-app && bb build:demo
+      # Both suites import the cg modules that test:cljs compiles.
+      - name: Test the web app
+        run: cd cg-app && bb test:app
+      - name: Test the extension
+        run: cd cg-vscode && npm test
 
   jvm:
     name: JVM runtime
