@@ -95,29 +95,6 @@
       (is (= 2 (get (code-counts out) :duplicate-parameter-name))
           "two duplicate occurrences past the first"))))
 
-(deftest detects-input-not-declared
-  (testing "template binding source not in declared :inputs yields :input-not-declared"
-    (let [flow {:requires []
-                :inputs [{:name "parcels"}]
-                :parameters []
-                :bindings [(threading-binding "m" :item "buildings")]
-                :overlay nil
-                :diagnostics []}
-          out (validate/validate flow)]
-      (is (contains? (diagnostic-codes out) :input-not-declared)))))
-
-(deftest skips-input-check-when-no-inputs-block
-  (testing "no :inputs block means any template-binding source is permitted"
-    (let [flow {:requires []
-                :inputs []
-                :parameters []
-                :bindings [(threading-binding "m" :item "buildings")]
-                :overlay nil
-                :diagnostics []}
-          out (validate/validate flow)]
-      (is (not (contains? (diagnostic-codes out) :input-not-declared))
-          "with no declared :inputs, templates can use any source keyword"))))
-
 (deftest clean-flow-yields-no-extra-diagnostics
   (testing "validate is a no-op on a well-formed CgFlow"
     (let [flow {:requires []

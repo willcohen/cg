@@ -36,7 +36,7 @@
                 cg.parser.jvm/boot-source
                 (constantly "(function () { return function (r, g, ok, err) { err('boom'); }; })()")]
     (is (= "tree-sitter init failed: boom"
-           (try (cg.parser.jvm/init!) nil (catch Exception e (ex-message e)))))))
+           (try (#'cg.parser.jvm/init!) nil (catch Exception e (ex-message e)))))))
 
 (deftest calls-from-many-threads-share-one-context
   (let [src (slurp "examples/simple.cg")

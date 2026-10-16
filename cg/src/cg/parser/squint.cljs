@@ -23,7 +23,7 @@
       (js/decodeURIComponent (.-pathname (js/URL. url)))
       url)))
 
-(defn ^:async do-init!
+(defn- ^:async do-init!
   "Run Parser.init and Language.load. Call init!, which caches the Promise:
    concurrent loads of the same wasm leave a half-initialized Language whose
    version reads as 0."
@@ -40,12 +40,11 @@
   "Initialize the Parser runtime and load the Clojure grammar. The first call
    caches the init Promise, and concurrent callers all await it. A failed init
    is not cached, so a later call tries again."
-  ([] (init! nil))
-  ([opts]
-   (when (nil? @init-promise)
-     (reset! init-promise (.catch (do-init! opts)
-                                  (fn [e] (reset! init-promise nil) (throw e)))))
-   (await @init-promise)))
+  [opts]
+  (when (nil? @init-promise)
+    (reset! init-promise (.catch (do-init! opts)
+                                 (fn [e] (reset! init-promise nil) (throw e)))))
+  (await @init-promise))
 
 (defn parse-sync
   "Parses source text with no Promise. Returns the tree-sitter Tree, or
@@ -57,7 +56,6 @@
 (defn ^:async parse
   "Parses source text and returns the tree-sitter Tree. `opts` goes to init!
    on the first call."
-  ([text] (parse text nil))
-  ([text opts]
-   (let [{:keys [parser]} (await (init! opts))]
-     (.parse parser text))))
+  [text opts]
+  (let [{:keys [parser]} (await (init! opts))]
+    (.parse parser text)))

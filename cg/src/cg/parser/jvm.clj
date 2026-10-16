@@ -84,7 +84,7 @@
    (object-array
     (map #(Long/valueOf (bit-and ^long (long %) 0xff)) ba))))
 
-(defn new-context
+(defn- new-context
   "Builds a GraalVM Context for JS and WASM with CommonJS resolution from
    `root`. Host I/O is on, because the CommonJS loader must resolve require()
    paths."
@@ -135,7 +135,7 @@
 
 (defonce ^:private state (atom nil))
 
-(defn init!
+(defn- init!
   "Create the GraalVM Context on the first call, load the runtime and grammar
    wasm bytes, and wait for the JS side. Stores one Parser, with the Clojure
    Language set, for parse. A later call returns the stored state."
@@ -173,7 +173,6 @@
   "Parse Clojure source text into a tree-sitter Tree (a GraalVM Value).
    `opts` is ignored: the grammar comes from the classpath or node_modules
    (see package-root)."
-  ([^String text] (parse text nil))
-  ([^String text _opts]
-   (let [{:keys [^Value parser]} (init!)]
-     (.invokeMember parser "parse" (object-array [text])))))
+  [^String text _opts]
+  (let [{:keys [^Value parser]} (init!)]
+    (.invokeMember parser "parse" (object-array [text]))))

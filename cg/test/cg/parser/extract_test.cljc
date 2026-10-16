@@ -928,24 +928,6 @@
                      "(defn ^:op threshold [^:row p] p)"))]
       (is (contains? (diagnostic-codes flow) :name-collision)))))
 
-(deftest deftemplate-parses-as-model
-  (testing "(deftemplate NAME (threading-> :input ops...)) yields a Model entry"
-    (let [flow (setup/extract-models
-                (str "(deftemplate buffer-template\n"
-                     "  (item-> :parcels (geo/buffer 100)))"))]
-      (is (= 0 (count (:diagnostics flow))))
-      (is (= 1 (count (models flow))))
-      (let [m (model-by-name flow "buffer-template")]
-        (is (some? m))
-        (is (= :item (:mode m)))
-        (is (= "parcels" (:input m)))))))
-
-(deftest deftemplate-needs-threading-body
-  (testing "deftemplate with non-threading body fires :def-malformed"
-    (let [flow (setup/extract-models
-                "(deftemplate bad (foo/bar :input))")]
-      (is (contains? (diagnostic-codes flow) :def-malformed)))))
-
 (deftest filter-by-column-threading-clean-predicate
   (testing "registered predicate in a threading-body filter-by-column is silent"
     (let [flow (setup/extract-models

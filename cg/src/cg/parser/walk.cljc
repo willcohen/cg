@@ -8,7 +8,6 @@
   "Tree-sitter Node helpers for a GraalVM Value (JVM) or a JS object (squint).
    They assume tree-sitter-clojure node types. Spans are 1-indexed. Must stay
    free of eval: do not require cg.dsl, cg.macros, cg.run or cg.codegen."
-  (:refer-clojure :exclude [descendants])
   #?(:clj (:import [org.graalvm.polyglot Value])))
 
 #?(:clj (set! *warn-on-reflection* true))
@@ -52,7 +51,7 @@
   #?(:clj  (value->str (value-get node "text"))
      :cljs (.-text node)))
 
-(defn named-children-raw
+(defn- named-children-raw
   "Returns a vector of the named children of this node, comments included.
    Almost every caller wants `named-children`."
   [node]
@@ -66,13 +65,6 @@
   [node]
   (vec (remove (fn [c] (contains? #{"comment" "dis_expr"} (node-type c)))
                (named-children-raw node))))
-
-(defn child-at
-  "Returns the i-th named child of this node, or nil if out of range."
-  [node i]
-  (let [cs (named-children node)]
-    (when (< i (count cs))
-      (nth cs i))))
 
 (defn field
   "Returns the named field of this node (for example `meta` on a map_lit
@@ -105,7 +97,7 @@
         [el ec] (pos->row-col-1 end)]
     {:start-line sl :start-column sc :end-line el :end-column ec}))
 
-(defn type= [node t]
+(defn- type= [node t]
   (= (node-type node) t))
 
 (defn list-form? [node]
@@ -157,7 +149,7 @@
   "Returns the text of the first named child if it is a sym_lit, else nil:
    the head of a list_lit form, for example \"def\"."
   [node]
-  (let [c0 (child-at node 0)]
+  (let [c0 (first (named-children node))]
     (when (and c0 (sym? c0))
       (node-text c0))))
 
@@ -172,28 +164,14 @@
   (and (list-form? node)
        (contains? heads (first-sym-text node))))
 
-(defn root
-  "Returns the rootNode of a tree-sitter Tree, the value backends
-   produce from cg.parser.core/parse."
-  [tree]
-  #?(:clj  (value-get tree "rootNode")
-     :cljs (.-rootNode ^js tree)))
-
 (defn top-level-forms
   "Returns a vector of the forms of the source root, in source order."
   [tree]
-  (named-children (root tree)))
-
-(defn descendants
-  "Lazily yields every named-descendant of node (depth-first, pre-order),
-   excluding node itself."
-  [node]
-  (lazy-seq
-   (mapcat (fn [c] (cons c (descendants c)))
-           (named-children node))))
+  (named-children #?(:clj  (value-get tree "rootNode")
+                     :cljs (.-rootNode ^js tree))))
 
 (defn descendants-of-type
   "Returns a seq of every descendant node whose tree-sitter type
    matches t, in pre-order."
   [node t]
-  (filter #(type= % t) (descendants node)))
+  (filter #(type= % t) (rest (tree-seq some? named-children node))))

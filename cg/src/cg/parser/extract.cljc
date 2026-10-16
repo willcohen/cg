@@ -25,10 +25,10 @@
   ([code message location]
    (diag code :error message location)))
 
-(def threading-macro-syms
+(def ^:private threading-macro-syms
   #{"item->" "coll->" "table->" "layers->"})
 
-(def forbidden-def-heads
+(def ^:private forbidden-def-heads
   "Top-level heads that are an error in a flow file, each with the message
    fragment for the :forbidden-form diagnostic."
   {"deftype"     "deftype"
@@ -45,7 +45,7 @@
   #{"or" "and" "try" "if" "when" "cond" "condp" "case"
     "let" "if-let" "when-let" "do" "await"})
 
-(def legacy-macro-namespaces
+(def ^:private legacy-macro-namespaces
   "Namespaces that do not provide the threading macros. A require that refers
    a threading macro from one of them gets a :legacy-macro-namespace warning."
   #{"cg.dsl" "cg.dsl.macros"})
@@ -483,7 +483,7 @@
                (= :literal (:kind arg))
                (= :keyword (:kind (:literal arg))))
         (let [raw (:raw (:literal arg))
-              kw-name (if (str/starts-with? raw ":") (subs raw 1) raw)]
+              kw-name (subs raw 1)]
           (if (contains? sigs/predicate-kinds kw-name)
             []
             [(diag :unknown-predicate
@@ -685,8 +685,7 @@
 (defn- kwd->name
   "Strips the leading colon from a kwd_lit's source text."
   [kwd-node]
-  (let [t (w/node-text kwd-node)]
-    (if (str/starts-with? t ":") (subs t 1) t)))
+  (subs (w/node-text kwd-node) 1))
 
 (defn- map-pairs
   "The named children of a map_lit as [key value] pairs. A key with no value
@@ -699,7 +698,7 @@
    map-node, or nil."
   [map-node target-text]
   (some (fn [[k v]]
-          (when (and k (w/kwd? k) (= target-text (w/node-text k))) v))
+          (when (and (w/kwd? k) (= target-text (w/node-text k))) v))
         (map-pairs map-node)))
 
 (defn- str-lit-content
@@ -755,79 +754,53 @@
        :diagnostics tdiags})))
 
 (defn- extract-port-decl
-  "Parse the outer {:inputs {...}} or {:outputs {...}} declaration map.
-   `port-key-text` is \":inputs\" or \":outputs\". `per-key-fn` reads one
-   port from a (name, config map) pair. `sibling-keys` is the set of the
-   other key texts that the map admits: each key outside it gives
-   :op-malformed. Returns {:ports [...] :diagnostics [...]}."
-  [op-name outer-node port-key-text sibling-keys per-key-fn]
-  (if-not (w/map-form? outer-node)
-    {:ports []
-     :diagnostics
-     [(diag :op-malformed
-            (str "op '" op-name "' port declaration must be a map literal containing "
-                 port-key-text)
-            (w/node->span outer-node))]}
-    (let [pairs (map-pairs outer-node)
-          inner-node (map-get-kwd outer-node port-key-text)
-          admitted (conj (set sibling-keys) port-key-text)
-          extra-keys (remove (fn [[k _]]
-                               (and k (w/kwd? k)
-                                    (contains? admitted (w/node-text k))))
-                             pairs)
-          extra-diags (mapv (fn [[k _]]
-                              (diag :op-malformed
-                                    (str "op '" op-name "' " port-key-text
-                                         " declaration only admits " port-key-text
-                                         " (got " (w/node-text k) ")")
-                                    (w/node->span k)))
-                            extra-keys)]
-      (cond
-        (nil? inner-node)
-        {:ports []
-         :diagnostics
-         (into [(diag :op-malformed
-                      (str "op '" op-name "' port declaration must contain "
-                           port-key-text)
-                      (w/node->span outer-node))]
-               extra-diags)}
+  "Parse the `port-key-text` (\":outputs\") entry of an op attr-map.
+   `per-key-fn` reads one port from a (name, config map) pair. A key of the
+   attr-map that is not a keyword gives :op-malformed. Returns
+   {:ports [...] :diagnostics [...]}."
+  [op-name outer-node port-key-text per-key-fn]
+  (let [inner-node (map-get-kwd outer-node port-key-text)
+        extra-diags (mapv (fn [[k _]]
+                            (diag :op-malformed
+                                  (str "op '" op-name "' " port-key-text
+                                       " declaration only admits " port-key-text
+                                       " (got " (w/node-text k) ")")
+                                  (w/node->span k)))
+                          (remove (fn [[k _]] (w/kwd? k)) (map-pairs outer-node)))]
+    (if-not (w/map-form? inner-node)
+      {:ports []
+       :diagnostics
+       (into [(diag :op-malformed
+                    (str "op '" op-name "' " port-key-text
+                         " value must be a map of name -> config")
+                    (w/node->span inner-node))]
+             extra-diags)}
+      (let [collected
+            (reduce (fn [acc [k v]]
+                      (cond
+                        (nil? v)
+                        (update acc :diagnostics conj
+                                (diag :op-malformed
+                                      (str "op '" op-name "' " port-key-text
+                                           " entry is missing a value")
+                                      (w/node->span k)))
 
-        (not (w/map-form? inner-node))
-        {:ports []
-         :diagnostics
-         (into [(diag :op-malformed
-                      (str "op '" op-name "' " port-key-text
-                           " value must be a map of name -> config")
-                      (w/node->span inner-node))]
-               extra-diags)}
+                        (not (w/kwd? k))
+                        (update acc :diagnostics conj
+                                (diag :op-malformed
+                                      (str "op '" op-name "' " port-key-text
+                                           " names must be keywords")
+                                      (w/node->span k)))
 
-        :else
-        (let [collected
-              (reduce (fn [acc [k v]]
-                        (cond
-                          (nil? v)
-                          (update acc :diagnostics conj
-                                  (diag :op-malformed
-                                        (str "op '" op-name "' " port-key-text
-                                             " entry is missing a value")
-                                        (w/node->span k)))
-
-                          (not (w/kwd? k))
-                          (update acc :diagnostics conj
-                                  (diag :op-malformed
-                                        (str "op '" op-name "' " port-key-text
-                                             " names must be keywords")
-                                        (w/node->span k)))
-
-                          :else
-                          (let [{:keys [input output diagnostics]}
-                                (per-key-fn op-name (kwd->name k) v)]
-                            (-> acc
-                                (update :ports conj (or input output))
-                                (update :diagnostics into diagnostics)))))
-                      {:ports [] :diagnostics []}
-                      (map-pairs inner-node))]
-          (update collected :diagnostics into extra-diags))))))
+                        :else
+                        (let [{:keys [input output diagnostics]}
+                              (per-key-fn op-name (kwd->name k) v)]
+                          (-> acc
+                              (update :ports conj (or input output))
+                              (update :diagnostics into diagnostics)))))
+                    {:ports [] :diagnostics []}
+                    (map-pairs inner-node))]
+        (update collected :diagnostics into extra-diags)))))
 
 (defn- extract-row-key-set
   "Decode a `:row-reads` or `:row-writes` value (a set literal of keywords)
@@ -871,34 +844,33 @@
      :diagnostics diagnostics}))
 
 (defn- pipeline-body->graph
-  "Build a flow graph {:nodes :edges} from a :pipeline OpBodyForm, or nil for
-   another kind. A node id is :<unq-name>-<counter> (from 1), the same id
-   that cg.macros/generate-node-id gives. The edges chain the ops in order."
+  "Build a flow graph {:nodes :edges} from a :pipeline OpBodyForm. A node id
+   is :<unq-name>-<counter> (from 1), the same id that
+   cg.macros/generate-node-id gives. The edges chain the ops in order."
   [body-form]
-  (when (= :pipeline (:kind body-form))
-    (let [ops (:ops body-form)
-          nodes (vec
-                 (map-indexed
-                  (fn [idx {qn :qualified-name args :args loc :location
-                            lvl :emits-level comp :component}]
-                    (cond-> {:type :operation
-                             :id (util/as-kw (str (util/unq-name qn) "-" (inc idx)))
-                             :fn qn
-                             :args args
-                             :location loc}
-                      lvl  (assoc :emits-level lvl)
-                      comp (assoc :component comp)))
-                  ops))
-          ids (mapv :id nodes)
-          edges (vec
-                 (map (fn [from to]
-                        {:from from :to to :type :data-flow})
-                      (butlast ids)
-                      (rest ids)))]
-      {:nodes nodes
-       :edges edges
-       :mode (:mode body-form)
-       :input (:input body-form)})))
+  (let [ops (:ops body-form)
+        nodes (vec
+               (map-indexed
+                (fn [idx {qn :qualified-name args :args loc :location
+                          lvl :emits-level comp :component}]
+                  (cond-> {:type :operation
+                           :id (util/as-kw (str (util/unq-name qn) "-" (inc idx)))
+                           :fn qn
+                           :args args
+                           :location loc}
+                    lvl  (assoc :emits-level lvl)
+                    comp (assoc :component comp)))
+                ops))
+        ids (mapv :id nodes)
+        edges (vec
+               (map (fn [from to]
+                      {:from from :to to :type :data-flow})
+                    (butlast ids)
+                    (rest ids)))]
+    {:nodes nodes
+     :edges edges
+     :mode (:mode body-form)
+     :input (:input body-form)}))
 
 (defn- tail-form-label
   "The label of a let-tail form: its head symbol, `let` for a nested let, or
@@ -916,70 +888,68 @@
   [form]
   (or (some? (:head form))
       (not= :expr (:kind form))
-      (boolean (re-find #"^[\{\[#]" (str/triml (str (:raw form)))))))
+      (boolean (re-find #"^[\{\[#]" (:raw form)))))
 
 (defn- let-body->graph
-  "Build a flow graph from a :let_body OpBodyForm, or nil for another kind.
-   Each let binding is one node, and each tail form that tail-node-worthy?
-   accepts is a node after the bindings. The edges chain the nodes in source
-   order."
+  "Build a flow graph from a :let_body OpBodyForm. Each let binding is one
+   node, and each tail form that tail-node-worthy? accepts is a node after
+   the bindings. The edges chain the nodes in source order."
   [body-form]
-  (when (= :let_body (:kind body-form))
-    (let [bindings (:bindings body-form)
-          ;; A name that binds again gets a unique id (foo, foo-2, foo-3),
-          ;; because React Flow drops a node with a duplicate id.
-          [seen-after-bindings nodes]
-          (reduce
-           (fn [[seen acc] {bname :name rhs-fn :rhs-fn loc :location
-                            comp :component calls :rhs-calls}]
-             (let [n (inc (get seen bname 0))
-                   id-text (if (= 1 n) bname (str bname "-" n))
-                   label (if rhs-fn (str bname " · " rhs-fn) bname)]
-               [(assoc seen bname n)
-                (conj acc (cond-> {:type :operation
-                                   :id (util/as-kw id-text)
-                                   :fn label
-                                   :rhs-fn rhs-fn
-                                   :bound-name bname
-                                   :args []
-                                   :location loc}
-                            ;; The head of a run-component binding is always
-                            ;; run-component: :component is the only name of
-                            ;; the op that it calls.
-                            comp  (assoc :component comp)
-                            ;; The head of a branching RHS is `cond` or
-                            ;; `when`: :rhs-calls names what its branches call.
-                            calls (assoc :rhs-calls calls)))]))
-           [{} []]
-           bindings)
-          ;; The tail nodes use the same `seen` map, to give a unique id to a
-          ;; tail that has the label of a binding.
-          [_seen2 tail-nodes]
-          (reduce
-           (fn [[seen acc] form]
-             (let [label (tail-form-label form)
-                   n (inc (get seen label 0))
-                   id-text (if (= 1 n) label (str label "-" n))]
-               [(assoc seen label n)
-                (conj acc {:type :operation
-                           :id (util/as-kw id-text)
-                           :fn label
-                           :is-tail true
-                           :args []
-                           :location (:location form)})]))
-           [seen-after-bindings []]
-           (filterv tail-node-worthy? (:tail body-form)))
-          nodes (into nodes tail-nodes)
-          ids (mapv :id nodes)
-          edges (vec
-                 (map (fn [from to]
-                        {:from from :to to :type :data-flow})
-                      (butlast ids)
-                      (rest ids)))]
-      {:nodes nodes
-       :edges edges
-       :mode nil
-       :input nil})))
+  (let [bindings (:bindings body-form)
+        ;; A name that binds again gets a unique id (foo, foo-2, foo-3),
+        ;; because React Flow drops a node with a duplicate id.
+        [seen-after-bindings nodes]
+        (reduce
+         (fn [[seen acc] {bname :name rhs-fn :rhs-fn loc :location
+                          comp :component calls :rhs-calls}]
+           (let [n (inc (get seen bname 0))
+                 id-text (if (= 1 n) bname (str bname "-" n))
+                 label (if rhs-fn (str bname " · " rhs-fn) bname)]
+             [(assoc seen bname n)
+              (conj acc (cond-> {:type :operation
+                                 :id (util/as-kw id-text)
+                                 :fn label
+                                 :rhs-fn rhs-fn
+                                 :bound-name bname
+                                 :args []
+                                 :location loc}
+                          ;; The head of a run-component binding is always
+                          ;; run-component: :component is the only name of
+                          ;; the op that it calls.
+                          comp  (assoc :component comp)
+                          ;; The head of a branching RHS is `cond` or
+                          ;; `when`: :rhs-calls names what its branches call.
+                          calls (assoc :rhs-calls calls)))]))
+         [{} []]
+         bindings)
+        ;; The tail nodes use the same `seen` map, to give a unique id to a
+        ;; tail that has the label of a binding.
+        [_seen2 tail-nodes]
+        (reduce
+         (fn [[seen acc] form]
+           (let [label (tail-form-label form)
+                 n (inc (get seen label 0))
+                 id-text (if (= 1 n) label (str label "-" n))]
+             [(assoc seen label n)
+              (conj acc {:type :operation
+                         :id (util/as-kw id-text)
+                         :fn label
+                         :is-tail true
+                         :args []
+                         :location (:location form)})]))
+         [seen-after-bindings []]
+         (filterv tail-node-worthy? (:tail body-form)))
+        nodes (into nodes tail-nodes)
+        ids (mapv :id nodes)
+        edges (vec
+               (map (fn [from to]
+                      {:from from :to to :type :data-flow})
+                    (butlast ids)
+                    (rest ids)))]
+    {:nodes nodes
+     :edges edges
+     :mode nil
+     :input nil}))
 
 (defn- body-form->graph
   "The graph of a body form, or nil for a kind with no graph (:expr)."
@@ -1033,7 +1003,7 @@
    Returns nil for a name that is not a symbol (destructuring), which the
    body graph does not model."
   [name-node val-node]
-  (when (and name-node val-node (w/sym? name-node))
+  (when (and val-node (w/sym? name-node))
     (let [bname (w/sym-name name-node)
           rhs-fn (when (w/list-form? val-node)
                    (w/first-sym-text val-node))
@@ -1049,8 +1019,7 @@
 (defn- extract-let-body
   "Decode a `(let [name expr ...] body...)` body of a defn into a :let_body
    OpBodyForm. Each binding is an entry in `:bindings`. Each body form after
-   the bindings vector decodes through `extract-op-body-form` into `:tail`,
-   and `:tail-raw` keeps the source text."
+   the bindings vector decodes through `extract-op-body-form` into `:tail`."
   ([op-name node mode]
    (let [children (w/named-children node)
          bindings-node (nth children 1 nil)
@@ -1091,7 +1060,6 @@
          {:body-form {:kind :let_body
                       :bindings bindings
                       :tail (vec (keep :body-form tail-results))
-                      :tail-raw (str/join "\n" (mapv w/node-text body-nodes))
                       :raw (w/node-text node)
                       :location span}
           :diagnostics (vec (concat (or odd-diag [])
@@ -1188,7 +1156,7 @@
        :optional (key-names ":keys")
        :defaults (if (and or-node (w/map-form? or-node))
                    (into {}
-                         (keep (fn [[k v]] (when (and k v) [(key-name k) (w/node-text v)])))
+                         (keep (fn [[k v]] (when v [(key-name k) (w/node-text v)])))
                          (map-pairs or-node))
                    {})})))
 
@@ -1238,10 +1206,8 @@
   "The outputs and the row contract of an op, from its attr-map. With no
    :outputs, the op has one output, typed any."
   [op-name attr-node]
-  (let [attr-keys (into [] (comp (map first) (filter #(and % (w/kwd? %))) (map w/node-text))
-                        (when attr-node (map-pairs attr-node)))
-        outs (if (and attr-node (map-get-kwd attr-node ":outputs"))
-               (extract-port-decl op-name attr-node ":outputs" attr-keys
+  (let [outs (if (and attr-node (map-get-kwd attr-node ":outputs"))
+               (extract-port-decl op-name attr-node ":outputs"
                                   (fn [op-n out-n cfg] (extract-typed-output op-n out-n cfg)))
                {:ports [{:name "result" :type "any"}] :diagnostics []})
         reads (extract-row-key-set op-name ":row-reads"
@@ -1321,39 +1287,6 @@
                                    (:diagnostics attrs)
                                    (when op? (op-rule-diagnostics op-name inputs body span))))}))))
 
-(defn- extract-deftemplate
-  "Parse a (deftemplate NAME (threading-> :input ops...)) form into a
-   threading-macro Binding."
-  [list-node]
-  (let [children (w/named-children list-node)
-        name-node (nth children 1 nil)
-        body-node (nth children 2 nil)
-        span (w/node->span list-node)]
-    (cond
-      (or (not name-node) (not (w/sym? name-node)))
-      {:kind :error
-       :diagnostics [(diag :def-malformed
-                           "(deftemplate <name> <body>) requires a symbol name"
-                           span)]}
-
-      (or (nil? body-node) (not (w/list-form? body-node))
-          (not (contains? threading-macro-syms (w/first-sym-text body-node))))
-      {:kind :error
-       :diagnostics [(diag :def-malformed
-                           (str "deftemplate '" (w/sym-name name-node)
-                                "' body must be a threading-macro form "
-                                "(item->|coll->|table->|layers->)")
-                           span)]}
-
-      :else
-      (let [{:keys [model diagnostics]}
-            (extract-model-body (w/sym-name name-node) body-node)]
-        {:kind :binding
-         ;; some-> not assoc: a shape error leaves model nil, and assoc on
-         ;; nil would hand the accumulator a truthy map to conj.
-         :value (some-> model (assoc :form-location span))
-         :diagnostics diagnostics}))))
-
 (defn- extract-def
   "Classify a (def <name> <body>) form by its RHS: a parameter (a fully
    literal RHS), a threading-macro binding, a collection binding (a
@@ -1385,6 +1318,8 @@
       (let [{:keys [model diagnostics]}
             (extract-model-body nm body-node)]
         {:kind :binding
+         ;; some-> not assoc: a shape error leaves model nil, and assoc on
+         ;; nil would hand the accumulator a truthy map to conj.
          :value (some-> model (assoc :form-location span))
          :diagnostics diagnostics})
 
@@ -1393,7 +1328,6 @@
         {:kind :parameter
          :value (cond-> {:name nm
                          :value (literal-value body-node)
-                         :config nil
                          :location span}
                   fields (assoc :fields fields))
          :diagnostics []})
@@ -1411,11 +1345,9 @@
                  :head-sym (case (literal-kind body-node)
                              :mapv "{}"
                              :vec  "[]"
-                             :set  "#{}"
-                             "()")
+                             :set  "#{}")
                  :args (or (:items arg)
-                           (some->> (:entries arg) (mapcat identity) (filterv some?))
-                           [])
+                           (some->> (:entries arg) (mapcat identity) (filterv some?)))
                  :is-collection true
                  :is-accessor false
                  :is-control false
@@ -1518,7 +1450,7 @@
    doseq forms destructure, and the block must keep a record of what it
    iterates."
   [name-node val-node]
-  (when (and name-node val-node)
+  (when val-node
     {:name (w/node-text name-node)
      :destructured? (not (w/sym? name-node))
      :rhs-fn (head-text val-node)
@@ -1729,7 +1661,6 @@
     "run/load-module" extract-load-module
     "ns"              extract-module-ns
     "def"             extract-def
-    "deftemplate"     extract-deftemplate
     "println"         extract-output-form}
    (into {} (map (fn [s] [s extract-top-level-pipeline]) threading-macro-syms))
    (into {} (map (fn [s] [s extract-block]) (keys block-constructor-heads)))))
@@ -1758,7 +1689,7 @@
     ;; error.
     {:kind :error
      :diagnostics [(diag :unclassified-top-level-form
-                         "top-level map literal is only legal as ^:cgproj overlay or ^:inputs declaration"
+                         "top-level map literal is only legal as the ^:cgproj overlay"
                          (w/node->span node))]}))
 
 (def ^:private kind->collection
@@ -1825,7 +1756,6 @@
 
      {:requires       [<NamespaceImport> ...]
       :loaded-modules [<LoadModule> ...]
-      :inputs         [<InputDecl> ...]
       :parameters     [<Parameter> ...]
       :bindings       [<Binding> ...]
       :operations     [<OperationDecl> ...]
@@ -1841,12 +1771,10 @@
    The parser does not follow a `run/load-module` path: the caller parses
    that file and merges its :operations. cg.parser.validate holds the rules
    across forms (unique names, references)."
-  ([tree] (extract tree nil))
-  ([tree opts]
-   (let [opaque? (boolean (:opaque-blocks opts))
+  [tree opts]
+  (let [opaque? (boolean (:opaque-blocks opts))
         initial {:requires []
                  :loaded-modules []
-                 :inputs []
                  :parameters []
                  :bindings []
                  :operations []
@@ -1893,4 +1821,4 @@
               initial
               (w/top-level-forms tree))]
     (update flow :diagnostics into
-            (check-legacy-macro-namespace (:requires flow))))))
+            (check-legacy-macro-namespace (:requires flow)))))

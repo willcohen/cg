@@ -66,12 +66,7 @@
 (defn- op-arg-type [arg cg-flow registry]
   (case (:kind arg)
     :literal        (literal-type (:literal arg))
-    :inline_map     :any
     :parameter_ref  (parameter-type (:parameter-name arg) cg-flow registry)
-    :symbol_ref     (let [text (:symbol-text arg)]
-                      (if (or (nil? text) (>= (.indexOf ^String text "/") 0))
-                        :any
-                        (binding-output-type text cg-flow registry)))
     :any))
 
 (defn- type-compatible? [arg-type sig-type]
@@ -308,17 +303,16 @@
 
 (defn check
   "Type-check a CgFlow and return it with the new :diagnostics added. A second
-   call adds them again: use recheck. Without `registry`, builds one from the
-   built-ins and the OperationDecls of the flow."
-  ([cg-flow]
-   (check cg-flow (sigs/registry-for cg-flow)))
-  ([cg-flow registry]
-   (let [per-call (mapcat (fn [site] (check-call site registry cg-flow))
-                          (call-sites cg-flow))
-         flow-diags (pass-4-pipeline-flow cg-flow registry)
-         output-diags (pass-5-op-output cg-flow registry)]
-     (update cg-flow :diagnostics into
-             (concat per-call flow-diags output-diags)))))
+   call adds them again: use recheck. The registry holds the built-ins and
+   the OperationDecls of the flow."
+  [cg-flow]
+  (let [registry (sigs/registry-for cg-flow)
+        per-call (mapcat (fn [site] (check-call site registry cg-flow))
+                         (call-sites cg-flow))
+        flow-diags (pass-4-pipeline-flow cg-flow registry)
+        output-diags (pass-5-op-output cg-flow registry)]
+    (update cg-flow :diagnostics into
+            (concat per-call flow-diags output-diags))))
 
 (def ^:private checker-codes
   "Each diagnostic code that this namespace emits. recheck removes these
