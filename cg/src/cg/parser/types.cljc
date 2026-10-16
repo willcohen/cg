@@ -11,48 +11,26 @@
    do not require cg.dsl, cg.macros, cg.run or cg.codegen (cg.dsl.signatures
    is pure data)."
   (:require [cg.dsl.signatures :as sigs]
-            [cg.parser.extract :as extract]))
+            [cg.parser.extract :as extract :refer [diag]]))
 
 #?(:clj (set! *warn-on-reflection* true))
 
-(defn- diag
-  ([code severity message location]
-   {:code code :severity severity :message message :location location})
-  ([code message location]
-   (diag code :error message location)))
+(defn- t-name [t] (some-> t name))
 
-(defn- t-name
-  "The name string of a type kind. On the JVM the kind is a keyword. On
-   squint a keyword is already a string, and squint-cljs/core does not define
-   `name`."
-  [t]
-  #?(:clj  (when t (name t))
-     :cljs t))
+(defn- literal-type [lit]
+  (let [k (:kind lit)]
+    (if (contains? #{:number :string :keyword :boolean} k) k :any)))
 
-(def ^:private literal-kind->type
-  "The checker type kind for each LiteralValue :kind (from
-   cg.parser.extract)."
-  {:number  :number
-   :string  :string
-   :keyword :keyword
-   :boolean :boolean
-   :vec     :any
-   :mapv    :any})
-
-(defn- literal-type
-  "The type keyword of a LiteralValue. An unknown kind gives :any."
-  [lit]
-  (get literal-kind->type (:kind lit) :any))
+(defn- sig-output-type [sig]
+  (or (-> sig :outputs first :type) :any))
 
 (defn- binding-output-type
   "The output type of the top-level Binding with this name: the first output
    of the signature of its head. :any when the registry does not resolve the
    binding."
   [binding-name cg-flow registry]
-  (let [b (first (filter #(= (:name %) binding-name) (:bindings cg-flow)))
-        sig (when b (get registry (:head-sym b)))
-        out (first (:outputs sig))]
-    (if out (:type out) :any)))
+  (let [b (first (filter #(= (:name %) binding-name) (:bindings cg-flow)))]
+    (sig-output-type (when b (get registry (:head-sym b))))))
 
 (defn- parameter-type
   "The type of a parameter_ref OpArg: of the Parameter with this name, else
@@ -152,95 +130,11 @@
                           (:location arg)))))
               args)))))))
 
-(defn- binding-call-site [b]
-  {:qualified-name (:head-sym b)
-   :args (vec (:args b))
-   :location (:location b)
-   :context :function-call})
-
-(defn- threading-op-call-site
-  "Projects one OpCall (from a Model or a decoded pipeline body form)
-   into a checkable call site in :threading context."
-  [opcall]
-  {:qualified-name (:qualified-name opcall)
-   :args (vec (:args opcall))
-   :location (:location opcall)
-   :context :threading})
+(defn- call-site [context qualified-name {:keys [args location]}]
+  {:qualified-name qualified-name :args (vec args) :location location :context context})
 
 (defn- model-call-sites [m]
-  (mapv threading-op-call-site (:ops m)))
-
-(defn- body-form-call-sites
-  "Projects the OpCalls of a decoded OpBodyForm into call sites. Only a
-   :pipeline has OpCalls: its :ops."
-  [body-form]
-  (if (= :pipeline (:kind body-form))
-    (mapv threading-op-call-site (:ops body-form))
-    []))
-
-(defn- operation-decl-call-sites
-  "Projects every OpCall reachable from an OperationDecl's body into
-   call sites."
-  [op-decl]
-  (mapcat body-form-call-sites (:body op-decl)))
-
-(defn- call-sites
-  "Each call site in a CgFlow that the checker can inspect: the heads of
-   function-call Bindings, the :ops of threading-macro Bindings and of
-   SinkPipelines, and the OpCalls in OperationDecl bodies."
-  [cg-flow]
-  ;; An accessor, a control form, a collection and an alias binding have no
-  ;; signature. A check of one gives a false :unresolved-op, and extract
-  ;; already reports the control form as :control-form-binding.
-  (concat (map binding-call-site
-               (remove (fn [b] (or (:is-accessor b) (:is-control b)
-                                   (:is-collection b) (:is-alias b)))
-                       (extract/function-call-bindings cg-flow)))
-          (mapcat model-call-sites (extract/threading-macro-bindings cg-flow))
-          (mapcat operation-decl-call-sites (:operations cg-flow))
-          (mapcat model-call-sites (:sinks cg-flow))))
-
-(defn- sig-output-type [sig]
-  (or (-> sig :outputs first :type) :any))
-
-(defn- sig-row-input-type
-  "The type of the first :row input of a signature: the slot that the
-   threaded value fills. Falls back to the first input, then to :any."
-  [sig]
-  (let [inputs (:inputs sig)
-        row    (first (filter #(= :row (:role %)) inputs))]
-    (or (:type row)
-        (:type (first inputs))
-        :any)))
-
-(defn- check-pipeline-flow
-  "Check that the first output of each op in a decoded pipeline fits the :row
-   input of the next op. The source is not an op and is not checked."
-  [pipeline registry]
-  (let [ops (vec (:ops pipeline))]
-    (loop [i 1
-           diags []]
-      (if (>= i (count ops))
-        diags
-        (let [prev (nth ops (dec i))
-              cur  (nth ops i)
-              prev-sig (get registry (:qualified-name prev))
-              cur-sig  (get registry (:qualified-name cur))]
-          (if (or (nil? prev-sig) (nil? cur-sig))
-            (recur (inc i) diags)
-            (let [prev-out (sig-output-type prev-sig)
-                  cur-in   (sig-row-input-type cur-sig)]
-              (if (type-compatible? prev-out cur-in)
-                (recur (inc i) diags)
-                (recur (inc i)
-                       (conj diags
-                             (diag :pipeline-type-mismatch
-                                   (str "operation '" (:qualified-name cur)
-                                        "' expects " (t-name cur-in)
-                                        " on its row input but the previous "
-                                        "op '" (:qualified-name prev)
-                                        "' returns " (t-name prev-out))
-                                   (:location cur))))))))))))
+  (mapv #(call-site :threading (:qualified-name %) %) (:ops m)))
 
 (defn- pipeline-body-form [body-form]
   (when (= :pipeline (:kind body-form))
@@ -257,6 +151,50 @@
                   (:operations cg-flow))
           (:sinks cg-flow)))
 
+(defn- call-sites
+  "Each call site in a CgFlow that the checker can inspect: the heads of
+   function-call Bindings, and the ops of each pipeline of all-pipelines."
+  [cg-flow]
+  ;; An accessor, a control form, a collection and an alias binding have no
+  ;; signature. A check of one gives a false :unresolved-op, and extract
+  ;; already reports the control form as :control-form-binding.
+  (concat (map #(call-site :function-call (:head-sym %) %)
+               (remove (fn [b] (or (:is-accessor b) (:is-control b)
+                                   (:is-collection b) (:is-alias b)))
+                       (extract/function-call-bindings cg-flow)))
+          (mapcat model-call-sites (all-pipelines cg-flow))))
+
+(defn- sig-row-input-type
+  "The type of the first :row input of a signature: the slot that the
+   threaded value fills. Falls back to the first input, then to :any."
+  [sig]
+  (let [inputs (:inputs sig)
+        row    (first (filter #(= :row (:role %)) inputs))]
+    (or (:type row)
+        (:type (first inputs))
+        :any)))
+
+(defn- check-pipeline-flow
+  "Check that the first output of each op in a decoded pipeline fits the :row
+   input of the next op. The source is not an op and is not checked."
+  [pipeline registry]
+  (let [ops (:ops pipeline)]
+    (keep (fn [[prev cur]]
+            (let [prev-sig (get registry (:qualified-name prev))
+                  cur-sig  (get registry (:qualified-name cur))]
+              (when (and prev-sig cur-sig)
+                (let [prev-out (sig-output-type prev-sig)
+                      cur-in   (sig-row-input-type cur-sig)]
+                  (when-not (type-compatible? prev-out cur-in)
+                    (diag :pipeline-type-mismatch
+                          (str "operation '" (:qualified-name cur)
+                               "' expects " (t-name cur-in)
+                               " on its row input but the previous "
+                               "op '" (:qualified-name prev)
+                               "' returns " (t-name prev-out))
+                          (:location cur)))))))
+          (map vector ops (rest ops)))))
+
 (defn- pass-4-pipeline-flow [cg-flow registry]
   (mapcat (fn [p] (check-pipeline-flow p registry)) (all-pipelines cg-flow)))
 
@@ -268,34 +206,19 @@
         sig (when last-op (get registry (:qualified-name last-op)))]
     (when sig (sig-output-type sig))))
 
-(defn- check-op-output [op-decl registry]
-  (let [outputs (:outputs op-decl)
-        body (:body op-decl)]
-    (cond
-      ;; Only an op with one output and one body form is checked: no
-      ;; convention maps more than one output to columns.
-      (not= 1 (count outputs)) []
-      (not= 1 (count body))    []
-
-      :else
-      (let [term (pipeline-body-form (first body))
-            term-type (when term (terminal-op-output-type term registry))
-            decl-out-type (sigs/type-kind (-> outputs first :type))]
-        (cond
-          ;; No terminal pipeline, or a last op that does not resolve.
-          ;; Another pass reports the op that does not resolve.
-          (nil? term)      []
-          (nil? term-type) []
-
-          (type-compatible? term-type decl-out-type)
-          []
-
-          :else
-          [(diag :op-output-mismatch
-                 (str "op '" (:name op-decl)
-                      "' declares output type " (t-name decl-out-type)
-                      " but its body's terminal op returns " (t-name term-type))
-                 (:location op-decl))])))))
+(defn- check-op-output [{:keys [outputs body] :as op-decl} registry]
+  ;; Only an op with one output and one body form is checked: no convention
+  ;; maps more than one output to columns. A nil term-type is no terminal
+  ;; pipeline, or a last op that does not resolve, which another pass reports.
+  (when (and (= 1 (count outputs)) (= 1 (count body)))
+    (let [term-type (terminal-op-output-type (pipeline-body-form (first body)) registry)
+          decl-out-type (sigs/type-kind (-> outputs first :type))]
+      (when (and term-type (not (type-compatible? term-type decl-out-type)))
+        [(diag :op-output-mismatch
+               (str "op '" (:name op-decl)
+                    "' declares output type " (t-name decl-out-type)
+                    " but its body's terminal op returns " (t-name term-type))
+               (:location op-decl))]))))
 
 (defn- pass-5-op-output [cg-flow registry]
   (mapcat (fn [op-decl] (check-op-output op-decl registry))

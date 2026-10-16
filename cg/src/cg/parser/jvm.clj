@@ -150,11 +150,11 @@
             fut (CompletableFuture.)
             on-success (reify ProxyExecutable
                          (execute [_ args]
-                           (.complete fut (when (pos? (alength args)) (aget args 0)))
+                           (.complete fut (aget args 0))
                            nil))
             on-error (reify ProxyExecutable
                        (execute [_ args]
-                         (let [m (if (pos? (alength args)) (.asString ^Value (aget args 0)) "unknown")]
+                         (let [m (.asString ^Value (aget args 0))]
                            (.completeExceptionally fut
                                                    (ex-info (str "tree-sitter init failed: " m)
                                                             {:cause m})))

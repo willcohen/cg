@@ -18,10 +18,6 @@
        (.getMember v member))))
 
 #?(:clj
-   (defn- value-invoke [^Value v ^String method & args]
-     (.invokeMember v method (object-array args))))
-
-#?(:clj
    (defn- value->long [^Value v]
      (when v (.asLong v))))
 
@@ -32,11 +28,7 @@
 #?(:clj
    (defn- value->seq [^Value arr]
      (when (and arr (.hasArrayElements arr))
-       (let [n (.getArraySize arr)]
-         (loop [i 0 acc (transient [])]
-           (if (< i n)
-             (recur (inc i) (conj! acc (.getArrayElement arr i)))
-             (persistent! acc)))))))
+       (mapv #(.getArrayElement arr (long %)) (range (.getArraySize arr))))))
 
 (defn node-type
   "Returns the tree-sitter node type as a string (for example \"list_lit\")."
@@ -70,23 +62,17 @@
   "Returns the named field of this node (for example `meta` on a map_lit
    with metadata), or nil."
   [node field-name]
-  #?(:clj  (let [^Value v (value-invoke node "childForFieldName" field-name)]
+  #?(:clj  (let [^Value v (.invokeMember ^Value node "childForFieldName" (object-array [field-name]))]
              (when (and v (not (.isNull v))) v))
      :cljs (.childForFieldName ^js node field-name)))
 
-#?(:clj
-   (defn- pos->row-col-1
-     "GraalVM Value with shape {row, column} (0-indexed) -> [line col]
-     (1-indexed)."
-     [^Value pos]
-     (when pos
-       [(inc (value->long (value-get pos "row")))
-        (inc (value->long (value-get pos "column")))])))
-
-#?(:cljs
-   (defn- pos->row-col-1 [pos]
-     (when pos
-       [(inc (.-row ^js pos)) (inc (.-column ^js pos))])))
+(defn- pos->row-col-1
+  "A tree-sitter Point {row, column} (0-indexed) -> [line col] (1-indexed)."
+  [pos]
+  (when pos
+    #?(:clj  [(inc (value->long (value-get pos "row")))
+              (inc (value->long (value-get pos "column")))]
+       :cljs [(inc (.-row ^js pos)) (inc (.-column ^js pos))])))
 
 (defn node->span [node]
   (let [start #?(:clj (value-get node "startPosition")
@@ -141,9 +127,7 @@
    sym_lit."
   [node]
   (when (sym? node)
-    (or (some-> (first (filter #(type= % "sym_name") (named-children node)))
-                node-text)
-        (node-text node))))
+    (node-text (field node "name"))))
 
 (defn first-sym-text
   "Returns the text of the first named child if it is a sym_lit, else nil:

@@ -8,15 +8,10 @@
   "Whole-file checks of an extracted CgFlow: duplicate names, name collisions
    and component names. Must stay free of eval: do not require cg.dsl,
    cg.macros, cg.run or cg.codegen."
-  (:require [clojure.string :as str]))
+  (:require [cg.parser.extract :refer [diag]]
+            [clojure.string :as str]))
 
 #?(:clj (set! *warn-on-reflection* true))
-
-(defn- diag
-  ([code severity message location]
-   {:code code :severity severity :message message :location location})
-  ([code message location]
-   (diag code :error message location)))
 
 (defn- duplicate-name-diagnostics
   "A Diagnostic for each name that occurs more than one time in `items`, at
@@ -32,21 +27,6 @@
                                 (:location v)))
                         (rest vs))))
          vec)))
-
-(defn- check-duplicate-parameters [cg-flow]
-  (duplicate-name-diagnostics (:parameters cg-flow)
-                              :duplicate-parameter-name
-                              "parameter"))
-
-(defn- check-duplicate-bindings [cg-flow]
-  (duplicate-name-diagnostics (:bindings cg-flow)
-                              :duplicate-binding-name
-                              "binding"))
-
-(defn- check-duplicate-operations [cg-flow]
-  (duplicate-name-diagnostics (:operations cg-flow)
-                              :duplicate-operation-name
-                              "operation"))
 
 (defn- check-name-collisions
   "`:name-collision` diagnostics for a Binding that has the name of a
@@ -68,14 +48,11 @@
                                (:location b)))))))
         op-collisions
         (->> (:operations cg-flow)
-             (keep (fn [op]
-                     (let [n (:name op)
-                           hits (cond-> []
-                                  (contains? param-names n) (conj (str "parameter '" n "'")))]
-                       (when (seq hits)
-                         (diag :name-collision
-                               (str "operation '" n "' collides with " (str/join " and " hits))
-                               (:location op)))))))]
+             (filter #(contains? param-names (:name %)))
+             (map (fn [{n :name :as op}]
+                    (diag :name-collision
+                          (str "operation '" n "' collides with parameter '" n "'")
+                          (:location op)))))]
     (vec (concat binding-collisions op-collisions))))
 
 (defn- component-bearing-ops
@@ -106,9 +83,11 @@
   "Run the whole-file checks and return the CgFlow with the new :diagnostics
    added. A second call adds them again."
   [cg-flow]
-  (let [extra (concat (check-duplicate-parameters cg-flow)
-                      (check-duplicate-bindings cg-flow)
-                      (check-duplicate-operations cg-flow)
+  (let [extra (concat (mapcat (fn [[k code label]]
+                                (duplicate-name-diagnostics (get cg-flow k) code label))
+                              [[:parameters :duplicate-parameter-name "parameter"]
+                               [:bindings :duplicate-binding-name "binding"]
+                               [:operations :duplicate-operation-name "operation"]])
                       (check-name-collisions cg-flow)
                       (check-map-components cg-flow))]
     (update cg-flow :diagnostics into extra)))

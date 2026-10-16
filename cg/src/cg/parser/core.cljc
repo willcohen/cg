@@ -38,10 +38,9 @@
    Promise on cljs. `opts` keys: :grammar-wasm, :opaque-blocks."
   ([text] (extract-models text nil))
   ([text opts]
-   #?(:clj  (-> (locking js-lock (extract-tree (parse text opts) opts))
-                validate/validate types/check)
-      :cljs (let [tree (await (parse text opts))]
-              (-> tree (extract-tree opts) validate/validate types/check)))))
+   (-> #?(:clj  (locking js-lock (extract-tree (parse text opts) opts))
+          :cljs (extract-tree (await (parse text opts)) opts))
+       validate/validate types/check)))
 
 #?(:cljs
    (defn init!
@@ -55,8 +54,7 @@
    cljs, nil until init! resolves."
   [text]
   #?(:clj  (:operations (locking js-lock (extract-tree (parse text nil) nil)))
-     :cljs (when-let [tree (backend/parse-sync text)]
-             (:operations (extract-tree tree nil)))))
+     :cljs (some-> (backend/parse-sync text) (extract-tree nil) :operations)))
 
 (defn recheck
   "Run the static checker again on a CgFlow with extended :operations, with

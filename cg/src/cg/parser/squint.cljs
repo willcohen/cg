@@ -57,5 +57,5 @@
   "Parses source text and returns the tree-sitter Tree. `opts` goes to init!
    on the first call."
   [text opts]
-  (let [{:keys [parser]} (await (init! opts))]
-    (.parse parser text)))
+  (await (init! opts))
+  (parse-sync text))
