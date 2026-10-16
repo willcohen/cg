@@ -26,7 +26,6 @@
    (diag code :error message location)))
 
 (def threading-macro-syms
-  "The names of the threading macros that start a pipeline body."
   #{"item->" "coll->" "table->" "layers->"})
 
 (def forbidden-def-heads
@@ -140,7 +139,7 @@
    literal shape. :deep? is true when each nested form is also a literal, and
    :data is the plain value or `undecodable`. `[:a (f x)]` has :kind :vec but
    is not deep, because a def whose RHS holds a call must not classify as a
-   literal parameter. A set and a literal nil count as deep."
+   literal parameter. A set decodes to `undecodable`, but it can be deep."
   [node]
   (if-let [scalar (decode-scalar node)]
     (assoc scalar :deep? true)
@@ -283,9 +282,8 @@
   (if (> (count s) n) (str (subs s 0 n) " …") s))
 
 (defn- opaque-block
-  "An OpaqueBlock entry for a form that the classifier rejects: :label (the
-   first source line, truncated), :raw (the full source) and :location.
-   extract records it only with :opaque-blocks true."
+  "An OpaqueBlock entry for a form that the classifier rejects. extract
+   records it only with :opaque-blocks true."
   [node]
   (let [text (w/node-text node)]
     {:label (truncate-label (first-line text) 60)
@@ -382,7 +380,7 @@
       ;; A collection with a member that is not a literal keeps its members
       ;; as OpArgs. `{:rows parcels}` is how a run/run-model call names its
       ;; input, and the reference must not live only in the raw text. A fully
-      ;; literal collection decodes to :data and has neither key.
+      ;; literal collection has neither key.
       (let [kind (literal-kind node)
             deep? (literal-deep? node)
             kids (w/named-children node)]
@@ -461,10 +459,7 @@
   [qualified-name]
   (-> (get sigs/built-ins qualified-name) :outputs first :level))
 
-(defn- enrich-op
-  "Add to an OpCall :emits-level (from the signature of the op) and, for an
-   op that takes a component, :component."
-  [opcall]
+(defn- enrich-op [opcall]
   (let [lvl (op-emits-level (:qualified-name opcall))]
     (-> (cond-> opcall lvl (assoc :emits-level lvl))
         enrich-map-component)))
@@ -497,9 +492,7 @@
                    (:location arg))]))
         []))))
 
-(defn- threading-form?
-  "True when node is a list_lit whose head is item->/coll->/table->/layers->."
-  [node]
+(defn- threading-form? [node]
   (w/list-head-in? node threading-macro-syms))
 
 (defn- mode-keyword
@@ -544,7 +537,6 @@
                                  (str mode-text " body needs a source as its first argument")
                                  (w/node->span body-node)))
                     nil)
-                ;; A list form or a quoted form cannot be an OpArg.
                 (or (w/list-form? first-arg) (w/quoting? first-arg))
                 (do (vswap! diags conj
                            (diag :non-keyword-data-ref
@@ -698,10 +690,7 @@
 
 (defn- map-pairs
   "The named children of a map_lit as [key value] pairs. A key with no value
-   gets nil. This fn uses partition-all, not `(partition 2 2 nil coll)`:
-   squint's 4-arity partition reads `.length` on the nil pad and throws on a
-   short last group. The other pair walks in this namespace use partition-all
-   for the same reason."
+   gets nil."
   [map-node]
   (partition-all 2 (w/named-children map-node)))
 
@@ -870,10 +859,7 @@
 
 (declare extract-op-body-form)
 
-(defn- extract-pipeline-body-form
-  "Decode a threading-macro form in an op body into an OpBodyForm
-   {:kind :pipeline ...}, with decode-threading-form."
-  [node]
+(defn- extract-pipeline-body-form [node]
   (let [{:keys [mode input ops config diagnostics]} (decode-threading-form node)]
     {:body-form {:kind :pipeline
                  :mode mode
@@ -916,7 +902,7 @@
 
 (defn- tail-form-label
   "The label of a let-tail form: its head symbol, `let` for a nested let, or
-   `result` for a collection literal, which has no head."
+   `result` for a form with no head (a collection literal or a pipeline)."
   [form]
   (or (:head form)
       (case (:kind form)
@@ -1110,10 +1096,6 @@
                       :location span}
           :diagnostics (vec (concat (or odd-diag [])
                                     (mapcat :diagnostics tail-results)))})))))
-
-;; An op body is ordinary Clojure, and it runs as written. The parser
-;; models two shapes of it: a threading form, which builds the Model of a
-;; table op, and a let, whose bindings are the steps of the body.
 
 (defn- extract-op-body-form
   "Decode one body form of a defn into an OpBodyForm. A threading form in a
@@ -1474,9 +1456,7 @@
                                 "model, nor a binding call")
                            span)]})))
 
-(defn- cgproj-meta?
-  "True when map-node carries ^:cgproj metadata."
-  [map-node]
+(defn- cgproj-meta? [map-node]
   (when-let [m (w/field map-node "meta")]
     (boolean
      (some (fn [c] (and (w/kwd? c) (= ":cgproj" (w/node-text c))))
@@ -1738,9 +1718,9 @@
                                 (w/node->span node)))})))
 
 (def ^:private top-level-heads
-  "The top-level vocabulary of a .cg file as data: head symbol -> the walker
-   that decodes a form with that head. Each walker returns {:kind :value
-   :diagnostics}, and its :kind is the classification kind."
+  "Head symbol -> the walker that decodes a top-level form with that head.
+   Each walker returns {:kind :value :diagnostics}, and its :kind is the
+   classification kind. classify-top-level handles defn, defn- and declare."
   (merge
    {"require"         extract-require
     ;; A .cg file gives an alias to a loaded module with this form, after its
@@ -1798,7 +1778,7 @@
   "Classifies a single top-level form into {:kind ... :value ...
    :diagnostics [...]}. The kinds are the keys of `kind->collection`
    plus :overlay, :module-ns, :comment and :error; :value is absent for
-   the last three."
+   the last two."
   [node]
   (cond
     (w/list-form? node)
@@ -1823,10 +1803,7 @@
                               " is not allowed in a flow file")
                          (w/node->span node))]}))
 
-(defn- check-legacy-macro-namespace
-  "Emits a :legacy-macro-namespace diagnostic per require that pulls
-   item->/coll->/table-> from cg.dsl or cg.dsl.macros."
-  [requires]
+(defn- check-legacy-macro-namespace [requires]
   (->> requires
        (filter (fn [r]
                  (and (contains? legacy-macro-namespaces (:namespace r))
@@ -1837,14 +1814,10 @@
                           (:namespace r))
                      (:location r))))))
 
-(defn function-call-bindings
-  "The `:bindings` of `cg-flow` whose body shape is `:function_call`."
-  [cg-flow]
+(defn function-call-bindings [cg-flow]
   (filterv #(= :function_call (:body-shape %)) (:bindings cg-flow)))
 
-(defn threading-macro-bindings
-  "The `:bindings` of `cg-flow` whose body shape is `:threading_macro`."
-  [cg-flow]
+(defn threading-macro-bindings [cg-flow]
   (filterv #(= :threading_macro (:body-shape %)) (:bindings cg-flow)))
 
 (defn extract
@@ -1863,10 +1836,11 @@
       :module-ns      <ModuleNs> | nil
       :diagnostics    [<Diagnostic> ...]}
 
-   With `:opaque-blocks true` in `opts`, a rejected form also gives an entry
-   in `:opaque-blocks`. The parser does not follow a `run/load-module` path:
-   the caller parses that file and merges its :operations. cg.parser.validate
-   holds the rules across forms (unique names, references)."
+   With `:opaque-blocks true` in `opts`, a form rejected as forbidden,
+   unclassified or a malformed block also gives an entry in `:opaque-blocks`.
+   The parser does not follow a `run/load-module` path: the caller parses
+   that file and merges its :operations. cg.parser.validate holds the rules
+   across forms (unique names, references)."
   ([tree] (extract tree nil))
   ([tree opts]
    (let [opaque? (boolean (:opaque-blocks opts))

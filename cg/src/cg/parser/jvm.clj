@@ -16,6 +16,9 @@
 
 (set! *warn-on-reflection* true)
 
+;; The JVM runs web-tree-sitter in GraalJS with the grammar wasm of the JS
+;; lane, because the two lanes then give the same tree with no native binary
+;; for each platform.
 (def ^:private grammar-wasm-resource
   "node_modules/@yogthos/tree-sitter-clojure/tree-sitter-clojure.wasm")
 
@@ -50,8 +53,8 @@
 
 (defn- node-modules-root
   "The working directory, or else the cg checkout that holds this file, when
-   only the checkout has web-tree-sitter in node_modules. cg-app and cg-vscode
-   take cg by :local/root and run in their own folders."
+   only the checkout has web-tree-sitter in node_modules. cg-app takes cg by
+   :local/root and runs in its own folder."
   ^String []
   (let [has? (fn [dir] (.exists (io/file dir web-tree-sitter-cjs)))
         cwd (System/getProperty "user.dir")
@@ -81,8 +84,6 @@
    (object-array
     (map #(Long/valueOf (bit-and ^long (long %) 0xff)) ba))))
 
-;; Keep the options equal to net.willcohen.native.wasm in clj-native, to
-;; prevent Truffle version skew when both libraries load into one JVM.
 (defn new-context
   "Builds a GraalVM Context for JS and WASM with CommonJS resolution from
    `root`. Host I/O is on, because the CommonJS loader must resolve require()
@@ -102,9 +103,7 @@
       (.build)))
 
 (defn- boot-source
-  "The boot shim for the web-tree-sitter under `root`. The require path is
-   absolute, because GraalJS resolves a require path against the process
-   folder."
+  "The boot shim for the web-tree-sitter under `root`."
   ^String [^String root]
   ;; The shim returns a function that copies the ProxyArray bytes into
   ;; Uint8Arrays, to give Parser.init and Language.load the bytes with no
@@ -138,8 +137,8 @@
 
 (defn init!
   "Create the GraalVM Context on the first call, load the runtime and grammar
-   wasm bytes, and wait for the JS side. Stores the Parser constructor and
-   the Language for parse. A later call returns the stored state."
+   wasm bytes, and wait for the JS side. Stores one Parser, with the Clojure
+   Language set, for parse. A later call returns the stored state."
   []
   (locking state
     (when-not @state
@@ -166,6 +165,7 @@
                                  (catch ExecutionException e (throw (ex-cause e))))
               parser (.newInstance (.getMember booted "Parser") (object-array 0))]
           (.invokeMember parser "setLanguage" (object-array [(.getMember booted "language")]))
+          ;; GraalVM closes a Context that is no longer strongly reachable.
           (reset! state {:context ctx :parser parser})))))
   @state)
 

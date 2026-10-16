@@ -5,9 +5,7 @@
 ;; SPDX-License-Identifier: Apache-2.0 WITH LLVM-exception
 
 (ns cg.parser.types-test
-  "Point tests for the cg.parser.types static checker (passes 1-3).
-
-   Run with: clojure -M:test-parser"
+  "Point tests for the cg.parser.types static checker."
   #?(:clj (:require [clojure.test :refer [deftest is testing]]
                     [cg.dsl.signatures :as sigs]
                     [cg.parser.core :as parser]

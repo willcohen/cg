@@ -31,10 +31,7 @@
      (when v (.asString v))))
 
 #?(:clj
-   (defn- value->seq
-     "Coerce a tree-sitter children array (a polyglot Value) to a Clojure
-     seq of Node Values."
-     [^Value arr]
+   (defn- value->seq [^Value arr]
      (when (and arr (.hasArrayElements arr))
        (let [n (.getArraySize arr)]
          (loop [i 0 acc (transient [])]
@@ -99,10 +96,7 @@
      (when pos
        [(inc (.-row ^js pos)) (inc (.-column ^js pos))])))
 
-(defn node->span
-  "Returns the source span of this node as a map with 1-indexed line and
-   column fields."
-  [node]
+(defn node->span [node]
   (let [start #?(:clj (value-get node "startPosition")
                  :cljs (.-startPosition ^js node))
         end   #?(:clj (value-get node "endPosition")
@@ -111,29 +105,19 @@
         [el ec] (pos->row-col-1 end)]
     {:start-line sl :start-column sc :end-line el :end-column ec}))
 
-(defn type=
-  "Returns true when node's type matches t."
-  [node t]
+(defn type= [node t]
   (= (node-type node) t))
 
-(defn list-form?
-  "Returns true when node is a list_lit (any (...) form)."
-  [node]
+(defn list-form? [node]
   (type= node "list_lit"))
 
-(defn map-form?
-  "Returns true when node is a map_lit ({...} form)."
-  [node]
+(defn map-form? [node]
   (type= node "map_lit"))
 
-(defn vec-form?
-  "Returns true when node is a vec_lit ([...] form)."
-  [node]
+(defn vec-form? [node]
   (type= node "vec_lit"))
 
-(defn set-form?
-  "Returns true when node is a set_lit (#{...} form)."
-  [node]
+(defn set-form? [node]
   (type= node "set_lit"))
 
 (defn nil-lit?
@@ -142,34 +126,22 @@
   [node]
   (type= node "nil_lit"))
 
-(defn sym?
-  "Returns true when node is a sym_lit."
-  [node]
+(defn sym? [node]
   (type= node "sym_lit"))
 
-(defn kwd?
-  "Returns true when node is a kwd_lit."
-  [node]
+(defn kwd? [node]
   (type= node "kwd_lit"))
 
-(defn num?
-  "Returns true when node is a num_lit."
-  [node]
+(defn num? [node]
   (type= node "num_lit"))
 
-(defn str-lit?
-  "Returns true when node is a str_lit."
-  [node]
+(defn str-lit? [node]
   (type= node "str_lit"))
 
-(defn bool-lit?
-  "Returns true when node is a bool_lit (true / false)."
-  [node]
+(defn bool-lit? [node]
   (type= node "bool_lit"))
 
-(defn quoting?
-  "Returns true when node is a quoting_lit ('<form>)."
-  [node]
+(defn quoting? [node]
   (type= node "quoting_lit"))
 
 (defn sym-name
@@ -189,10 +161,7 @@
     (when (and c0 (sym? c0))
       (node-text c0))))
 
-(defn list-head=
-  "Returns true when node is a list_lit whose first named child is a
-   sym_lit with text matching head."
-  [node head]
+(defn list-head= [node head]
   (and (list-form? node)
        (= (first-sym-text node) head)))
 

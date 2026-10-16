@@ -8,9 +8,7 @@
   "End-to-end shape assertions for cg.parser.core/extract-models against
    the five fixture files. Strict-conforming fixtures must yield zero
    diagnostics; the non-conforming script-style.cg fixture must surface the
-   expected set of diagnostic codes.
-
-   Run with: clojure -M:test-parser"
+   expected set of diagnostic codes."
   #?(:clj (:require [clojure.test :refer [deftest is testing]]
                     [cg.parser.setup :as setup]
                     [cg.util :as util])

@@ -63,9 +63,7 @@
     (literal-type (:value p))
     (binding-output-type param-name cg-flow registry)))
 
-(defn- op-arg-type
-  "Resolves the type of a single OpArg map."
-  [arg cg-flow registry]
+(defn- op-arg-type [arg cg-flow registry]
   (case (:kind arg)
     :literal        (literal-type (:literal arg))
     :inline_map     :any
@@ -76,10 +74,7 @@
                         (binding-output-type text cg-flow registry)))
     :any))
 
-(defn- type-compatible?
-  "Two type kinds are compatible when they match or either side is
-   :any (the escape hatch)."
-  [arg-type sig-type]
+(defn- type-compatible? [arg-type sig-type]
   (or (= arg-type :any)
       (= sig-type :any)
       (= arg-type sig-type)))
@@ -162,9 +157,7 @@
                           (:location arg)))))
               args)))))))
 
-(defn- binding-call-site
-  "Projects a Binding into a checkable call site."
-  [b]
+(defn- binding-call-site [b]
   {:qualified-name (:head-sym b)
    :args (vec (:args b))
    :location (:location b)
@@ -179,9 +172,7 @@
    :location (:location opcall)
    :context :threading})
 
-(defn- model-call-sites
-  "Projects a Model's :ops sequence into threading call sites."
-  [m]
+(defn- model-call-sites [m]
   (mapv threading-op-call-site (:ops m)))
 
 (defn- body-form-call-sites
@@ -214,10 +205,7 @@
           (mapcat operation-decl-call-sites (:operations cg-flow))
           (mapcat model-call-sites (:sinks cg-flow))))
 
-(defn- sig-output-type
-  "Returns the type of a signature's first declared output, or :any
-   when the signature declares no outputs."
-  [sig]
+(defn- sig-output-type [sig]
   (or (-> sig :outputs first :type) :any))
 
 (defn- sig-row-input-type
@@ -232,7 +220,7 @@
 
 (defn- check-pipeline-flow
   "Check that the first output of each op in a decoded pipeline fits the :row
-   input of the next op. A keyword source has no type and is not checked."
+   input of the next op. The source is not an op and is not checked."
   [pipeline registry]
   (let [ops (vec (:ops pipeline))]
     (loop [i 1
@@ -259,9 +247,7 @@
                                         "' returns " (t-name prev-out))
                                    (:location cur))))))))))))
 
-(defn- pipeline-body-form
-  "The OpBodyForm when it is a :pipeline, else nil."
-  [body-form]
+(defn- pipeline-body-form [body-form]
   (when (= :pipeline (:kind body-form))
     body-form))
 

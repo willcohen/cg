@@ -6,11 +6,9 @@
 
 (ns cg.parser.op-defn-test
   "A defn with ^:op on its name is an operation in each .cg file. The
-   parser reads the op data from the metadata: the name
-   flags, the attr-map, and a role flag or a type map on each param. A rung
-   must name an op, and a row op must return a value.
-
-   Run with: clojure -M:test-parser"
+   parser reads the op data from the metadata: the name flags, the
+   attr-map, and a role flag or a type map on each param. A rung must name
+   an op, and a row op must return a value."
   #?(:clj (:require [clojure.test :refer [deftest is testing]]
                     [cg.parser.setup :as setup])
      :cljs (:require [cljs.test :refer [deftest is testing]]

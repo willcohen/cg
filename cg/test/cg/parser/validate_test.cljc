@@ -7,13 +7,7 @@
 (ns cg.parser.validate-test
   "Cross-cutting invariant checks driven by programmatically constructed
    CgFlow maps. These tests bypass extract entirely, exercising
-   validate's uniqueness and reference-resolution rules in isolation.
-
-   A model is a Binding: threading-macro Bindings carry
-   `:body-shape :threading_macro` plus the `:is-template` derived attribute.
-   The fixtures below populate that shape.
-
-   Run with: clojure -M:test-parser"
+   validate's uniqueness and reference-resolution rules in isolation."
   #?(:clj (:require [clojure.test :refer [deftest is testing]]
                     [cg.parser.validate :as validate])
      :cljs (:require [cljs.test :refer [deftest is testing]]
