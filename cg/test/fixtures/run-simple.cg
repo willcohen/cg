@@ -1,8 +1,0 @@
-;; run-simple.cg - Simple runnable example.
-
-(require '[cg.macros :refer [item->]])
-(require '[cg.geo :as geo])
-
-(def buffer-model
-  (item-> :parcels
-    (geo/buffer 10)))

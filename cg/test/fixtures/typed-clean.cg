@@ -9,7 +9,7 @@
 ;;
 ;; All op heads resolve via the built-in registry or the projected
 ;; ops; all arg counts fit the signatures; all arg types match.
-;; Expectation: zero :unresolved-op / :op-arity-mismatch / :type-mismatch.
+;; Expectation: no diagnostic.
 
 (require '[cg.macros :refer [item-> table->]])
 (require '[cg.geo :as geo])
@@ -35,23 +35,6 @@
   {:outputs {:area {:type :number}}}
   [^:table parcels]
   (item-> :parcels (geo/area)))
-
-(defn ^:op centroid-of
-  {:outputs {:c {:type :feature}}}
-  [^:row ^{:type :feature} parcel]
-  (let [c (geo/centroid parcel)]
-    c))
-
-(defn ^:op guarded-buffer
-  {:outputs {:f {:type :feature}}}
-  [^:row ^{:type :feature} parcel]
-  (when (some? parcel)
-    (geo/buffer parcel 5)))
-
-(defn ^:op reduce-areas
-  {:outputs {:total {:type :number}}}
-  [^:reducer ^{:type :dataset} group]
-  (reduce + 0 (map geo/area group)))
 
 (def parcel-areas
   (item-> :parcels

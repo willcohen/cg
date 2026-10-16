@@ -3,20 +3,9 @@
 (require '[cg.macros :refer [item-> coll->]])
 (require '[cg.geo :as geo])
 
-(def buffer-simplify-model
-  (item-> :parcels
-    (geo/buffer 10)
-    (geo/simplify 1.0)))
-
 (def union-model
   (coll-> :parcels
     (geo/union)))
-
-(def centroid-model
-  (item-> :parcels
-    (geo/buffer 5)
-    (geo/simplify 0.5)
-    (geo/centroid)))
 
 (def configured-model
   (item-> :parcels

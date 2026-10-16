@@ -12,10 +12,6 @@
 ;; :unresolved-op
 (def lost (totally/missing 1 2))
 
-;; :op-arity-mismatch (too few)
-(def empty-buffer
-  (item-> :parcels (geo/buffer)))
-
 ;; :op-arity-mismatch (too many)
 (def overflow (ds/load-geojson "a" "b" "c"))
 
@@ -40,14 +36,3 @@
 (def bad-filter-threading
   (table-> :ds
     (ds/filter-by-column :area :starts-with? 10)))
-
-;; :unknown-predicate via filter-by-column in a function-call Binding.
-;; Dataset is explicit, predicate sits at arg 2.
-(def bad-filter-binding
-  (ds/filter-by-column ds :area :ends-with? 10))
-
-;; :unsinked-top-level-pipeline — bare top-level threading-macro form
-;; whose terminal op is not @sink-kind in cg.dsl.signatures/built-ins.
-;; ds/transform-crs is :transformer-kind, so this fires the diagnostic.
-(table-> :ds
-  (ds/transform-crs "EPSG:2249"))

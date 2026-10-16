@@ -12,24 +12,22 @@
    With org.graalvm.truffle/truffle-runtime on the path and a GraalVM CE
    JDK (see flake.nix jvmJdk), the guest JIT-compiles via libgraal; without
    either it silently falls back to the interpreter (~6x slower). Stock
-   OpenJDK 25 cannot load the optimizing runtime cleanly (JDK-8364936). This
-   test fails loudly if that regresses. JVM-only."
+   OpenJDK 25 cannot load the optimizing runtime cleanly (JDK-8364936)."
   (:require [cg.parser.core :as parser]
             [cg.parser.jvm]
-            [clojure.test :refer [deftest is testing]])
+            [clojure.test :refer [deftest is]])
   (:import [com.oracle.truffle.api Truffle]))
 
 (set! *warn-on-reflection* true)
 
 (deftest optimizing-runtime-active
-  (testing "Truffle selects an optimizing (guest-JIT) runtime, not the fallback"
-    ;; Parse once so a Context is created and the runtime is resolved.
-    (parser/parse "(ns example) (def x (item-> :parcels (geo/buffer 10)))")
-    (let [runtime (.getName (Truffle/getRuntime))]
-      (is (not= "Interpreted" runtime)
-          (str "Truffle runtime is '" runtime "' (interpreted fallback). "
-               "Run on GraalVM CE 25 with org.graalvm.truffle/truffle-runtime "
-               "on the path; a stock OpenJDK falls back (JDK-8364936).")))))
+  ;; Parse once so a Context is created and the runtime is resolved.
+  (parser/parse "(ns example) (def x (item-> :parcels (geo/buffer 10)))")
+  (let [runtime (.getName (Truffle/getRuntime))]
+    (is (not= "Interpreted" runtime)
+        (str "Truffle runtime is '" runtime "' (interpreted fallback). "
+             "Run on GraalVM CE 25 with org.graalvm.truffle/truffle-runtime "
+             "on the path; a stock OpenJDK falls back (JDK-8364936)."))))
 
 (deftest a-failed-init-throws-its-ex-info
   (with-redefs [cg.parser.jvm/state (atom nil)

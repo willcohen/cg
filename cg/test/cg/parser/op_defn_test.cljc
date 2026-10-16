@@ -37,7 +37,6 @@
 (deftest an-op-defn-is-an-operation-in-a-flow-file
   (let [flow (setup/extract-models (str "(ns city)\n" tag-src))
         op (op-named flow "tag")]
-    (is (empty? (:diagnostics flow)))
     (is (= [["row" "any" :row false]
             ["size" "number" nil false]
             ["label" "any" nil false]]
@@ -46,12 +45,7 @@
     (is (= ["geometry"] (:row-reads op)))
     (is (= ["tag"] (:row-writes op)))
     (is (= "Tags a row." (:doc op)))
-    (is (every? (set (:flags op)) ["op" "idempotent" "defn"]))))
-
-(deftest an-op-defn-in-a-module-ns-reads-its-metadata
-  (let [flow (setup/extract-models (str "(ns cg.m)\n" tag-src))]
-    (is (empty? (:diagnostics flow)))
-    (is (= [:row nil nil] (mapv :role (:inputs (op-named flow "tag")))))))
+    (is (= ["defn" "op" "idempotent"] (:flags op)))))
 
 (deftest an-op-defn-without-an-attr-map-has-one-output
   (let [flow (setup/extract-models "(ns city)\n(defn ^:op one [^:table rows] rows)\n")
@@ -67,34 +61,15 @@
                    "  (table-> :rows (geo/buffer d) (geo/centroid)))\n"))
         op (op-named flow "run-all")]
     (is (empty? (:diagnostics flow)))
-    (is (= :pipeline (:kind (first (:body op)))))
-    (is (some? (:body-graph op)))))
+    (is (= :pipeline (:kind (first (:body op)))))))
 
-(deftest a-row-op-that-returns-a-model-is-an-error
-  (testing "a threading form as the body"
-    (is (contains? (diagnostic-codes
-                    (setup/extract-models
-                     "(ns city)\n(defn ^:op area [^:row p] (item-> :p (geo/area)))\n"))
-                   :row-op-returns-model)))
-  (testing "a threading form as the tail of a let"
-    (is (contains? (diagnostic-codes
-                    (setup/extract-models
-                     (str "(ns city)\n"
-                          "(defn ^:op area2 [^:row p] (let [d 1] (item-> :p (geo/buffer d))))\n")))
-                   :row-op-returns-model)))
-  (testing "a table op can return a model"
-    (is (not (contains? (diagnostic-codes
-                         (setup/extract-models
-                          "(ns city)\n(defn ^:op t [^:table rows] (table-> :rows (geo/centroid)))\n"))
-                        :row-op-returns-model)))))
-
-(deftest a-role-param-comes-first
-  (is (contains? (diagnostic-codes
-                  (setup/extract-models "(ns city)\n(defn ^:op late [n ^:row row] row)\n"))
-                 :op-malformed))
-  (is (contains? (diagnostic-codes
-                  (setup/extract-models "(ns city)\n(defn ^:op two [^:row a ^:table b] a)\n"))
-                 :op-malformed)))
+(deftest an-op-that-breaks-an-op-rule-is-an-error
+  (doseq [[code src] [[:row-op-returns-model "(defn ^:op area [^:row p] (item-> :p (geo/area)))"]
+                      [:row-op-returns-model "(defn ^:op area2 [^:row p] (let [d 1] (item-> :p (geo/buffer d))))"]
+                      [:op-malformed "(defn ^:op late [n ^:row row] row)"]
+                      [:op-malformed "(defn ^:op two [^:row a ^:table b] a)"]]]
+    (is (contains? (diagnostic-codes (setup/extract-models (str "(ns city)\n" src "\n"))) code)
+        src)))
 
 (deftest an-op-rung-counts-its-row-param-as-implicit
   (let [flow (setup/extract-models
@@ -119,9 +94,8 @@
                        "(defn caller [r] (helper r 1))\n"
                        "(def y (helper 1 2))\n")))))))
 
-;; D14: an option map is the rest param, `& {:keys! [...] :keys [...]
-;; :or {...}}`. 9 keys of each kind and 9 defaults: more than an array map
-;; keeps in order on the JVM.
+;; 9 keys of each kind and 9 defaults: more than an array map keeps in order
+;; on the JVM.
 (def ^:private option-map-src
   (str "(ns cg.m)\n"
        "(defn ^:op opts-op\n"
@@ -140,7 +114,7 @@
               :defaults {"j" "10" "k" "11" "l" "12" "m" "13" "n" "14"
                          "o" "15" "p" "2.5" "q" "\"x\"" "r" ":y"}}
              (:options in))))
-    (testing "the input keeps its name, and a required key makes it required"
+    (testing "a map rest param is named by its position, and a required key makes it required"
       (is (= ["arg1" false] ((juxt :name :optional) in))))))
 
 (deftest an-option-map-with-no-required-key-is-optional

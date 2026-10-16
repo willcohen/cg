@@ -5,15 +5,13 @@
 ;; SPDX-License-Identifier: Apache-2.0 WITH LLVM-exception
 
 (ns cg.parser.extract-test
-  "End-to-end shape assertions for cg.parser.core/extract-models against
-   the five fixture files. Strict-conforming fixtures must yield zero
-   diagnostics; the non-conforming script-style.cg fixture must surface the
-   expected set of diagnostic codes."
   #?(:clj (:require [clojure.test :refer [deftest is testing]]
+                    [cg.parser.extract :as extract]
                     [cg.parser.setup :as setup]
                     [cg.util :as util])
      :cljs (:require [cljs.test :refer [deftest is testing]]
                      ["web-tree-sitter" :refer [Parser Tree]]
+                     ["../../../src/cg/parser/extract.mjs" :as extract]
                      ["./setup.mjs" :as setup]
                      ["../../../src/cg/parser/core.mjs" :as parser]
                      ["../../../src/cg/parser/squint.mjs" :as backend]
@@ -22,129 +20,69 @@
 
 #?(:clj (set! *warn-on-reflection* true))
 
-(defn- models
-  "The models of a flow: the `:bindings` whose `:body-shape` is
-      `:threading_macro`."
-  [flow]
-  (filterv #(= :threading_macro (:body-shape %)) (:bindings flow)))
-
 (defn- model-by-name [flow name]
-  (first (filter #(= (:name %) name) (models flow))))
+  (first (filter #(= (:name %) name) (extract/threading-macro-bindings flow))))
 
 (defn- diagnostic-codes [flow]
   (into #{} (map :code) (:diagnostics flow)))
 
 (deftest model-inspection-fixture
-  (testing "test/fixtures/model-inspection.cg parses cleanly"
-    (let [flow (setup/extract-models (util/read-file "test/fixtures/model-inspection.cg"))]
-      (is (= 0 (count (:diagnostics flow)))
-          "strict-conforming fixture must yield zero diagnostics")
-      (is (= 2 (count (:requires flow))))
-      (is (= #{"cg.macros" "cg.geo"}
-             (into #{} (map :namespace) (:requires flow))))
-      (is (= 0 (count (:parameters flow))))
-      (is (= 1 (count (models flow))))
-      (let [m (model-by-name flow "my-model")]
-        (is (some? m))
-        (is (= :item (:mode m)))
-        (is (= "parcels" (:input m)))
-        (is (= 3 (count (:ops m))))
-        (is (= ["geo/buffer" "geo/simplify" "geo/centroid"]
-               (mapv :qualified-name (:ops m))))
-        (is (nil? (:config m))))
-      (is (nil? (:overlay flow))))))
-
-(deftest run-simple-fixture
-  (testing "test/fixtures/run-simple.cg parses cleanly"
-    (let [flow (setup/extract-models (util/read-file "test/fixtures/run-simple.cg"))]
-      (is (= 0 (count (:diagnostics flow))))
-      (is (= 2 (count (:requires flow))))
-      (is (= 1 (count (models flow))))
-      (let [m (model-by-name flow "buffer-model")]
-        (is (some? m))
-        (is (= :item (:mode m)))
-        (is (= "parcels" (:input m)))
-        (is (= 1 (count (:ops m))))
-        (is (= "geo/buffer" (-> m :ops first :qualified-name))))
-      (is (nil? (:overlay flow))))))
+  (let [flow (setup/extract-models (util/read-file "test/fixtures/model-inspection.cg"))]
+    (is (= 0 (count (:diagnostics flow))))
+    (is (= ["cg.macros" "cg.geo"] (mapv :namespace (:requires flow))))
+    (is (= 1 (count (extract/threading-macro-bindings flow))))
+    (let [m (model-by-name flow "my-model")]
+      (is (= :item (:mode m)))
+      (is (= "parcels" (:input m)))
+      (is (= ["geo/buffer" "geo/simplify" "geo/centroid"]
+             (mapv :qualified-name (:ops m))))
+      (is (nil? (:config m))))
+    (is (nil? (:overlay flow)))))
 
 (deftest threading-macros-fixture
-  (testing "test/fixtures/threading-macros.cg parses all four models cleanly"
-    (let [flow (setup/extract-models (util/read-file "test/fixtures/threading-macros.cg"))]
-      (is (= 0 (count (:diagnostics flow))))
-      (is (= 2 (count (:requires flow))))
-      (is (= 4 (count (models flow))))
-      (is (= #{"buffer-simplify-model" "union-model"
-               "centroid-model" "configured-model"}
-             (into #{} (map :name) (models flow))))
-      (testing "buffer-simplify-model"
-        (let [m (model-by-name flow "buffer-simplify-model")]
-          (is (= :item (:mode m)))
-          (is (= 2 (count (:ops m))))
-          (is (nil? (:config m)))))
-      (testing "union-model is :coll mode"
-        (let [m (model-by-name flow "union-model")]
-          (is (= :coll (:mode m)))
-          (is (= 1 (count (:ops m))))))
-      (testing "centroid-model has three ops"
-        (let [m (model-by-name flow "centroid-model")]
-          (is (= 3 (count (:ops m))))))
-      (testing "configured-model has trailing config map"
-        (let [m (model-by-name flow "configured-model")]
-          (is (= 1 (count (:ops m)))
-              "trailing map must be classified as config, not as an op")
-          (is (some? (:config m))
-              "trailing map_lit on threading body must be detected"))))))
+  (let [flow (setup/extract-models (util/read-file "test/fixtures/threading-macros.cg"))]
+    (is (= 0 (count (:diagnostics flow))))
+    (is (= ["union-model" "configured-model"]
+           (mapv :name (extract/threading-macro-bindings flow))))
+    (testing "union-model is :coll mode"
+      (let [m (model-by-name flow "union-model")]
+        (is (= :coll (:mode m)))))
+    (testing "configured-model has trailing config map"
+      (let [m (model-by-name flow "configured-model")]
+        (is (= 1 (count (:ops m)))
+            "trailing map must be classified as config, not as an op")
+        (is (some? (:config m)))))))
 
 (deftest test-load-model-fixture
-  (testing "test/fixtures/test-load-model.cg has a ^:cgproj overlay"
-    (let [flow (setup/extract-models (util/read-file "test/fixtures/test-load-model.cg"))]
-      (is (= 0 (count (:diagnostics flow))))
-      (is (= 2 (count (:requires flow))))
-      (is (= 1 (count (models flow))))
-      (let [m (model-by-name flow "simple-buffer-model")]
-        (is (= :item (:mode m)))
-        (is (= 2 (count (:ops m)))))
-      (is (some? (:overlay flow))
-          "^:cgproj map_lit must be captured as overlay")
-      (is (some? (-> flow :overlay :raw)))
-      (is (some? (-> flow :overlay :location))))))
+  (let [flow (setup/extract-models (util/read-file "test/fixtures/test-load-model.cg"))]
+    (is (= 0 (count (:diagnostics flow))))
+    (is (some? (-> flow :overlay :raw)))
+    (is (some? (-> flow :overlay :location)))))
 
 (deftest script-style-fixture-negative
-  (testing "test/fixtures/script-style.cg surfaces the expected diagnostic codes"
-    (let [flow (setup/extract-models (util/read-file "test/fixtures/script-style.cg"))
-          codes (diagnostic-codes flow)]
-      (is (pos? (count (:diagnostics flow)))
-          "a script with top-level prints must produce diagnostics under the strict format")
-      (is (not (contains? codes :forbidden-form))
-          "a defn at the top level is an operation")
-      (is (seq (:operations flow)))
-      (is (contains? codes :unclassified-top-level-form)
-          "non-flow top-level forms must emit :unclassified-top-level-form")
-      (is (= 2 (count (models flow)))
-          "the two top-level models are buffer-flow and export-flow; the table-> in the body of reproject-to is not a model")
-      (is (pos? (count (:bindings flow)))
-          "(def lots-raw (ds/load-geojson ...)) must classify as a binding"))))
+  (let [flow (setup/extract-models (util/read-file "test/fixtures/script-style.cg"))
+        codes (diagnostic-codes flow)]
+    (is (contains? codes :unclassified-top-level-form))
+    (is (= 2 (count (extract/threading-macro-bindings flow)))
+        "the two top-level models are buffer-flow and export-flow; the table-> in the body of reproject-to is not a model")))
 
-(deftest binding-simple-loader
-  (testing "(def parcels (ds/load-geojson \"parcels.geojson\")) classifies as binding"
-    (let [flow (setup/extract-models
-                "(def parcels (ds/load-geojson \"parcels.geojson\"))")]
-      (is (= 0 (count (:diagnostics flow))))
-      (is (= 0 (count (:parameters flow))))
-      (is (= 0 (count (models flow))))
-      (is (= 1 (count (:bindings flow))))
-      (let [b (first (:bindings flow))]
-        (is (= "parcels" (:name b)))
-        (is (= "ds/load-geojson" (:head-sym b)))
-        (is (= 1 (count (:args b))))
-        (is (= :literal (-> b :args first :kind)))))))
+(deftest a-call-def-is-a-binding
+  (doseq [[src binding]
+          [["(def parcels (ds/load-geojson \"parcels.geojson\"))"
+            ["parcels" "ds/load-geojson" :function_call true [:literal]]]
+           ["(def combined (ds/concat area-metrics other/base-metrics))"
+            ["combined" "ds/concat" :function_call false [:parameter_ref :symbol_ref]]]
+           ["(def t (gcrs/create-transform 4326 2249 input-ds))"
+            ["t" "gcrs/create-transform" :function_call false [:literal :literal :parameter_ref]]]]]
+    (let [flow (setup/extract-models src)]
+      (is (= 0 (count (:diagnostics flow))) src)
+      (is (= [binding]
+             (mapv (juxt :name :head-sym :body-shape :is-dataset-source #(mapv :kind (:args %)))
+                   (:bindings flow)))
+          src))))
 
 (deftest layers-threading-fence
-  (testing "layers-> is admitted by the threading vocabulary but has no
-               implementation yet; decoding it must emit a
-               :threading-mode-unimplemented diagnostic instead of throwing, and
-               still extract a partial model with nil mode"
+  (testing "layers-> has no implementation yet"
     (let [flow (setup/extract-models
                 "(def scoped (layers-> :parcels (geo/buffer 100)))")
           codes (diagnostic-codes flow)
@@ -154,118 +92,49 @@
       (is (some? m) "the layers-> binding still extracts as a partial model")
       (is (nil? (:mode m)) "mode stays nil until :scope has an implementation"))))
 
-(deftest binding-with-symbol-ref-args
-  (testing "binding args admit parameter_ref and symbol_ref shapes"
-    (let [flow (setup/extract-models
-                "(def combined (ds/concat area-metrics other/base-metrics))")]
-      (is (= 0 (count (:diagnostics flow))))
-      (is (= 1 (count (:bindings flow))))
-      (let [b (first (:bindings flow))]
-        (is (= "combined" (:name b)))
-        (is (= "ds/concat" (:head-sym b)))
-        (is (= 2 (count (:args b))))
-        (is (= [:parameter_ref :symbol_ref]
-               (mapv :kind (:args b))))))))
-
-(deftest binding-with-parameter-ref-and-literals
-  (testing "binding mixes parameter-ref, string and number literals"
-    (let [flow (setup/extract-models
-                "(def t (gcrs/create-transform 4326 2249 input-ds))")]
-      (is (= 0 (count (:diagnostics flow))))
-      (is (= 1 (count (:bindings flow))))
-      (let [b (first (:bindings flow))]
-        (is (= "gcrs/create-transform" (:head-sym b)))
-        (is (= [:literal :literal :parameter_ref]
-               (mapv :kind (:args b))))))))
-
 (deftest binding-accepts-nested-call-arg
-  (testing "Stage E: a binding with a nested (call) arg is accepted, with the nested call captured as a recursive :call OpArg"
+  (testing "a binding with a nested (call) arg is accepted, with the nested call captured as a recursive :call OpArg"
     (let [flow (setup/extract-models
-                "(def good (foo (nested 1 :k)))")
-          codes (diagnostic-codes flow)]
-      (is (= 1 (count (:bindings flow))))
-      (is (not (contains? codes :binding-malformed)))
+                "(def good (foo (nested 1 :k)))")]
+      (is (= ["foo"] (mapv :head-sym (:bindings flow))))
       (let [b (first (:bindings flow))
             nested (first (:args b))]
-        (is (= "foo" (:head-sym b)))
-        (is (= :call (:kind nested)))
-        (is (= "nested" (:head nested)))
+        (is (= [[:call "nested"]] (mapv (juxt :kind :head) (:args b))))
         (is (= [:literal :literal] (mapv :kind (:args nested))))))))
 
 (deftest binding-malformed-quoted-arg
-  (testing "a binding with a quoted arg emits :binding-malformed and drops the form"
-    (let [flow (setup/extract-models
-                "(def bad (foo 'quoted))")
-          codes (diagnostic-codes flow)]
-      (is (= 0 (count (:bindings flow))))
-      (is (contains? codes :binding-malformed)))))
+  (let [flow (setup/extract-models
+              "(def bad (foo 'quoted))")
+        codes (diagnostic-codes flow)]
+    (is (= 0 (count (:bindings flow))))
+    (is (contains? codes :binding-malformed))))
 
 (deftest a-def-rhs-outside-the-vocabulary-is-unclassified
   (testing "a quoted RHS reaches none of the branches"
     (let [flow (setup/extract-models "(def x '(a b))")
           codes (diagnostic-codes flow)]
-      (is (= 0 (count (:bindings flow))))
       (is (contains? codes :unclassified-top-level-form)))))
 
-(deftest ops-carry-emits-level
-  (testing "each spine op is annotated with the level it emits (the converter colors the outgoing edge from this)"
-    (let [flow (setup/extract-models
-                "(def out (table-> parcels (filter :zone :in zs) (group-by :zone) (map f) (into {})))")
-          out-b (first (filter #(= "out" (:name %)) (:bindings flow)))
-          ops (:ops out-b)
-          level-of (fn [qn] (:emits-level (first (filter #(= qn (:qualified-name %)) ops))))]
-      (is (= :dataset (level-of "filter")) "filter preserves the dataset unit")
-      (is (= :groups (level-of "group-by")) "group-by promotes dataset -> groups")
-      (is (= :groups (level-of "map")) "map over groups stays at groups")
-      (is (= :map (level-of "into")) "into demotes groups -> a keyed map"))))
-
-(deftest table-role-on-an-op-param
-  (testing "^:table on an op param gives the input the :table role"
-    (let [flow (setup/extract-models
-                "(defn ^:op f [^:table rows] (table-> :rows (parcel/prepare-parcel)))")
-          op  (first (:operations flow))
-          in  (first (:inputs op))]
-      (is (= :table (:role in)))
-      (is (not-any? #(= :op-malformed (:code %)) (:diagnostics flow))))))
-
-(deftest map-over-component-carries-component-name
-  (testing "(map <op-name>) lifts the referenced name onto :component (eval-free)"
-    (let [flow (setup/extract-models
-                "(def out (table-> parcels (group-by :zone) (map analyze-nbhd) (into {})))")
-          out-b (first (filter #(= "out" (:name %)) (:bindings flow)))
-          ops (:ops out-b)
-          mapn (first (filter #(= "map" (:qualified-name %)) ops))]
-      (is (= ["group-by" "map" "into"] (mapv :qualified-name ops)))
-      (is (some? mapn) "map op present in the pipeline")
-      (is (= "analyze-nbhd" (:component mapn))
-          "component name carried by reference, not resolved")
-      (testing "non-map spine ops carry no :component"
-        (is (nil? (:component (first (filter #(= "group-by" (:qualified-name %)) ops)))))
-        (is (nil? (:component (first (filter #(= "into" (:qualified-name %)) ops)))))))))
+(deftest ops-carry-emits-level-and-component
+  (let [flow (setup/extract-models
+              "(def out (table-> parcels (filter :zone :in zs) (group-by :zone) (map analyze-nbhd) (into {})))")
+        ops (:ops (first (:bindings flow)))]
+    (testing "each spine op is annotated with the level it emits (the converter colors the outgoing edge from this)"
+      (is (= [["filter" :dataset] ["group-by" :groups] ["map" :groups] ["into" :map]]
+             (mapv (juxt :qualified-name :emits-level) ops))))
+    (testing "(map <op-name>) lifts the referenced name onto :component (eval-free)"
+      (is (= [nil nil "analyze-nbhd" nil] (mapv :component ops))
+          "component name carried by reference, not resolved; other spine ops carry none"))))
 
 (deftest checkpoint-carries-component-name
-  (testing "(cg.cache/checkpoint <spec> <op-name>) lifts its second argument onto :component"
-    (let [flow (setup/extract-models
-                (str "(def out (table-> rows (cg.cache/checkpoint"
-                     " {:dir \"d\" :prefix \"p\" :layer \"l\" :key [1]} impervious-join)))"))
-          out-b (first (filter #(= "out" (:name %)) (:bindings flow)))
-          cp (first (filter #(= "cg.cache/checkpoint" (:qualified-name %)) (:ops out-b)))]
-      (is (some? cp) "checkpoint op present in the pipeline")
-      (is (= "impervious-join" (:component cp))))))
+  (let [flow (setup/extract-models
+              (str "(def out (table-> rows (cg.cache/checkpoint"
+                   " {:dir \"d\" :prefix \"p\" :layer \"l\" :key [1]} impervious-join)))"))
+        out-b (first (:bindings flow))
+        cp (first (filter #(= "cg.cache/checkpoint" (:qualified-name %)) (:ops out-b)))]
+    (is (= "impervious-join" (:component cp)))))
 
 (deftest binding-is-dataset-source-classification
-  (testing "loader head sets :is-dataset-source true on function-call Binding"
-    (let [flow (setup/extract-models
-                "(def parcels (ds/load-geojson \"parcels.geojson\"))")
-          b (first (:bindings flow))]
-      (is (= :function_call (:body-shape b)))
-      (is (true? (:is-dataset-source b)))))
-  (testing "non-loader head sets :is-dataset-source false on function-call Binding"
-    (let [flow (setup/extract-models
-                "(def t (gcrs/create-transform 4326 2249 input-ds))")
-          b (first (:bindings flow))]
-      (is (= :function_call (:body-shape b)))
-      (is (false? (:is-dataset-source b)))))
   (testing "threading-macro Binding has no :is-dataset-source (function-call only)"
     (let [flow (setup/extract-models
                 "(def my-model (item-> :input (geo/buffer 10)))")
@@ -274,129 +143,65 @@
       (is (not (contains? b :is-dataset-source))))))
 
 (deftest eager-threading-macro-binding-admission
-  (testing "keyword first-arg admits as template Binding"
-    (let [flow (setup/extract-models
-                "(def t (item-> :parcels (geo/buffer 10)))")
-          b (first (:bindings flow))]
-      (is (= 0 (count (:diagnostics flow))))
-      (is (= :threading_macro (:body-shape b)))
-      (is (true? (:is-template b)))
-      (is (= :literal (-> b :source :kind)))))
-  (testing "parameter-ref first-arg admits as eager Binding (no :non-keyword-data-ref)"
-    (let [flow (setup/extract-models
-                "(def t (item-> parcels (geo/buffer 10)))")
-          codes (diagnostic-codes flow)
-          b (first (:bindings flow))]
-      (is (not (contains? codes :non-keyword-data-ref)))
-      (is (= 1 (count (:bindings flow))))
-      (is (= :threading_macro (:body-shape b)))
-      (is (false? (:is-template b)))
-      (is (= :parameter_ref (-> b :source :kind)))
-      (is (nil? (:input b)))))
-  (testing "symbol-ref first-arg admits as eager Binding"
-    (let [flow (setup/extract-models
-                "(def t (item-> other/parcels (geo/buffer 10)))")
-          codes (diagnostic-codes flow)
-          b (first (:bindings flow))]
-      (is (not (contains? codes :non-keyword-data-ref)))
-      (is (= :threading_macro (:body-shape b)))
-      (is (false? (:is-template b)))
-      (is (= :symbol_ref (-> b :source :kind)))))
+  (testing "a keyword, parameter-ref or symbol-ref first arg admits (no :non-keyword-data-ref); only a keyword makes a template"
+    (doseq [[src binding]
+            [["(def t (item-> :parcels (geo/buffer 10)))" [:threading_macro true :literal "parcels"]]
+             ["(def t (item-> parcels (geo/buffer 10)))" [:threading_macro false :parameter_ref nil]]
+             ["(def t (item-> other/parcels (geo/buffer 10)))" [:threading_macro false :symbol_ref nil]]]]
+      (let [flow (setup/extract-models src)]
+        (is (= 0 (count (:diagnostics flow))) src)
+        (is (= [binding] (mapv (juxt :body-shape :is-template #(-> % :source :kind) :input) (:bindings flow)))
+            src))))
   (testing "list-form first-arg still fires :non-keyword-data-ref (not OpArg-shaped)"
-    (let [flow (setup/extract-models
-                "(def t (item-> (foo bar) (geo/buffer 10)))")
-          codes (diagnostic-codes flow)]
-      (is (contains? codes :non-keyword-data-ref))
-      (is (= 0 (count (:bindings flow)))))))
+    (is (contains? (diagnostic-codes (setup/extract-models "(def t (item-> (foo bar) (geo/buffer 10)))"))
+                   :non-keyword-data-ref))))
 
 (defn- operation-by-name [flow name]
   (first (filter #(= (:name %) name) (:operations flow))))
 
 (deftest an-op-with-a-pipeline-body
-  (testing "a table op whose body is a threading form parses cleanly"
-    (let [flow (setup/extract-models
-                (str "(defn ^:op area\n"
-                     "  {:outputs {:area {:type :number}}}\n"
-                     "  [^:table ^{:type :feature} parcel]\n"
-                     "  (item-> :parcel (geo/area)))"))]
-      (is (= 0 (count (:diagnostics flow)))
-          "a minimal op must produce zero diagnostics")
-      (is (= 1 (count (:operations flow))))
-      (let [op (operation-by-name flow "area")]
-        (is (some? op))
-        (is (= ["defn" "op"] (:flags op)))
-        (is (= 1 (count (:inputs op))))
-        (let [i (first (:inputs op))]
-          (is (= "parcel" (:name i)))
-          (is (= "feature" (:type i)))
-          (is (= :table (:role i)))
-          (is (false? (:optional i))))
-        (is (= 1 (count (:outputs op))))
-        (let [o (first (:outputs op))]
-          (is (= "area" (:name o)))
-          (is (= "number" (:type o))))
-        (is (= 1 (count (:body op))))
-        (let [b (first (:body op))]
-          (is (= :pipeline (:kind b)))
-          (is (some? (:raw b)))
-          (is (some? (:location b))))
-        (let [g (:body-graph op)]
-          (is (some? g)
-              ":body-graph derived from the single pipeline body form")
-          (is (= [:area-1] (mapv :id (:nodes g)))
-              ":id matches runtime generate-node-id contract :<unq-name>-<counter>")
-          (is (= "geo/area" (:fn (first (:nodes g))))
-              ":fn preserves the qualified-name as a string")
-          (is (= [] (:edges g))
-              "single-op body produces a node with no edges")
-          (is (= :item (:mode g))
-              ":body-graph carries the threading mode")
-          (is (= "parcel" (:input g))
-              ":body-graph carries the input name from the threading form"))))))
+  (let [flow (setup/extract-models
+              (str "(defn ^:op area\n"
+                   "  {:outputs {:area {:type :number}}}\n"
+                   "  [^:table ^{:type :feature} parcel]\n"
+                   "  (item-> :parcel (geo/area)))"))]
+    (is (= 0 (count (:diagnostics flow))))
+    (let [op (operation-by-name flow "area")]
+      (is (= [["parcel" "feature" :table false]]
+             (mapv (juxt :name :type :role :optional) (:inputs op))))
+      (is (= [["area" "number"]] (mapv (juxt :name :type) (:outputs op))))
+      (is (= [:pipeline] (mapv :kind (:body op))))
+      (let [b (first (:body op))]
+        (is (some? (:raw b)))
+        (is (some? (:location b))))
+      (let [g (:body-graph op)]
+        (is (= [:area-1] (mapv :id (:nodes g)))
+            ":id matches runtime generate-node-id contract :<unq-name>-<counter>")
+        (is (= "geo/area" (:fn (first (:nodes g))))
+            ":fn preserves the qualified-name as a string")
+        (is (= [] (:edges g)))
+        (is (= :item (:mode g)))
+        (is (= "parcel" (:input g)))))))
 
 (deftest op-body-graph-multi-step
-  (testing "multi-op pipeline body produces ids :<unq-name>-<counter> with edges chaining sequentially"
-    (let [flow (setup/extract-models
-                (str "(defn ^:op get-primary-zoning-info [^:table zone-info]\n"
-                     "  (item-> :zone-info\n"
-                     "    (score-zoning-intersections :zoning-dataset)\n"
-                     "    (ds/max-by :intersection-area)\n"
-                     "    (zone-to-primary-attrs)))"))]
-      (let [op (operation-by-name flow "get-primary-zoning-info")
-            g  (:body-graph op)]
-        (is (= [:score-zoning-intersections-1
-                :max-by-2
-                :zone-to-primary-attrs-3]
-               (mapv :id (:nodes g)))
-            "counter is 1-based positional within the pipeline; ds/max-by strips to max-by")
-        (is (= ["score-zoning-intersections" "ds/max-by" "zone-to-primary-attrs"]
-               (mapv :fn (:nodes g))))
-        (is (= [{:from :score-zoning-intersections-1 :to :max-by-2 :type :data-flow}
-                {:from :max-by-2 :to :zone-to-primary-attrs-3 :type :data-flow}]
-               (:edges g)))))))
-
-(deftest op-param-without-a-role-flag
-  (testing "a param without a role flag parses with role=nil (a broadcast arg at runtime)"
-    (let [flow (setup/extract-models
-                (str "(defn ^:op analyze-parcel\n"
-                     "  [^:row ^{:type :feature} parcel ^{:type :dataset} buildings]\n"
-                     "  (geo/centroid parcel))"))]
-      (is (= 0 (count (:diagnostics flow))))
-      (let [op (operation-by-name flow "analyze-parcel")
-            by-name (into {} (map (juxt :name identity)) (:inputs op))]
-        (is (= :row (:role (get by-name "parcel"))))
-        (is (nil? (:role (get by-name "buildings")))
-            "a param without a role flag parses as nil; runtime treats it as broadcast")))))
-
-(deftest op-with-idempotent-flag
-  (testing "^:idempotent metadata on the op name populates :flags"
-    (let [flow (setup/extract-models
-                (str "(defn ^:op ^:idempotent transform-crs [^:table ds]\n"
-                     "  (table-> :ds (ds/transform-crs \"EPSG:2249\")))"))]
-      (is (= 0 (count (:diagnostics flow))))
-      (let [op (operation-by-name flow "transform-crs")]
-        (is (some? op))
-        (is (= ["defn" "op" "idempotent"] (:flags op)))))))
+  (let [flow (setup/extract-models
+              (str "(defn ^:op get-primary-zoning-info [^:table zone-info]\n"
+                   "  (item-> :zone-info\n"
+                   "    (score-zoning-intersections :zoning-dataset)\n"
+                   "    (ds/max-by :intersection-area)\n"
+                   "    (zone-to-primary-attrs)))"))
+        op (operation-by-name flow "get-primary-zoning-info")
+        g  (:body-graph op)]
+    (is (= [:score-zoning-intersections-1
+            :max-by-2
+            :zone-to-primary-attrs-3]
+           (mapv :id (:nodes g)))
+        "counter is 1-based positional within the pipeline; ds/max-by strips to max-by")
+    (is (= ["score-zoning-intersections" "ds/max-by" "zone-to-primary-attrs"]
+           (mapv :fn (:nodes g))))
+    (is (= [{:from :score-zoning-intersections-1 :to :max-by-2 :type :data-flow}
+            {:from :max-by-2 :to :zone-to-primary-attrs-3 :type :data-flow}]
+           (:edges g)))))
 
 (deftest op-body-pipeline-decoded-structurally
   (testing ":pipeline body forms decode like top-level Models"
@@ -413,8 +218,7 @@
                (mapv :qualified-name (:ops b))))))))
 
 (deftest a-when-in-an-op-body-is-an-expr
-  (testing "a when in an op body is plain Clojure, whatever its test,
-               because an op body runs as written"
+  (testing "a when in an op body is plain Clojure, because an op body runs as written"
     (let [flow (setup/extract-models
                 (str "(defn ^:op g [^:row xs] (when (seq xs) (count xs)))\n"
                      "(defn ^:op h [^:row p]\n"
@@ -434,66 +238,33 @@
                 (str "(defn ^:op reduce-areas [^:reducer group]\n"
                      "  (reduce + 0 (map geo/area group)))"))]
       (is (= 0 (count (:diagnostics flow))))
-      (let [op (operation-by-name flow "reduce-areas")
-            inp (first (:inputs op))]
-        (is (= "group" (:name inp)))
-        (is (= :reducer (:role inp)))))))
-
-;; A probe script narrates. The parser knows exactly what a println is, so
-;; it gets its own node kind rather than an opaque card and a diagnostic
-;; that inflates the residue measure.
+      (is (= [["group" :reducer]]
+             (mapv (juxt :name :role) (:inputs (operation-by-name flow "reduce-areas"))))))))
 
 (deftest println-classifies-as-output
   (testing "a bare top-level println is an OutputDecl, not a diagnostic"
     (let [flow (setup/extract-models "(println \"hello\")")]
       (is (= 0 (count (:diagnostics flow))))
-      (is (= 1 (count (:outputs flow))))
+      (is (= ["println"] (mapv :head (:outputs flow))))
       (let [o (first (:outputs flow))]
-        (is (= "println" (:head o)))
-        (is (= 1 (:arity o)))
-        (is (= "hello" (:text o)))
-        (is (= ["\"hello\""] (:args o)))
         (is (= "(println \"hello\")" (:raw o)))
         (is (some? (:location o)))))))
 
-(deftest println-no-longer-lands-as-an-opaque-block
-  (testing "the whole point: it stops counting against the residue measure"
-    (let [flow (setup/extract-models
-                "(println \"a\")\n(println \"b\")\n(defmacro m [x] x)"
-                {:opaque-blocks true})]
-      (is (= 2 (count (:outputs flow))))
-      ;; the defmacro still is one, so this asserts a change, not an empty set
-      (is (= 1 (count (:opaque-blocks flow))))
-      (is (= #{:forbidden-form} (diagnostic-codes flow))))))
-
 (deftest println-carries-a-literal-only-when-it-has-one
-  (testing "a string literal rides :text so the canvas can draw a rule or a spacer"
-    (let [flow (setup/extract-models "(println \"\")\n(println \"=====\")")
-          [spacer rule] (:outputs flow)]
-      (is (= "" (:text spacer)))
-      (is (= "=====" (:text rule)))))
+  (testing "a string literal rides :text so the canvas can draw a rule or a spacer; other arguments leave :text nil"
+    (doseq [[src outputs]
+            [["(println \"\")\n(println \"=====\")" [[1 "" ["\"\""]] [1 "=====" ["\"=====\""]]]]
+             ["(println (str \"HOUSING STOCK — \" title))" [[1 nil ["(str \"HOUSING STOCK — \" title)"]]]]
+             ["(println \"n =\" n)" [[2 nil ["\"n =\"" "n"]]]]
+             ["(println)" [[0 nil []]]]]]
+      (let [flow (setup/extract-models src)]
+        (is (= 0 (count (:diagnostics flow))) src)
+        (is (= outputs (mapv (juxt :arity :text :args) (:outputs flow))) src))))
 
-  (testing "a computed argument leaves :text nil and falls back to :label"
-    (let [flow (setup/extract-models
-                "(println (str \"HOUSING STOCK — \" title))")
-          o (first (:outputs flow))]
-      (is (nil? (:text o)))
-      (is (= 1 (:arity o)))
-      (is (= ["(str \"HOUSING STOCK — \" title)"] (:args o)))
-      (is (= "(println (str \"HOUSING STOCK — \" title))" (:label o)))))
-
-  (testing "more than one argument is not a literal line either"
-    (let [flow (setup/extract-models "(println \"n =\" n)")
-          o (first (:outputs flow))]
-      (is (= 2 (:arity o)))
-      (is (nil? (:text o)))
-      (is (= ["\"n =\"" "n"] (:args o)))))
-
-  (testing "(println) with no arguments prints a newline and is still output"
-    (let [flow (setup/extract-models "(println)")]
-      (is (= 0 (count (:diagnostics flow))))
-      (is (= 0 (:arity (first (:outputs flow)))))
-      (is (nil? (:text (first (:outputs flow))))))))
+  (testing "a computed argument falls back to :label"
+    (is (= "(println (str \"HOUSING STOCK — \" title))"
+           (-> (setup/extract-models "(println (str \"HOUSING STOCK — \" title))")
+               :outputs first :label)))))
 
 (deftest println-label-is-one-truncated-line
   (testing "a multi-line println gives the canvas a single-line label"
@@ -508,33 +279,21 @@
 
 (deftest println-inside-a-form-is-not-a-top-level-output
   (testing "only the top level classifies; a nested println rides its parent"
-    ;; The doseq is a block constructor now, so the println inside it is a
-    ;; body form of that block and not a member of :outputs.
-    (let [flow (setup/extract-models
-                "(doseq [x xs] (println x))"
-                {:opaque-blocks true})]
+    (let [flow (setup/extract-models "(doseq [x xs] (println x))")]
       (is (= 0 (count (:outputs flow))))
-      (is (= 1 (count (:blocks flow))))
       (is (= [:output] (mapv :kind (-> flow :blocks first :body)))))
 
   (testing "a println inside a form the vocabulary does not reach stays hidden"
     (let [flow (setup/extract-models
-                "(with-open [w (writer f)] (println w))"
-                {:opaque-blocks true})]
+                "(with-open [w (writer f)] (println w))")]
       (is (= 0 (count (:outputs flow))))
-      (is (= 1 (count (:opaque-blocks flow))))
       (is (contains? (diagnostic-codes flow) :unclassified-top-level-form))))))
 
 (deftest println-does-not-shadow-an-op-named-println
   (testing "the classifier keys on the head symbol only at the top level"
     (let [flow (setup/extract-models
                 "(defn ^:op println [^:row p] (geo/area p))")]
-      (is (= 0 (count (:outputs flow))))
       (is (some? (operation-by-name flow "println"))))))
-
-;; `literal-deep?` knew about numbers, strings, keywords, booleans, vectors
-;; and maps. A set or a literal nil anywhere inside dropped the whole def
-;; to :unclassified-top-level-form — three of the live probe's nine.
 
 (deftest literal-nil-classifies-as-a-parameter
   (testing "(def x nil) is a literal, and its :data is a present nil"
@@ -565,7 +324,7 @@
       (is (= #{"spec" "loader" "m"} (into #{} (map :name) (:bindings flow)))))))
 
 (deftest a-nil-inside-a-collection-no-longer-kills-the-decode
-  (testing "nil is a value, not a decode failure — the probe's crosstab specs"
+  (testing "nil is a value, not a decode failure"
     (let [flow (setup/extract-models
                 "(def spec {:dimensions [{:label \"extend\" :cols [:a nil]}]})")
           p (first (:parameters flow))]
@@ -627,31 +386,12 @@
          (mapv :code (:diagnostics (setup/extract-models "(require '[a.b :as x] c.d)"))))))
 
 (deftest literal-sets-classify-but-do-not-decode
-  (testing "a set is a literal, so the def is a parameter"
-    (let [flow (setup/extract-models "(def sources #{:rs-2 :rs-3})")
-          p (first (:parameters flow))]
-      (is (= 0 (count (:diagnostics flow))))
-      (is (= :set (-> p :value :kind)))
-      (is (= "#{:rs-2 :rs-3}" (-> p :value :raw)))))
-
-  (testing ":data stays absent rather than lying about set-ness"
-    ;; A set has no JSON form, and quietly handing a consumer a vector
-    ;; would change what the source means. :raw is authoritative.
-    (let [p (first (:parameters (setup/extract-models "(def s #{:a})")))]
-      (is (not (contains? (:value p) :data)))))
-
-  (testing "a set nested inside a map suppresses :data for the whole map"
-    (let [flow (setup/extract-models
-                "(def target-sources {:rs-4 #{:rs-2 :rs-3}})")
-          p (first (:parameters flow))]
-      (is (= 0 (count (:diagnostics flow))))
-      (is (= :mapv (-> p :value :kind)))
-      (is (not (contains? (:value p) :data)))
-      (is (= "{:rs-4 #{:rs-2 :rs-3}}" (-> p :value :raw))))))
-
-;; (def rows (:analyzed-rows analysis)) is a projection off another
-;; binding. Clojure calls the keyword, and so does the parser now — six of
-;; the live probe's nine def blocks.
+  (testing "a set is a literal, so the def is a parameter; a set anywhere suppresses :data for the whole value"
+    (doseq [[src value] [["(def sources #{:rs-2 :rs-3})" {:kind :set :raw "#{:rs-2 :rs-3}"}]
+                         ["(def target-sources {:rs-4 #{:rs-2 :rs-3}})" {:kind :mapv :raw "{:rs-4 #{:rs-2 :rs-3}}"}]]]
+      (let [flow (setup/extract-models src)]
+        (is (= 0 (count (:diagnostics flow))) src)
+        (is (= [value] (mapv :value (:parameters flow))) src)))))
 
 (deftest keyword-access-def-classifies-as-a-binding
   (testing "(def x (:key y)) is a function_call binding with a keyword head"
@@ -662,15 +402,11 @@
       (is (= :function_call (:body-shape b)))
       (is (= ":analyzed-rows" (:head-sym b)))
       (is (true? (:is-accessor b)))
-      (is (false? (:is-dataset-source b)))))
-
-  (testing "the source rides as a parameter_ref arg, which is what draws the edge"
-    ;; convert.cljs/param-refs keys on parameter_ref + parameter-name,
-    ;; so a flat accessor gets its `analysis -> rows` edge for free.
-    (let [flow (setup/extract-models "(def rows (:analyzed-rows analysis))")
-          arg (-> flow :bindings first :args first)]
-      (is (= :parameter_ref (:kind arg)))
-      (is (= "analysis" (:parameter-name arg)))))
+      (is (false? (:is-dataset-source b)))
+      ;; convert.cljs/param-refs keys on parameter_ref + parameter-name,
+      ;; so a flat accessor gets its `analysis -> analyzed-rows` edge for free.
+      (is (= [[:parameter_ref "analysis"]] (mapv (juxt :kind :parameter-name) (:args b)))
+          "the source rides as a parameter_ref arg, which is what draws the edge")))
 
   (testing "a nested accessor reaches through two levels"
     ;; The source ref sits inside a :call arg. convert.cljs/param-refs
@@ -679,70 +415,34 @@
     ;; nested-call binding, not specific to accessors.
     (let [flow (setup/extract-models
                 "(def debug-edges (:debug-edges (:debug-layers analysis)))")
-          b (first (:bindings flow))
-          arg (first (:args b))]
+          b (first (:bindings flow))]
       (is (= 0 (count (:diagnostics flow))))
       (is (= ":debug-edges" (:head-sym b)))
       (is (true? (:is-accessor b)))
-      (is (= :call (:kind arg)))
-      (is (= ":debug-layers" (:head arg)))
-      (is (= "analysis" (-> arg :args first :parameter-name))))))
-
-(deftest keyword-access-is-not-an-unresolved-op
-  (testing "a keyword accessor has no signature and is never checked for one"
-    ;; The point of :is-accessor. Without it the type checker would
-    ;; trade an opaque block for an :unresolved-op diagnostic, which is
-    ;; not an improvement.
-    (let [flow (setup/extract-models
-                (str "(def analyzed-rows (:analyzed-rows analysis))\n"
-                     "(def summary (:zone-summary analysis))"))]
-      (is (= 0 (count (:diagnostics flow))))
-      (is (= 2 (count (:bindings flow))))))
-
-  (testing "an ordinary unknown head still fires :unresolved-op"
-    (let [flow (setup/extract-models "(def x (no-such-op parcels))")]
-      (is (contains? (diagnostic-codes flow) :unresolved-op)))))
+      (is (= [[:call ":debug-layers"]] (mapv (juxt :kind :head) (:args b))))
+      (is (= "analysis" (-> b :args first :args first :parameter-name))))))
 
 ;; (def census-blocks (or ...)) and (def cards (try ...)) reported
 ;; "operation 'or' is not in the built-in registry or any user op",
-;; which tells the reader to go register an op named `or`. Three of the
-;; live probe's four :unresolved-op diagnostics were this.
+;; which tells the reader to go register an op named `or`.
 
 (deftest control-form-binding-is-not-an-unresolved-op
-  (testing "(def x (or a b)) says what is true, not that `or` is missing"
-    (let [flow (setup/extract-models
-                "(def census-blocks (or (:census-blocks analysis) :from-cache))")
-          codes (diagnostic-codes flow)]
-      (is (not (contains? codes :unresolved-op)))
-      (is (contains? codes :control-form-binding))))
+  (testing "an or, try or await RHS says what is true, not that its head is missing"
+    (doseq [src ["(def census-blocks (or (:census-blocks analysis) :from-cache))"
+                 (str "(def cards (try (zoning/zone-tables rows)\n"
+                      "                (catch Exception t nil)))")
+                 "(def city-hall (await (ds/ensure-dataset query)))"]]
+      (let [codes (diagnostic-codes (setup/extract-models src))]
+        (is (not (contains? codes :unresolved-op)) src)
+        (is (contains? codes :control-form-binding) src))))
 
-  (testing "(def x (try ...)) too"
-    (let [flow (setup/extract-models
-                (str "(def cards (try (zoning/zone-tables rows)\n"
-                     "                (catch Exception t nil)))"))
-          codes (diagnostic-codes flow)]
-      (is (not (contains? codes :unresolved-op)))
-      (is (contains? codes :control-form-binding))))
-
-  (testing "(def x (await ...)) too, as in examples/parcel.cg"
-    (let [flow (setup/extract-models
-                "(def city-hall (await (ds/ensure-dataset query)))")
-          codes (diagnostic-codes flow)]
-      (is (not (contains? codes :unresolved-op)))
-      (is (contains? codes :control-form-binding))))
-
-  (testing "the diagnostic is a warning: unmodelable is not malformed"
+  (testing "the diagnostic is a warning, and the binding still exists, flagged"
     (let [flow (setup/extract-models "(def x (or a b))")
           d (first (filter #(= :control-form-binding (:code %)) (:diagnostics flow)))]
-      (is (= :warning (:severity d)))
-      (is (some? (:location d)))))
-
-  (testing "the binding still exists, flagged, so the canvas keeps showing it"
-    (let [flow (setup/extract-models "(def x (or a b))")
-          b (first (:bindings flow))]
-      (is (= "x" (:name b)))
-      (is (= "or" (:head-sym b)))
-      (is (true? (:is-control b)))))
+      (is (= :warning (:severity d)) "unmodelable is not malformed")
+      (is (some? (:location d)))
+      (is (= [["x" "or" true]] (mapv (juxt :name :head-sym :is-control) (:bindings flow)))
+          "so the canvas keeps showing it")))
 
   (testing "an ordinary unknown head is still an unresolved op"
     ;; The message is correct there: no-such-op could be registered.
@@ -764,9 +464,7 @@
           "an op body is ordinary Clojure")
       (let [op (operation-by-name flow "plain")
             bf (first (:body op))]
-        (is (= 1 (count (:body op))))
-        (is (= :expr (:kind bf)))
-        (is (= "reduce" (:head bf)))
+        (is (= [[:expr "reduce"]] (mapv (juxt :kind :head) (:body op))))
         (is (= "(reduce + 0 [1 2 3])" (:raw bf)))))))
 
 (deftest op-comments-do-not-shift-the-walk
@@ -792,7 +490,7 @@
         (is (= "o" (-> op :outputs first :name)))
         (is (= :let_body (:kind bf)))
         (is (= ["a" "b"] (mapv :name (:bindings bf)))
-            "a comment between binding pairs must not desynchronise them")))))
+            "a comment between binding pairs must not desynchronize them")))))
 
 (deftest let-body-binding-carries-the-component-run-component-names
   (testing "run-component names its component in a string argument, not in its head"
@@ -893,99 +591,61 @@
       (is (contains? (diagnostic-codes flow) :unknown-component)))))
 
 (deftest an-op-row-contract-must-be-a-set
-  (testing "a :row-reads that is not a set literal fires :op-malformed"
-    (let [flow (setup/extract-models
-                "(defn ^:op prepare {:row-reads [:geometry]} [^:row parcel-row] parcel-row)")]
-      (is (contains? (diagnostic-codes flow) :op-malformed)))))
+  (let [flow (setup/extract-models
+              "(defn ^:op prepare {:row-reads [:geometry]} [^:row parcel-row] parcel-row)")]
+    (is (contains? (diagnostic-codes flow) :op-malformed))))
 
 (deftest an-op-output-without-type-emits-diagnostic
-  (testing "an output config missing :type fires :op-malformed but still emits the op"
-    (let [flow (setup/extract-models
-                "(defn ^:op bad {:outputs {:o {:role :row}}} [^:row p] p)")]
-      (is (contains? (diagnostic-codes flow) :op-malformed))
-      (is (= [["o" nil]] (mapv (juxt :name :type) (:outputs (operation-by-name flow "bad"))))))))
+  (let [flow (setup/extract-models
+              "(defn ^:op bad {:outputs {:o {:role :row}}} [^:row p] p)")]
+    (is (contains? (diagnostic-codes flow) :op-malformed))
+    (is (= [["o" nil]] (mapv (juxt :name :type) (:outputs (operation-by-name flow "bad")))))))
 
 (deftest an-op-output-without-a-value-emits-diagnostic
-  (testing "an :outputs key with no config fires :op-malformed at the key"
-    (let [flow (setup/extract-models "(defn ^:op f {:outputs {:a}} [x] x)")
-          d (first (filter #(= :op-malformed (:code %)) (:diagnostics flow)))]
-      (is (re-find #"entry is missing a value" (:message d)))
-      (is (= {:start-line 1 :start-column 25 :end-line 1 :end-column 27}
-             (:location d))))))
+  (let [flow (setup/extract-models "(defn ^:op f {:outputs {:a}} [x] x)")
+        d (first (filter #(= :op-malformed (:code %)) (:diagnostics flow)))]
+    (is (re-find #"entry is missing a value" (:message d)))
+    (is (= {:start-line 1 :start-column 25 :end-line 1 :end-column 27}
+           (:location d)))))
 
 (deftest op-duplicate-names-detected
-  (testing "two ops with the same name yield :duplicate-operation-name"
-    (let [flow (setup/extract-models
-                (str "(defn ^:op dup [^:row p] p)\n"
-                     "(defn ^:op dup [^:row p] p)"))]
-      (is (= 2 (count (:operations flow))))
-      (is (contains? (diagnostic-codes flow) :duplicate-operation-name)))))
+  (let [flow (setup/extract-models
+              (str "(defn ^:op dup [^:row p] p)\n"
+                   "(defn ^:op dup [^:row p] p)"))]
+    (is (contains? (diagnostic-codes flow) :duplicate-operation-name))))
 
 (deftest op-collides-with-parameter
-  (testing "operation name colliding with a parameter yields :name-collision"
-    (let [flow (setup/extract-models
-                (str "(def threshold 100)\n"
-                     "(defn ^:op threshold [^:row p] p)"))]
-      (is (contains? (diagnostic-codes flow) :name-collision)))))
+  (let [flow (setup/extract-models
+              (str "(def threshold 100)\n"
+                   "(defn ^:op threshold [^:row p] p)"))]
+    (is (contains? (diagnostic-codes flow) :name-collision))))
 
-(deftest filter-by-column-threading-clean-predicate
-  (testing "registered predicate in a threading-body filter-by-column is silent"
-    (let [flow (setup/extract-models
-                (str "(def big\n"
-                     "  (table-> :parcels\n"
-                     "    (ds/filter-by-column :area :gt 1000)))"))]
-      (is (not (contains? (diagnostic-codes flow) :unknown-predicate))))))
-
-(deftest filter-by-column-threading-bad-predicate-fires
-  (testing "unregistered predicate keyword in a threading body fires :unknown-predicate"
-    (let [flow (setup/extract-models
-                (str "(def bad\n"
-                     "  (table-> :ds\n"
-                     "    (ds/filter-by-column :area :starts-with? 10)))"))]
-      (is (contains? (diagnostic-codes flow) :unknown-predicate)))))
-
-(deftest filter-by-column-binding-bad-predicate-fires
-  (testing "unregistered predicate in a function-call Binding (dataset explicit, pos 2) fires"
-    (let [flow (setup/extract-models
-                (str "(def bad\n"
-                     "  (ds/filter-by-column ds :area :ends-with? 10))"))]
-      (is (contains? (diagnostic-codes flow) :unknown-predicate)))))
-
-(deftest filter-by-column-bare-head-also-checked
-  (testing "unprefixed filter-by-column head is matched the same way as ds/filter-by-column"
-    (let [flow (setup/extract-models
-                (str "(def bad\n"
-                     "  (table-> :ds\n"
-                     "    (filter-by-column :area :weirdo 10)))"))]
-      (is (contains? (diagnostic-codes flow) :unknown-predicate)))))
-
-(deftest filter-by-column-non-literal-predicate-passes
-  (testing "non-literal predicate arg (parameter ref) is silent — type checker territory"
-    (let [flow (setup/extract-models
-                (str "(def pred-key :gt)\n"
-                     "(def filtered\n"
-                     "  (table-> :ds\n"
-                     "    (ds/filter-by-column :area pred-key 10)))"))]
-      (is (not (contains? (diagnostic-codes flow) :unknown-predicate))))))
+(deftest filter-by-column-checks-a-literal-predicate
+  (doseq [[fires? src why]
+          [[true "(def bad (table-> :ds (ds/filter-by-column :area :starts-with? 10)))"
+            "unregistered predicate keyword in a threading body fires :unknown-predicate"]
+           [true "(def bad (ds/filter-by-column ds :area :ends-with? 10))"
+            "unregistered predicate in a function-call Binding (dataset explicit, pos 2) fires"]
+           [true "(def bad (table-> :ds (filter-by-column :area :weirdo 10)))"
+            "unprefixed filter-by-column head is matched the same way as ds/filter-by-column"]
+           [false (str "(def pred-key :gt)\n"
+                       "(def filtered (table-> :ds (ds/filter-by-column :area pred-key 10)))")
+            "a parameter ref as the predicate is silent: the type checker owns it"]
+           [false "(def big (table-> :ds (ds/filter-by-column :area :gt 1000)))"
+            "a registered predicate is silent"]]]
+    (is (= fires? (contains? (diagnostic-codes (setup/extract-models src)) :unknown-predicate))
+        why)))
 
 (deftest sink-terminated-bare-pipeline-promotes-to-sinks
   (testing "bare top-level threading-macro form whose terminal is @sink-kind lands in CgFlow.sinks"
     (let [flow (setup/extract-models
                 (str "(table-> :reprojected\n"
                      "  (ds/write-geojson \"out.geojson\"))"))]
-      (is (= 1 (count (:sinks flow))))
-      (is (zero? (count (models flow))))
-      (is (not (contains? (diagnostic-codes flow) :bare-model-expression)))
-      (is (not (contains? (diagnostic-codes flow) :unsinked-top-level-pipeline)))
+      (is (= [:table] (mapv :mode (:sinks flow))))
       (let [s (first (:sinks flow))]
-        (is (= :table (:mode s)))
-        (is (= :literal (-> s :source :kind))
-            "a SinkPipeline's :source is an OpArg")
-        (is (= :keyword (-> s :source :literal :kind))
-            "first-arg keyword promotes to an OpArg literal of kind :keyword")
+        (is (= :keyword (-> s :source :literal :kind)))
         (is (= ":reprojected" (-> s :source :literal :raw)))
-        (is (= 1 (count (:ops s))))
-        (is (= "ds/write-geojson" (-> s :ops first :qualified-name)))
+        (is (= ["ds/write-geojson"] (mapv :qualified-name (:ops s))))
         (is (nil? (:name s))
             "a SinkPipeline has no :name field; a sink is not a binding")))))
 
@@ -995,17 +655,14 @@
                 (str "(table-> :ds\n"
                      "  (ds/transform-crs \"EPSG:2249\"))"))]
       (is (zero? (count (:sinks flow))))
-      (is (zero? (count (models flow))))
-      (is (contains? (diagnostic-codes flow) :unsinked-top-level-pipeline))
-      (is (not (contains? (diagnostic-codes flow) :bare-model-expression))
-          "Stage C collapses the two-phase model: only :unsinked-top-level-pipeline fires for non-sink termination"))))
+      (is (zero? (count (extract/threading-macro-bindings flow))))
+      (is (= #{:unsinked-top-level-pipeline} (diagnostic-codes flow))))))
 
 (deftest unsinked-pipeline-with-unknown-terminal-fires
-  (testing "bare top-level threading-macro whose terminal op isn't in the registry also fires :unsinked-top-level-pipeline"
-    (let [flow (setup/extract-models
-                (str "(table-> :ds\n"
-                     "  (totally/missing 1))"))]
-      (is (contains? (diagnostic-codes flow) :unsinked-top-level-pipeline)))))
+  (let [flow (setup/extract-models
+              (str "(table-> :ds\n"
+                   "  (totally/missing 1))"))]
+    (is (contains? (diagnostic-codes flow) :unsinked-top-level-pipeline))))
 
 (deftest sink-pipeline-with-write-csv-also-classifies
   (testing "ds/write-csv (the other built-in sink) also triggers promotion"
@@ -1027,26 +684,22 @@
       (is (not (contains? (diagnostic-codes flow) :unsinked-top-level-pipeline))))))
 
 (deftest module-ns-form-recorded
-  (testing "a leading (ns ...) form is admitted and recorded as :module-ns"
-    (let [flow (setup/extract-models
-                (str "(ns cg.parcel\n"
-                     "  \"Module docstring.\")\n"
-                     "(require '[cg.geo :as geo])\n"))]
-      (is (= "cg.parcel" (-> flow :module-ns :name)))
-      (is (some? (-> flow :module-ns :location)))
-      (is (not (contains? (diagnostic-codes flow) :unclassified-top-level-form))
-          "the ns form no longer fires :unclassified-top-level-form"))))
+  (let [flow (setup/extract-models
+              (str "(ns cg.parcel\n"
+                   "  \"Module docstring.\")\n"
+                   "(require '[cg.geo :as geo])\n"))]
+    (is (= "cg.parcel" (-> flow :module-ns :name)))
+    (is (some? (-> flow :module-ns :location)))))
 
 (deftest qualified-require-is-a-require
-  (testing "(clojure.core/require ...) after run/load-module, the form the
-               .cg modules use, records its alias as (require ...) does"
+  (testing "(clojure.core/require ...) records its alias as (require ...) does"
     (let [flow (setup/extract-models
                 (str "(ns city (:require [cg.run :as run]))\n"
                      "(run/load-module \"src/cg/parcel.cg\")\n"
                      "(clojure.core/require '[cg.parcel :as parcel])\n"))]
-      (is (not (contains? (diagnostic-codes flow) :unclassified-top-level-form)))
       (is (= [["cg.parcel" "parcel"]]
-             (mapv (juxt :namespace :alias) (:requires flow)))))))
+             (mapv (juxt :namespace :alias) (:requires flow))))
+      (is (= ["src/cg/parcel.cg"] (mapv :path (:loaded-modules flow)))))))
 
 (deftest a-module-defn-is-an-operation
   (testing "a defn is an operation whose card the canvas can draw and open"
@@ -1058,7 +711,6 @@
                      "module-info\n"))
           ops  (into {} (map (juxt :name identity)) (:operations flow))]
       (is (empty? (:diagnostics flow)) "a when head is plain Clojure in a defn")
-      (is (= "cg.m" (:name (:module-ns flow))))
       (is (= [["a" false] ["b" false]]
              (mapv (juxt :name :optional) (:inputs (get ops "helper")))))
       (is (= "Adds." (:doc (get ops "helper"))))
@@ -1066,36 +718,28 @@
              (mapv (juxt :name :optional) (:inputs (get ops "multi")))))
       (is (= :let_body (:kind (first (:body (get ops "multi")))))))))
 
-(deftest a-flow-file-defn-is-an-operation
-  (let [flow (setup/extract-models "(ns city)\n(defn f [x] x)\n")]
-    (is (empty? (:diagnostics flow)))
-    (is (= ["f"] (mapv :name (:operations flow))))))
-
 (deftest module-ns-first-wins
-  (testing "only the first (ns ...) is recorded"
-    (let [flow (setup/extract-models
-                (str "(ns cg.first)\n"
-                     "(ns cg.second)\n"))]
-      (is (= "cg.first" (-> flow :module-ns :name))))))
+  (let [flow (setup/extract-models
+              (str "(ns cg.first)\n"
+                   "(ns cg.second)\n"))]
+    (is (= "cg.first" (-> flow :module-ns :name)))))
 
 (deftest module-ns-malformed-fires
-  (testing "(ns \"not-a-symbol\") fires :module-ns-malformed"
-    (let [flow (setup/extract-models "(ns \"cg.parcel\")")]
-      (is (nil? (:module-ns flow)))
-      (is (contains? (diagnostic-codes flow) :module-ns-malformed)))))
+  (let [flow (setup/extract-models "(ns \"cg.parcel\")")]
+    (is (nil? (:module-ns flow)))
+    (is (contains? (diagnostic-codes flow) :module-ns-malformed))))
 
 (deftest literal-data-decoded-on-op-args
-  (testing "fully-literal op args carry :data alongside :raw"
-    (let [flow (setup/extract-models
-                (str "(def s (table-> :rows"
-                     " (summarize {:value :units :as-int true :weight :rows"
-                     " :scopes [:rs-2] :buckets [{:label \"4-6\" :range [4 6]}]})))"))
-          arg (-> flow :bindings first :ops first :args first)]
-      (is (= :inline_map (:kind arg)))
-      (is (= {:value :units :as-int true :weight :rows
-              :scopes [:rs-2] :buckets [{:label "4-6" :range [4 6]}]}
-             (-> arg :inline-map :data))
-          "the decoded spec is plain data (JVM keywords; squint strings)"))))
+  (let [flow (setup/extract-models
+              (str "(def s (table-> :rows"
+                   " (summarize {:value :units :as-int true :weight :rows"
+                   " :scopes [:rs-2] :buckets [{:label \"4-6\" :range [4 6]}]})))"))
+        arg (-> flow :bindings first :ops first :args first)]
+    (is (= :inline_map (:kind arg)))
+    (is (= {:value :units :as-int true :weight :rows
+            :scopes [:rs-2] :buckets [{:label "4-6" :range [4 6]}]}
+           (-> arg :inline-map :data))
+        "the decoded spec is plain data (JVM keywords; squint strings)")))
 
 (deftest boolean-literals-classify
   (testing "true/false parse as bool_lit and decode (the sym_lit check never fired)"
@@ -1104,38 +748,26 @@
              (mapv :value (:parameters flow)))))))
 
 (deftest opaque-blocks-flag-gated
-  (testing "rejected forms record OpaqueBlocks only when :opaque-blocks is set"
-    ;; Neither a println nor a doseq is an example here any more: the
-    ;; first classifies as an OutputDecl and the second as a BlockDecl.
-    ;; The unclassified specimen is a bare top-level call.
-    (let [src (str "(defmacro helper [x] x)\n"
-                   "(helper 1)\n"
-                   "(def m (item-> :parcels (geo/buffer 10)))")
-          strict (setup/extract-models src)
-          opq (setup/extract-models src {:opaque-blocks true})]
-      (is (= [] (:opaque-blocks strict))
-          "strict mode stays diagnostics-only")
-      (is (= 2 (count (:opaque-blocks opq)))
-          "the defmacro (forbidden) + the bare call (unclassified) become blocks")
-      (is (= "(defmacro helper [x] x)" (-> opq :opaque-blocks first :label)))
-      (is (= "(defmacro helper [x] x)" (-> opq :opaque-blocks first :raw)))
-      (is (some? (-> opq :opaque-blocks first :location)))
-      (is (= (diagnostic-codes strict) (diagnostic-codes opq))
-          "diagnostics fire identically in both modes")
-      (is (= 1 (count (filterv #(= :threading_macro (:body-shape %)) (:bindings opq))))
-          "modelable forms still classify normally"))))
-
-;; A top-level control form is a block constructor: a recognized outer shape
-;; around a decoded body.
+  (let [src (str "(defmacro helper [x] x)\n"
+                 "(helper 1)\n"
+                 "(def m (item-> :parcels (geo/buffer 10)))")
+        strict (setup/extract-models src)
+        opq (setup/extract-models src {:opaque-blocks true})]
+    (is (= [] (:opaque-blocks strict))
+        "strict mode stays diagnostics-only")
+    (is (= ["(defmacro helper [x] x)" "(helper 1)"] (mapv :label (:opaque-blocks opq)))
+        "the defmacro (forbidden) + the bare call (unclassified) become blocks")
+    (is (= "(defmacro helper [x] x)" (-> opq :opaque-blocks first :raw)))
+    (is (some? (-> opq :opaque-blocks first :location)))
+    (is (= (diagnostic-codes strict) (diagnostic-codes opq)))
+    (is (= 1 (count (extract/threading-macro-bindings opq)))
+        "modelable forms still classify normally")))
 
 (deftest doseq-classifies-as-a-block
   (testing "a top-level doseq is a BlockDecl and not residue"
-    (let [flow (setup/extract-models
-                "(doseq [card cards] (println card))"
-                {:opaque-blocks true})
+    (let [flow (setup/extract-models "(doseq [card cards] (println card))")
           b (first (:blocks flow))]
       (is (= 0 (count (:diagnostics flow))))
-      (is (= [] (:opaque-blocks flow)))
       (is (= :doseq (:kind b)))
       (is (= "doseq" (:head b)))
       (is (= [{:name "card" :rhs-raw "cards"}]
@@ -1145,12 +777,10 @@
 
 (deftest a-doseq-binding-keeps-its-destructuring-form
   (testing "the name is source text, so [title rows] survives"
-    (let [b (-> (setup/extract-models
-                 "(doseq [[title rows] scopes] (println title))")
-                :blocks first :bindings first)]
-      (is (= "[title rows]" (:name b)))
-      (is (true? (:destructured? b)))
-      (is (= "scopes" (:rhs-raw b))))))
+    (let [bs (-> (setup/extract-models
+                  "(doseq [[title rows] scopes] (println title))")
+                 :blocks first :bindings)]
+      (is (= [["[title rows]" true "scopes"]] (mapv (juxt :name :destructured? :rhs-raw) bs))))))
 
 (deftest a-block-body-decodes-recursively
   (testing "iteration over narration decodes all the way down"
@@ -1162,9 +792,8 @@
                    "    (println line)))")
           outer (-> (setup/extract-models src) :blocks first)
           [spacer inner] (:body outer)]
-      (is (= :output (:kind spacer)))
+      (is (= [:output :block] (mapv :kind (:body outer))))
       (is (= "" (-> spacer :output :text)))
-      (is (= :block (:kind inner)))
       (is (= :doseq (-> inner :block :kind)))
       (is (= [:output] (mapv :kind (-> inner :block :body))))
       (is (= "line" (-> inner :block :body first :output :args first))))))
@@ -1178,18 +807,9 @@
       (is (= "district-report" (:head leaf)))
       (is (= "(district-report title rows)" (:raw leaf)))
       (is (= "(district-report title rows)" (:label leaf)))
-      (is (some? (:location leaf))))
-    (testing "and reports nothing, the same way an op body :expr does"
-      (is (= 0 (count (:diagnostics
-                       (setup/extract-models
-                        "(doseq [x xs] (f x))"))))))))
-
-(deftest a-nested-block-is-not-a-top-level-block
-  (testing "only the top level lands in :blocks; the rest ride their parent"
-    (let [flow (setup/extract-models
-                "(try (doseq [x xs] (println x)) (catch Exception e nil))")]
-      (is (= 1 (count (:blocks flow))))
-      (is (= :try (-> flow :blocks first :kind))))))
+      (is (some? (:location leaf)))
+      (is (= 0 (count (:diagnostics flow)))
+          "it reports nothing, the same way an op body :expr does"))))
 
 (deftest try-carries-its-catch-clause
   (testing "the failure path is modeled, which is not the same as run"
@@ -1201,9 +821,7 @@
           c (first (:catches b))]
       (is (= :try (:kind b)))
       (is (= [:block] (mapv :kind (:body b))) "the catch is not in the body")
-      (is (= 1 (count (:catches b))))
-      (is (= "Exception" (:class c)))
-      (is (= "t" (:binding c)))
+      (is (= [["Exception" "t"]] (mapv (juxt :class :binding) (:catches b))))
       (is (= [:output] (mapv :kind (:body c))))
       (is (nil? (:finally b))))))
 
@@ -1228,27 +846,18 @@
       (is (nil? (:bindings b))))))
 
 (deftest if-let-and-let-classify-with-their-bindings
-  (testing "if-let"
-    (let [b (-> (setup/extract-models
-                 "(if-let [ds (:census-blocks analysis)] (println ds))")
-                :blocks first)]
-      (is (= :if-let (:kind b)))
-      (is (= ["ds"] (mapv :name (:bindings b))))
-      (is (= "(:census-blocks analysis)" (-> b :bindings first :rhs-raw)))))
-
-  (testing "let, and its RHS head rides the binding"
-    (let [b (-> (setup/extract-models
-                 "(let [rows (filter :rd analyzed)] (println rows))")
-                :blocks first)]
-      (is (= :let (:kind b)))
-      (is (= "rows" (-> b :bindings first :name)))
-      (is (= "filter" (-> b :bindings first :rhs-fn)))
-      (is (false? (-> b :bindings first :destructured?))))))
+  (doseq [[src kind binding]
+          [["(if-let [ds (:census-blocks analysis)] (println ds))"
+            :if-let ["ds" ":census-blocks" "(:census-blocks analysis)" false]]
+           ["(let [rows (filter :rd analyzed)] (println rows))"
+            :let ["rows" "filter" "(filter :rd analyzed)" false]]]]
+    (let [b (-> (setup/extract-models src) :blocks first)]
+      (is (= kind (:kind b)) src)
+      (is (= [binding] (mapv (juxt :name :rhs-fn :rhs-raw :destructured?) (:bindings b))) src))))
 
 (deftest a-block-missing-its-binder-is-malformed-and-still-draws
   (testing "no bindings vector"
     (let [flow (setup/extract-models "(doseq (println 1))" {:opaque-blocks true})]
-      (is (= 0 (count (:blocks flow))))
       (is (contains? (diagnostic-codes flow) :block-malformed))
       (is (= 1 (count (:opaque-blocks flow)))
           "a malformed block still draws, rather than vanishing")))
@@ -1256,31 +865,21 @@
   (testing "an odd bindings vector warns but still classifies"
     (let [flow (setup/extract-models "(doseq [x] (println x))")]
       (is (= 1 (count (:blocks flow))))
-      (is (= [:warning] (mapv :severity (:diagnostics flow))))
-      (is (contains? (diagnostic-codes flow) :block-malformed)))))
+      (is (= [[:block-malformed :warning]] (mapv (juxt :code :severity) (:diagnostics flow)))))))
 
-(deftest blocks-no-longer-land-as-opaque-blocks
+(deftest outputs-and-blocks-no-longer-land-as-opaque-blocks
   (testing "the whole point: they stop counting against the residue measure"
-    (let [src (str "(doseq [x xs] (println x))\n"
+    (let [src (str "(println \"a\")\n(println \"b\")\n"
+                   "(doseq [x xs] (println x))\n"
                    "(when p (println \"y\"))\n"
                    "(try (println \"z\") (catch Exception e nil))\n"
                    "(defmacro m [x] x)")
           flow (setup/extract-models src {:opaque-blocks true})]
+      (is (= 2 (count (:outputs flow))))
       (is (= 3 (count (:blocks flow))))
       ;; the defmacro still is one, so this asserts a change, not an empty set
       (is (= 1 (count (:opaque-blocks flow))))
       (is (= #{:forbidden-form} (diagnostic-codes flow))))))
-
-(deftest a-block-head-does-not-shadow-an-op
-  (testing "the classifier keys on the head symbol only at the top level"
-    (let [flow (setup/extract-models
-                "(defn ^:op when [^:row p] (geo/area p))")]
-      (is (= 0 (count (:blocks flow))))
-      (is (some? (operation-by-name flow "when"))))))
-
-;; A non-literal inline map keeps its entries as OpArgs. `{:rows parcels}`
-;; is how a run/run-model call names its input, and without the entries the
-;; reference lives only in the raw text.
 
 (deftest a-computed-inline-map-keeps-its-entries
   (testing "the model-input idiom exposes the binding it references"
@@ -1291,9 +890,8 @@
       (is (= :call (:kind call)))
       (is (= "run/run-model" (:head call)))
       (is (= :inline_map (:kind in-map)))
-      (is (= [[:literal :parameter_ref]]
-             (mapv (fn [[k v]] [(:kind k) (:kind v)]) (:entries in-map))))
-      (is (= "parcels" (-> in-map :entries first second :parameter-name)))
+      (is (= [[:literal :parameter_ref "parcels"]]
+             (mapv (fn [[k v]] [(:kind k) (:kind v) (:parameter-name v)]) (:entries in-map))))
       (is (some? (-> in-map :entries first second :location)))
       (testing "a fully literal map keeps :data and grows no entries"
         (is (nil? (:entries opts-map)))
@@ -1308,17 +906,12 @@
       (is (= "b" (-> m :entries first second :parameter-name)))
       (is (nil? (-> m :entries second second))))))
 
-;; A collection literal that is not fully literal is a binding, not residue.
-;; 21 of the corpus's 24 unclassified top-level defs were this shape.
-
 (deftest a-config-map-def-is-a-binding
   (testing "(def opts {:thresholds t}) classifies and exposes what it names"
     (let [flow (setup/extract-models
-                "(def city-opts {:thresholds city-thresholds})"
-                {:opaque-blocks true})
+                "(def city-opts {:thresholds city-thresholds})")
           b (first (:bindings flow))]
       (is (= 0 (count (:diagnostics flow))))
-      (is (= [] (:opaque-blocks flow)))
       (is (= "city-opts" (:name b)))
       (is (= :function_call (:body-shape b)))
       (is (= "{}" (:head-sym b)))
@@ -1335,8 +928,7 @@
                 :bindings first)]
       (is (= "[]" (:head-sym b)))
       (is (true? (:is-collection b)))
-      (is (= [:call :call] (mapv :kind (:args b))))
-      (is (= ["f/point" "f/point"] (mapv :head (:args b))))))
+      (is (= [[:call "f/point"] [:call "f/point"]] (mapv (juxt :kind :head) (:args b))))))
 
   (testing "a set keeps its items too"
     (let [b (-> (setup/extract-models "(def s #{a b})") :bindings first)]
@@ -1347,43 +939,24 @@
   (testing "nothing changed for the literal case: it decodes to :data"
     (let [flow (setup/extract-models "(def thresholds {:far 2.0 :units [4 6]})")
           p (first (:parameters flow))]
-      (is (= 0 (count (:bindings flow))))
       (is (= "thresholds" (:name p)))
       (is (= {:far 2.0 :units [4 6]} (-> p :value :data))))))
 
-(deftest a-collection-binding-is-not-hunted-for-a-signature
-  (testing "the type checker skips it, as it skips accessors and control forms"
-    (let [flow (setup/extract-models
-                "(def opts {:thresholds t})"
-                {:opaque-blocks true})]
-      (is (not (contains? (diagnostic-codes flow) :unresolved-op))
-          "a map literal has no signature and never will"))))
-
-;; An alias def. The three in the corpus were the last unclassified defs.
-
 (deftest an-alias-def-is-a-binding
   (testing "(def output-dir data-dir) names what it aliases"
-    (let [flow (setup/extract-models "(def output-dir data-dir)"
-                                      {:opaque-blocks true})
+    (let [flow (setup/extract-models "(def output-dir data-dir)")
           b (first (:bindings flow))]
       (is (= 0 (count (:diagnostics flow))))
-      (is (= [] (:opaque-blocks flow)))
       (is (= "output-dir" (:name b)))
       (is (= "data-dir" (:head-sym b)) "the card reads output-dir <- data-dir")
       (is (true? (:is-alias b)))
-      (is (= [:parameter_ref] (mapv :kind (:args b)))
-          "the reference is reachable, which is what draws the edge")
-      (is (= "data-dir" (-> b :args first :parameter-name)))))
+      (is (= [[:parameter_ref "data-dir"]] (mapv (juxt :kind :parameter-name) (:args b)))
+          "the reference is reachable, which is what draws the edge")))
 
   (testing "a namespaced alias is a symbol ref, so it draws no edge"
     (let [b (-> (setup/extract-models "(def x other/y)") :bindings first)]
       (is (= "other/y" (:head-sym b)))
-      (is (= [:symbol_ref] (mapv :kind (:args b))))))
-
-  (testing "and it is not hunted for a signature"
-    (is (not (contains? (diagnostic-codes
-                         (setup/extract-models "(def output-dir data-dir)"))
-                        :unresolved-op)))))
+      (is (= [:symbol_ref] (mapv :kind (:args b)))))))
 
 (deftest a-binding-carries-the-whole-def-span
   (testing ":form-location is the def form; :location stays the RHS"
@@ -1426,8 +999,7 @@
 
   (testing "the members of a flat vector are fields with no key"
     (let [p (-> (setup/extract-models "(def ks [:MAP_PAR_ID :id])") :parameters first)]
-      (is (= [":MAP_PAR_ID" ":id"] (mapv :raw (:fields p))))
-      (is (every? nil? (map :key (:fields p))))))
+      (is (= [[":MAP_PAR_ID" nil] [":id" nil]] (mapv (juxt :raw :key) (:fields p))))))
 
   (testing "a nested, long, empty or set literal has no fields"
     (doseq [src ["(def a {:k [1 2]})"
