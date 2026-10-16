@@ -118,7 +118,8 @@
                  (setup/extract-models
                   (str "(ns cg.m)\n"
                        "(defn helper [row x] row)\n"
-                       "(defn caller [r] (helper r 1))\n")))))))
+                       "(defn caller [r] (helper r 1))\n"
+                       "(def y (helper 1 2))\n")))))))
 
 ;; D14: an option map is the rest param, `& {:keys! [...] :keys [...]
 ;; :or {...}}`. 9 keys of each kind and 9 defaults: more than an array map
@@ -169,6 +170,7 @@
               (str "(ns cg.m)\n"
                    "(defn ^:op more [^:row x & more] x)\n"
                    "(defn ^:op fixed [^:row x {:keys [d]}] x)\n"))]
+    (is (= [["x" "more"] ["x" "arg1"]] (mapv #(mapv :name (:inputs %)) (:operations flow))))
     (is (nil? (:options (last (:inputs (op-named flow "more"))))))
     (is (nil? (:options (last (:inputs (op-named flow "fixed"))))))))
 

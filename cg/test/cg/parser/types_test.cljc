@@ -78,6 +78,15 @@
           flow (setup/extract-models src)]
       (is (zero? (count-code flow :op-arity-mismatch))))))
 
+(deftest a-rung-fills-the-first-input-of-a-user-op
+  ;; cg.run gives the threaded value to the first param of an op, also when
+  ;; no param has a role.
+  (let [op "(defn ^:op k2 [n] n)\n"]
+    (is (zero? (count-code (setup/extract-models (str op "(def m (table-> :ds (k2)))"))
+                           :op-arity-mismatch)))
+    (is (= 1 (count-code (setup/extract-models (str op "(def m (table-> :ds (k2 5)))"))
+                         :op-arity-mismatch)))))
+
 (deftest a-module-defn-call-resolves
   (testing "a call to a ^:module defn resolves; & more takes any count"
     (let [src  (str "(ns ^:module cg.m)\n"
@@ -125,12 +134,10 @@
       (is (zero? (count-code flow :op-arity-mismatch))))))
 
 (deftest pass-2-binding-context-includes-row-input
-  (testing "a Binding head includes :row inputs in the explicit-arg slots"
-    (let [;; ds/load-geojson has zero :row inputs but exactly one
-          ;; required string arg.
-          flow (setup/extract-models "(def p (ds/load-geojson))")]
-      (is (contains? (diag-codes flow) :op-arity-mismatch)
-          "missing required path arg should still fire arity"))))
+  ;; geo/buffer has a :row input and two others. A call binding gives all
+  ;; three, where a rung gives only the other two.
+  (let [flow (setup/extract-models "(def b (geo/buffer g 10 {}))")]
+    (is (zero? (count-code flow :op-arity-mismatch)))))
 
 (deftest pass-3-clean-types
   (testing "geo/buffer with a numeric distance is clean"
@@ -165,25 +172,16 @@
           flow (setup/extract-models src)]
       (is (contains? (diag-codes flow) :type-mismatch)))))
 
-(deftest pass-3-symbol-ref-binding-output-resolves
-  (testing "a symbol_ref pointing at a binding inherits the binding's output type"
-    (let [;; area-metrics is a binding with output type :dataset (via
-          ;; ds/load-csv). ds/concat accepts :any so this is clean.
-          src (str "(def area-metrics (ds/load-csv \"a.csv\"))\n"
-                   "(def combined (ds/concat area-metrics))")
-          flow (setup/extract-models src)]
-      (is (zero? (count-code flow :type-mismatch))))))
+(deftest pass-3-a-binding-arg-has-the-output-type-of-the-binding
+  (let [flow (setup/extract-models
+              (str "(def area-metrics (ds/load-csv \"a.csv\"))\n"
+                   "(def m (item-> :parcels (geo/buffer area-metrics)))"))]
+    (is (= ["operation 'geo/buffer' argument 'distance' expects type number but got dataset"]
+           (mapv :message (filter #(= :type-mismatch (:code %)) (:diagnostics flow)))))))
 
 (deftest pass-3-cross-namespace-symbol-treated-as-any
-  (testing "a cross-namespace symbol_ref (contains '/') resolves to :any"
-    (let [;; ds/concat input is :any so this is trivially clean,
-          ;; but the assertion is that other/foo does not itself
-          ;; cause a :type-mismatch (which would happen if a
-          ;; future tightening changed the rule to anything
-          ;; stricter).
-          flow (setup/extract-models
-                "(def x (ds/concat other/foo))")]
-      (is (zero? (count-code flow :type-mismatch))))))
+  (let [flow (setup/extract-models "(def m (item-> :parcels (geo/buffer other/foo)))")]
+    (is (zero? (count-code flow :type-mismatch)))))
 
 (deftest pass-3-any-typed-input-accepts-anything
   (testing "a signature input typed :any accepts mismatched argument types"
@@ -361,13 +359,12 @@
       (is (zero? (count-code flow :unknown-predicate))))))
 
 (deftest sink-ops-walked-by-pass-1-3
-  (testing "sink pipelines feed call-sites; pass 1-3 resolve their ops the same as Models"
-    (let [flow (setup/extract-models
-                (str "(table-> :ds\n"
-                     "  (ds/write-geojson \"out.geojson\"))"))]
-      (is (zero? (count-code flow :unresolved-op)))
-      (is (zero? (count-code flow :op-arity-mismatch)))
-      (is (zero? (count-code flow :type-mismatch))))))
+  (let [flow (setup/extract-models
+              (str "(table-> :ds\n"
+                   "  (geo/nope 1)\n"
+                   "  (ds/write-geojson \"out.geojson\"))"))]
+    (is (= 1 (count (:sinks flow))))
+    (is (= 1 (count-code flow :unresolved-op)))))
 
 (deftest sink-pipeline-pass-4-catches-bad-flow
   (testing "pass 4 walks sink pipelines: dataset-from-transform feeding feature-row sink would fire"
@@ -381,13 +378,12 @@
       (is (contains? (diag-codes flow) :pipeline-type-mismatch)))))
 
 (deftest unsinked-top-level-pipeline-doesnt-block-other-passes
-  (testing "an unsinked bare top-level pipeline still walks ops through passes 1-3"
-    (let [flow (setup/extract-models
-                (str "(table-> :ds\n"
-                     "  (ds/transform-crs \"EPSG:3857\"))"))]
-      (is (contains? (diag-codes flow) :unsinked-top-level-pipeline))
-      ;; ds/transform-crs is in the registry, so no :unresolved-op.
-      (is (zero? (count-code flow :unresolved-op))))))
+  ;; The unsinked form comes first, so a walk that stops at it loses the def.
+  (let [flow (setup/extract-models
+              (str "(table-> :ds (ds/transform-crs \"EPSG:3857\"))\n"
+                   "(def m (item-> :parcels (geo/nope 100)))"))]
+    (is (= 1 (count-code flow :unsinked-top-level-pipeline)))
+    (is (= 1 (count-code flow :unresolved-op)))))
 
 (defn- follow-merge
   "Simulates a module follower: tags the module flow's ops with

@@ -44,15 +44,6 @@
   [lit]
   (get literal-kind->type (:kind lit) :any))
 
-(defn- parameter-type
-  "The type of a parameter_ref OpArg, from the :parameters of the CgFlow. A
-   missing parameter gives :any, and no validate pass reports it."
-  [param-name cg-flow]
-  (let [p (first (filter #(= (:name %) param-name) (:parameters cg-flow)))]
-    (if p
-      (literal-type (:value p))
-      :any)))
-
 (defn- binding-output-type
   "The output type of the top-level Binding with this name: the first output
    of the signature of its head. :any when the registry does not resolve the
@@ -63,13 +54,22 @@
         out (first (:outputs sig))]
     (if out (:type out) :any)))
 
+(defn- parameter-type
+  "The type of a parameter_ref OpArg: of the Parameter with this name, else
+   of the Binding with this name (extract makes each local symbol a
+   parameter_ref), else :any."
+  [param-name cg-flow registry]
+  (if-let [p (first (filter #(= (:name %) param-name) (:parameters cg-flow)))]
+    (literal-type (:value p))
+    (binding-output-type param-name cg-flow registry)))
+
 (defn- op-arg-type
   "Resolves the type of a single OpArg map."
   [arg cg-flow registry]
   (case (:kind arg)
     :literal        (literal-type (:literal arg))
     :inline_map     :any
-    :parameter_ref  (parameter-type (:parameter-name arg) cg-flow)
+    :parameter_ref  (parameter-type (:parameter-name arg) cg-flow registry)
     :symbol_ref     (let [text (:symbol-text arg)]
                       (if (or (nil? text) (>= (.indexOf ^String text "/") 0))
                         :any
@@ -87,11 +87,14 @@
 (defn- explicit-slots
   "The inputs of a signature that explicit args fill, in order. In
    :function-call context, all inputs. In :threading context the threaded
-   value fills the :row or :table input, and the other inputs remain."
-  [sig-inputs context]
+   value fills the :row or :table input of a built-in, and the first input of
+   a user op, as cg.run calls it. The other inputs remain."
+  [{:keys [inputs source]} context]
   (case context
-    :function-call (vec sig-inputs)
-    :threading     (vec (remove #(contains? #{:row :table} (:role %)) sig-inputs))))
+    :function-call (vec inputs)
+    :threading     (if (= :user source)
+                     (vec (rest inputs))
+                     (vec (remove #(contains? #{:row :table} (:role %)) inputs)))))
 
 (defn- slot-bounds
   "{:min N :max M} for an ordered list of input slots. :min counts the
@@ -123,7 +126,7 @@
              location)]
 
       :else
-      (let [slots (explicit-slots (:inputs sig) context)
+      (let [slots (explicit-slots sig context)
             {req-count :min max-count :max} (slot-bounds slots)
             arg-count (count args)]
         (cond

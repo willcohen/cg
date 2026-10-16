@@ -12,7 +12,7 @@
            [org.graalvm.polyglot.proxy ProxyArray ProxyExecutable]
            [java.nio.file Files]
            [java.nio.file.attribute FileAttribute]
-           [java.util.concurrent CompletableFuture]))
+           [java.util.concurrent CompletableFuture ExecutionException]))
 
 (set! *warn-on-reflection* true)
 
@@ -155,17 +155,18 @@
                            nil))
             on-error (reify ProxyExecutable
                        (execute [_ args]
-                         (let [m (if (pos? (alength args)) (str (aget args 0)) "unknown")]
+                         (let [m (if (pos? (alength args)) (.asString ^Value (aget args 0)) "unknown")]
                            (.completeExceptionally fut
                                                    (ex-info (str "tree-sitter init failed: " m)
                                                             {:cause m})))
                          nil))]
         (.executeVoid initialize-fn
                       (object-array [runtime grammar on-success on-error]))
-        (let [booted ^Value (.get fut)]
-          (reset! state {:context ctx
-                         :parser-ctor (.getMember booted "Parser")
-                         :language (.getMember booted "language")})))))
+        (let [^Value booted (try (.get fut)
+                                 (catch ExecutionException e (throw (ex-cause e))))
+              parser (.newInstance (.getMember booted "Parser") (object-array 0))]
+          (.invokeMember parser "setLanguage" (object-array [(.getMember booted "language")]))
+          (reset! state {:context ctx :parser parser})))))
   @state)
 
 (defn parse
@@ -174,7 +175,5 @@
    (see package-root)."
   ([^String text] (parse text nil))
   ([^String text _opts]
-   (let [{:keys [parser-ctor ^Value language]} (init!)
-         parser (.newInstance ^Value parser-ctor (object-array []))]
-     (.invokeMember parser "setLanguage" (object-array [language]))
+   (let [{:keys [^Value parser]} (init!)]
      (.invokeMember parser "parse" (object-array [text])))))

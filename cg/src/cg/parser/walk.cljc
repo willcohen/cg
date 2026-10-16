@@ -46,7 +46,7 @@
   "Returns the tree-sitter node type as a string (for example \"list_lit\")."
   [node]
   #?(:clj  (value->str (value-get node "type"))
-     :cljs (.-type node)))
+     :cljs (when node (.-type node))))
 
 (defn node-text
   "Returns the source text of this node, with its whitespace and its
@@ -63,11 +63,11 @@
      :cljs (vec (.-namedChildren ^js node))))
 
 (defn named-children
-  "Returns the named children of this node without comments.
-   tree-sitter-clojure counts a `;;` comment as a named child, and a comment
-   inside a form would move each later child by one."
+  "Returns the named children of this node without comments and `#_` forms.
+   tree-sitter-clojure counts each as a named child, and one inside a form
+   would move each later child by one."
   [node]
-  (vec (remove (fn [c] (= "comment" (node-type c)))
+  (vec (remove (fn [c] (contains? #{"comment" "dis_expr"} (node-type c)))
                (named-children-raw node))))
 
 (defn child-at
@@ -172,11 +172,6 @@
   [node]
   (type= node "quoting_lit"))
 
-(defn comment?
-  "Returns true when node is a comment line."
-  [node]
-  (type= node "comment"))
-
 (defn sym-name
   "The name of a sym_lit after any namespace slash, or nil when node is not a
    sym_lit."
@@ -216,10 +211,9 @@
      :cljs (.-rootNode ^js tree)))
 
 (defn top-level-forms
-  "Returns a vector of the named children of the source root, in source
-   order, comments included."
+  "Returns a vector of the forms of the source root, in source order."
   [tree]
-  (named-children-raw (root tree)))
+  (named-children (root tree)))
 
 (defn descendants
   "Lazily yields every named-descendant of node (depth-first, pre-order),

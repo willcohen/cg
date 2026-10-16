@@ -10,7 +10,7 @@
    of eval: do not require cg.dsl, cg.macros, cg.run or cg.codegen."
   (:require ["web-tree-sitter" :refer [Parser Language]]))
 
-(defonce ^:private state (atom {:initialized? false :language nil}))
+(defonce ^:private state (atom nil))
 (defonce ^:private init-promise (atom nil))
 
 (defn- default-grammar
@@ -30,34 +30,34 @@
   [opts]
   (let [wasm-path (or (:grammar-wasm opts) (default-grammar))]
     (await (.init Parser))
-    (let [lang (await (.load Language wasm-path))]
-      (reset! state {:initialized? true :language lang})
+    (let [lang (await (.load Language wasm-path))
+          parser (Parser.)]
+      (.setLanguage parser lang)
+      (reset! state {:parser parser})
       @state)))
 
 (defn ^:async init!
   "Initialize the Parser runtime and load the Clojure grammar. The first call
-   caches the init Promise, and concurrent callers all await it."
+   caches the init Promise, and concurrent callers all await it. A failed init
+   is not cached, so a later call tries again."
   ([] (init! nil))
   ([opts]
    (when (nil? @init-promise)
-     (reset! init-promise (do-init! opts)))
+     (reset! init-promise (.catch (do-init! opts)
+                                  (fn [e] (reset! init-promise nil) (throw e)))))
    (await @init-promise)))
 
 (defn parse-sync
   "Parses source text with no Promise. Returns the tree-sitter Tree, or
    nil before init! resolves."
   [text]
-  (when-let [language (:language @state)]
-    (let [parser (Parser.)]
-      (.setLanguage parser language)
-      (.parse parser text))))
+  (when-let [parser (:parser @state)]
+    (.parse parser text)))
 
 (defn ^:async parse
   "Parses source text and returns the tree-sitter Tree. `opts` goes to init!
    on the first call."
   ([text] (parse text nil))
   ([text opts]
-   (let [{:keys [language]} (await (init! opts))
-         parser (Parser.)]
-     (.setLanguage parser language)
+   (let [{:keys [parser]} (await (init! opts))]
      (.parse parser text))))

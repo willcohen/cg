@@ -51,37 +51,57 @@
    a threading macro from one of them gets a :legacy-macro-namespace warning."
   #{"cg.dsl" "cg.dsl.macros"})
 
+(defn- code-unit [^String digits radix]
+  #?(:clj  (str (char (Integer/parseInt digits (int radix))))
+     :cljs (js/String.fromCharCode (js/parseInt digits radix))))
+
+(defn- unescape
+  "Decode the escapes of string-literal text as the Clojure reader does. An
+   escape that the reader rejects stays as written."
+  [s]
+  ;; No capture group: squint gives the replace fn the whole match only.
+  (str/replace s #"\\(?:u[0-9a-fA-F]{4}|[0-7]{1,3}|[\s\S])"
+               (fn [m]
+                 (let [e (subs m 1)]
+                   (cond
+                     (re-matches #"u[0-9a-fA-F]{4}" e) (code-unit (subs e 1) 16)
+                     (re-matches #"[0-3]?[0-7]{1,2}" e) (code-unit e 8)
+                     (contains? #{"\"" "\\"} e) e
+                     :else (get {"t" "\t" "n" "\n" "r" "\r" "b" "\b" "f" "\f"} e m))))))
+
 (defn- str-lit-text
-  "The source text of a string-literal node without its quotes."
+  "The value of a string-literal node: its text without the quotes, with each
+   escape decoded."
   [str-lit-node]
   (let [text (w/node-text str-lit-node)]
     (if (and (>= (count text) 2)
              (= \" (.charAt ^String text 0))
              (= \" (.charAt ^String text (dec (count text)))))
-      (subs text 1 (dec (count text)))
+      (unescape (subs text 1 (dec (count text))))
       text)))
 
 (def ^:private undecodable
   "The `:data` value of decode-literal for a value that does not decode. It
-   cannot be nil, because nil is a literal that a source file can write."
-  ::undecodable)
+   cannot be a value that a source file can write, for example nil, a
+   keyword, or on JS a string."
+  #?(:clj (Object.) :cljs (js/Symbol "undecodable")))
 
 (declare decode-literal)
 
 (defn- decode-scalar
   "The leaf half of decode-literal: `{:kind ... :data ...}` for a literal
-   that has no nested forms, else nil. A number whose source text does not
-   read gets `undecodable` as :data."
+   that has no nested forms, else nil. A number decodes only in decimal or
+   unsigned hex syntax, which both runtimes read the same. Another number
+   (octal, ratio, radix, an N or M suffix) gets `undecodable` as :data."
   [node]
   (cond
     (w/num? node)
     {:kind :number
      :data (let [t (w/node-text node)]
-             #?(:clj  (try (let [v (read-string t)]
-                             (if (number? v) v undecodable))
-                           (catch Exception _ undecodable))
-                :cljs (let [v (js/Number t)]
-                        (if (js/Number.isNaN v) undecodable v))))}
+             ;; ^ and $: squint re-matches compares the first match only.
+             (if (re-matches #"^(?:[+-]?(?:0|[1-9]\d*)(?:\.\d*)?(?:[eE][+-]?\d+)?|0[xX][0-9a-fA-F]+)$" t)
+               #?(:clj (read-string t) :cljs (js/Number t))
+               undecodable))}
 
     (w/str-lit? node)
     {:kind :string :data (str-lit-text node)}
@@ -222,32 +242,36 @@
           {::error :ns-not-symbol}))
       {::error :not-a-vec})))
 
+(defn- libspec
+  "The NamespaceImport of one quoted libspec, or a :require-malformed
+   Diagnostic."
+  [arg]
+  (let [r (when (w/quoting? arg) (extract-libspec arg))]
+    (if (and r (not (::error r)))
+      r
+      (diag :require-malformed
+            (case (::error r)
+              :not-a-vec      "require libspec must be a vector: '[<ns> ...]"
+              :ns-not-symbol  "require libspec must start with a namespace symbol"
+              "require libspec must be quoted: (require '[<ns> ...])")
+            (w/node->span arg)))))
+
 (defn- extract-require
-  "Parse a (require '[<ns> :as|:refer ...]) form into a NamespaceImport map
-   or a Diagnostic. This fn reads only the first libspec of a require."
+  "Parse a (require '[<ns> :as|:refer ...] ...) form into a :require result
+   whose value holds the NamespaceImport of each libspec. A keyword flag,
+   such as :reload, is not a libspec."
   [list-node]
-  (let [args (rest (w/named-children list-node))
-        first-arg (first args)]
+  (let [rs (mapv libspec (remove w/kwd? (rest (w/named-children list-node))))
+        bad (filterv :code rs)]
     (cond
-      (not first-arg)
-      (diag :require-malformed
-            "(require ...) needs a quoted libspec like '[cg.geo :as geo]"
-            (w/node->span list-node))
+      (empty? rs)
+      {:kind :error
+       :diagnostics [(diag :require-malformed
+                           "(require ...) needs a quoted libspec like '[cg.geo :as geo]"
+                           (w/node->span list-node))]}
 
-      (not (w/quoting? first-arg))
-      (diag :require-malformed
-            "require libspec must be quoted: (require '[<ns> ...])"
-            (w/node->span first-arg))
-
-      :else
-      (let [r (extract-libspec first-arg)]
-        (if (::error r)
-          (diag :require-malformed
-                (case (::error r)
-                  :not-a-vec      "require libspec must be a vector: '[<ns> ...]"
-                  :ns-not-symbol  "require libspec must start with a namespace symbol")
-                (w/node->span first-arg))
-          r)))))
+      (seq bad) {:kind :error :diagnostics bad}
+      :else     {:kind :require :value rs :diagnostics []})))
 
 (defn- first-line
   [s]
@@ -792,12 +816,12 @@
         (let [collected
               (reduce (fn [acc [k v]]
                         (cond
-                          (nil? k)
+                          (nil? v)
                           (update acc :diagnostics conj
                                   (diag :op-malformed
                                         (str "op '" op-name "' " port-key-text
                                              " entry is missing a value")
-                                        (w/node->span inner-node)))
+                                        (w/node->span k)))
 
                           (not (w/kwd? k))
                           (update acc :diagnostics conj
@@ -1196,7 +1220,10 @@
         type-node (some (fn [m] (when (w/map-form? m) (map-get-kwd m ":type"))) ms)
         options (when rest? (option-map p))]
     (cond-> {:name (if (w/sym? p) (w/sym-name p) (str "arg" i))
-             :type (if (and type-node (w/kwd? type-node)) (kwd->name type-node) "any")
+             :type (cond (w/kwd? type-node)     (kwd->name type-node)
+                         (w/str-lit? type-node) (str-lit-text type-node)
+                         (w/sym? type-node)     (w/sym-name type-node)
+                         :else                  "any")
              :role (some (fn [m] (when (w/kwd? m) (get param-roles (kwd->name m)))) ms)
              :optional optional?}
       options (assoc :options options))))
@@ -1356,7 +1383,8 @@
         name-node (second children)
         ;; node-text would keep the metadata of the name (^:private x).
         nm (when (and name-node (w/sym? name-node)) (w/sym-name name-node))
-        body-node (nth children 2 nil)
+        ;; In (def x "doc" 10) the value follows a docstring.
+        body-node (let [[_ _ b v] children] (if (and v (w/str-lit? b)) v b))
         span (w/node->span list-node)]
     (cond
       (or (not name-node) (not (w/sym? name-node)))
@@ -1671,15 +1699,6 @@
        :diagnostics (into (vec (:diagnostics binder-res))
                           (:diagnostics decoded))})))
 
-(defn- extract-require-form
-  "extract-require in the walker shape {:kind :value :diagnostics}, for the
-   `top-level-heads` table."
-  [node]
-  (let [r (extract-require node)]
-    (if (:code r)
-      {:kind :error :diagnostics [r]}
-      {:kind :require :value r :diagnostics []})))
-
 (defn- extract-output-form
   [node]
   {:kind :output :value (extract-output node) :diagnostics []})
@@ -1694,8 +1713,8 @@
         terminal-kind (:kind terminal-sig)]
     (cond
       ;; A shape error in the form comes first: a sink verdict must not hide
-      ;; it.
-      (seq diagnostics)
+      ;; it. A warning, such as the one of layers->, does not stop the verdict.
+      (some (fn [d] (= :error (:severity d))) diagnostics)
       {:kind :error :diagnostics diagnostics}
 
       (= :sink terminal-kind)
@@ -1705,27 +1724,28 @@
                :ops ops
                :config config
                :location (w/node->span node)}
-       :diagnostics []}
+       :diagnostics diagnostics}
 
       :else
       {:kind :error
-       :diagnostics [(diag :unsinked-top-level-pipeline
-                           (str "bare top-level " (w/first-sym-text node)
-                                " pipeline must terminate in a @sink-flagged op"
-                                (when terminal-name
-                                  (str " (got " terminal-name ", kind "
-                                       (or terminal-kind "unknown") ")")))
-                           (w/node->span node))]})))
+       :diagnostics (conj diagnostics
+                          (diag :unsinked-top-level-pipeline
+                                (str "bare top-level " (w/first-sym-text node)
+                                     " pipeline must terminate in a @sink-flagged op"
+                                     (when terminal-name
+                                       (str " (got " terminal-name ", kind "
+                                            (or terminal-kind "unknown") ")")))
+                                (w/node->span node)))})))
 
 (def ^:private top-level-heads
   "The top-level vocabulary of a .cg file as data: head symbol -> the walker
    that decodes a form with that head. Each walker returns {:kind :value
    :diagnostics}, and its :kind is the classification kind."
   (merge
-   {"require"         extract-require-form
+   {"require"         extract-require
     ;; A .cg file gives an alias to a loaded module with this form, after its
     ;; run/load-module.
-    "clojure.core/require" extract-require-form
+    "clojure.core/require" extract-require
     "run/load-module" extract-load-module
     "ns"              extract-module-ns
     "def"             extract-def
@@ -1781,9 +1801,6 @@
    the last three."
   [node]
   (cond
-    (w/comment? node)
-    {:kind :comment :diagnostics []}
-
     (w/list-form? node)
     (let [walk (get top-level-heads (w/first-sym-text node))]
       (cond
@@ -1882,7 +1899,7 @@
                   (cond
                     (contains? kind->collection kind)
                     (if (some? value)
-                      (update acc (get kind->collection kind) conj value)
+                      (update acc (get kind->collection kind) (if (= :require kind) into conj) value)
                       acc)
 
                     (= :overlay kind)

@@ -15,7 +15,10 @@
                     [cg.parser.setup :as setup]
                     [cg.util :as util])
      :cljs (:require [cljs.test :refer [deftest is testing]]
+                     ["web-tree-sitter" :refer [Parser Tree]]
                      ["./setup.mjs" :as setup]
+                     ["../../../src/cg/parser/core.mjs" :as parser]
+                     ["../../../src/cg/parser/squint.mjs" :as backend]
                      ["../../../src/cg/util.mjs" :as util]
                      ["../test_runner.mjs" :refer [run_tests_and_exit_BANG_]])))
 
@@ -234,6 +237,7 @@
           out-b (first (filter #(= "out" (:name %)) (:bindings flow)))
           ops (:ops out-b)
           mapn (first (filter #(= "map" (:qualified-name %)) ops))]
+      (is (= ["group-by" "map" "into"] (mapv :qualified-name ops)))
       (is (some? mapn) "map op present in the pipeline")
       (is (= "analyze-nbhd" (:component mapn))
           "component name carried by reference, not resolved")
@@ -499,7 +503,10 @@
                    "              \"b\"))")
           o (first (:outputs (setup/extract-models src)))]
       (is (= "(println (str \"a\"" (:label o)))
-      (is (= src (:raw o))))))
+      (is (= src (:raw o)))
+      (let [long-src (str "(println \"" (apply str (repeat 60 "a")) "\")")]
+        (is (= (str (subs long-src 0 60) " …")
+               (-> (setup/extract-models long-src) :outputs first :label)))))))
 
 (deftest println-inside-a-form-is-not-a-top-level-output
   (testing "only the top level classifies; a nested println rides its parent"
@@ -541,6 +548,14 @@
       (is (contains? (:value p) :data))
       (is (nil? (-> p :value :data))))))
 
+;; On JS a keyword is a string, so both literals spell the old marker.
+(deftest a-literal-that-spells-the-undecodable-marker-keeps-its-data
+  (let [flow (setup/extract-models
+              (str "(def s \"cg.parser.extract/undecodable\")\n"
+                   "(def k :cg.parser.extract/undecodable)"))]
+    (is (= ["cg.parser.extract/undecodable" :cg.parser.extract/undecodable]
+           (mapv #(-> % :value :data) (:parameters flow))))))
+
 (deftest a-def-name-drops-its-metadata
   (testing "^:private and a ^{...} map are not part of the bound name"
     (let [flow (setup/extract-models
@@ -560,6 +575,58 @@
       (is (= :mapv (-> p :value :kind)))
       (is (= {:dimensions [{:label "extend" :cols [:a nil]}]}
              (-> p :value :data))))))
+
+(deftest a-string-literal-decodes-its-escapes
+  (let [flow (setup/extract-models
+              (str "(def sep \"a\\tb\\u0041\\101\\400\\\"\\\\\")\n"
+                   "(run/load-module \"C:\\\\data\\\\m.cg\")"))]
+    (is (= "a\tbAA\\400\"\\" (-> flow :parameters first :value :data)))
+    (is (= "C:\\data\\m.cg" (-> flow :loaded-modules first :path)))))
+
+(deftest a-def-with-a-docstring-takes-the-value-after-it
+  (let [p (-> (setup/extract-models "(def threshold \"Cut-off in meters.\" 10)") :parameters first)]
+    (is (= "threshold" (:name p)))
+    (is (= 10 (-> p :value :data)))))
+
+(deftest a-number-decodes-the-same-on-each-runtime
+  (doseq [[t data] [["10" 10] ["-1.5" -1.5] ["0x10" 16] ["010" :none] ["08" :none]
+                    ["1N" :none] ["1M" :none] ["1/2" :none] ["2r101" :none] ["-0x10" :none]]]
+    (is (= data (-> (setup/extract-models (str "(def p " t ")")) :parameters first :value (get :data :none)))
+        t)))
+
+(deftest a-short-defn-or-def-is-malformed
+  (doseq [[src code] [["(defn)" :defn-malformed] ["(defn f)" :defn-malformed]
+                      ["(defn f \"doc\")" :defn-malformed] ["(defn f {:a 1})" :defn-malformed]
+                      ["(def x ())" :unclassified-top-level-form]]]
+    (is (= [code] (mapv :code (:diagnostics (setup/extract-models src)))) src)))
+
+(deftest a-discarded-form-is-not-read
+  (let [flow (setup/extract-models
+              (str "#_(def x 1)\n"
+                   "(def y #_old 2)\n"
+                   "(def m (item-> :parcels #_(geo/buffer 1) (geo/area)))"))]
+    (is (empty? (:diagnostics flow)))
+    (is (= [["y" 2]] (mapv (juxt :name #(-> % :value :data)) (:parameters flow))))
+    (is (= [["geo/area"]] (mapv #(mapv :qualified-name (:ops %)) (:bindings flow))))))
+
+(deftest a-layers-sink-keeps-its-warning
+  (let [sink (setup/extract-models "(layers-> :parcels (ds/write-csv \"out.csv\"))")
+        bare (setup/extract-models "(layers-> :parcels (ds/transform-crs \"EPSG:2249\"))")]
+    (is (= 1 (count (:sinks sink))))
+    (is (= #{:threading-mode-unimplemented} (diagnostic-codes sink)))
+    (is (= #{:threading-mode-unimplemented :unsinked-top-level-pipeline}
+           (diagnostic-codes bare)))))
+
+(deftest a-param-type-can-be-a-string-or-a-symbol
+  (let [flow (setup/extract-models "(defn ^:op f [^{:type \"table\"} t ^{:type table} u] t)")]
+    (is (= ["table" "table"] (mapv :type (:inputs (operation-by-name flow "f")))))))
+
+(deftest a-require-reads-each-libspec
+  (is (= [["a.b" "x"] ["c.d" "y"]]
+         (mapv (juxt :namespace :alias)
+               (:requires (setup/extract-models "(require '[a.b :as x] '[c.d :as y])")))))
+  (is (= [:require-malformed]
+         (mapv :code (:diagnostics (setup/extract-models "(require '[a.b :as x] c.d)"))))))
 
 (deftest literal-sets-classify-but-do-not-decode
   (testing "a set is a literal, so the def is a parameter"
@@ -747,12 +814,9 @@
       (is (not (contains? (diagnostic-codes flow) :unknown-component))
           "the component is declared in this file, so the check passes")
       (let [op    (operation-by-name flow "compute!")
-            bf    (first (:body op))
-            by-nm (into {} (map (juxt :name identity)) (:bindings bf))]
-        (is (= "analyze-parcels-rd" (:component (get by-nm "analyzed")))
-            "the component rides the binding")
-        (is (nil? (:component (get by-nm "plain")))
-            "an ordinary call carries none")
+            bf    (first (:body op))]
+        (is (= [["plain" nil] ["analyzed" "analyze-parcels-rd"]]
+               (mapv (juxt :name :component) (:bindings bf))))
         (let [nodes (into {} (map (juxt :bound-name identity))
                           (:nodes (:body-graph op)))]
           (is (= "analyze-parcels-rd" (:component (get nodes "analyzed")))
@@ -767,6 +831,7 @@
                      "  (let [analyzed (run/run-component (name scope) {})]\n"
                      "    analyzed))"))
           op   (operation-by-name flow "compute!")]
+      (is (= "run/run-component" (-> op :body first :bindings first :rhs-fn)))
       (is (nil? (-> op :body first :bindings first :component))))))
 
 (deftest a-branching-binding-carries-what-its-branches-call
@@ -782,14 +847,11 @@
                      "                 (:district scope) (compute-district! scope)\n"
                      "                 :else             (compute-full! scope))]\n"
                      "    picked))"))
-          op   (operation-by-name flow "dispatch")
-          by-nm (into {} (map (juxt :name identity))
-                      (:bindings (first (:body op))))]
-      (is (= ["compute-city!" "compute-district!" "compute-full!"]
-             (:rhs-calls (get by-nm "picked")))
-          "every branch's call head, in source order, with `cond` itself dropped")
-      (is (nil? (:rhs-calls (get by-nm "plain")))
-          "an ordinary call keeps the single-callee reading :rhs-fn gives it")
+          op   (operation-by-name flow "dispatch")]
+      (is (= [["plain" nil]
+              ["picked" ["compute-city!" "compute-district!" "compute-full!"]]]
+             (mapv (juxt :name :rhs-calls) (:bindings (first (:body op)))))
+          "every branch's call head, in source order, with `cond` itself dropped; an ordinary call has no :rhs-calls")
       (let [nodes (into {} (map (juxt :bound-name identity))
                         (:nodes (:body-graph op)))]
         (is (= 3 (count (:rhs-calls (get nodes "picked"))))
@@ -843,9 +905,15 @@
     (let [flow (setup/extract-models
                 "(defn ^:op bad {:outputs {:o {:role :row}}} [^:row p] p)")]
       (is (contains? (diagnostic-codes flow) :op-malformed))
-      (let [op (operation-by-name flow "bad")]
-        (is (some? op))
-        (is (nil? (-> op :outputs first :type)))))))
+      (is (= [["o" nil]] (mapv (juxt :name :type) (:outputs (operation-by-name flow "bad"))))))))
+
+(deftest an-op-output-without-a-value-emits-diagnostic
+  (testing "an :outputs key with no config fires :op-malformed at the key"
+    (let [flow (setup/extract-models "(defn ^:op f {:outputs {:a}} [x] x)")
+          d (first (filter #(= :op-malformed (:code %)) (:diagnostics flow)))]
+      (is (re-find #"entry is missing a value" (:message d)))
+      (is (= {:start-line 1 :start-column 25 :end-line 1 :end-column 27}
+             (:location d))))))
 
 (deftest op-duplicate-names-detected
   (testing "two ops with the same name yield :duplicate-operation-name"
@@ -1051,9 +1119,9 @@
 
 (deftest boolean-literals-classify
   (testing "true/false parse as bool_lit and decode (the sym_lit check never fired)"
-    (let [flow (setup/extract-models "(def flag true)")]
-      (is (= :boolean (-> flow :parameters first :value :kind)))
-      (is (true? (-> flow :parameters first :value :data))))))
+    (let [flow (setup/extract-models "(def yes true)\n(def no false)")]
+      (is (= [{:kind :boolean :raw "true" :data true} {:kind :boolean :raw "false" :data false}]
+             (mapv :value (:parameters flow)))))))
 
 (deftest opaque-blocks-flag-gated
   (testing "rejected forms record OpaqueBlocks only when :opaque-blocks is set"
@@ -1390,5 +1458,42 @@
         (is (some? p) src)
         (is (not (contains? p :fields)) src)))))
 
-#?(:cljs (-> (setup/init!)
-             (.then (fn [_] (run_tests_and_exit_BANG_ "cg.parser.extract-test")))))
+#?(:cljs
+   (defn- record-calls!
+     "Wrap the method `k` of `proto` so that each call adds its receiver to
+      the atom `!seen`. Returns a fn that puts the method back."
+     [proto k !seen]
+     (let [f (aget proto k)]
+       (aset proto k (fn [& args] (this-as self (swap! !seen conj self) (.apply f self args))))
+       (fn [] (aset proto k f)))))
+
+#?(:cljs
+   (deftest extract-models-frees-each-tree-and-keeps-one-parser
+     (let [!parsers (atom [])
+           !trees (atom [])
+           restore-parse (record-calls! (.-prototype Parser) "parse" !parsers)
+           restore-delete (record-calls! (.-prototype Tree) "delete" !trees)]
+       (-> (parser/extract-models "(def a 1)")
+           (.then (fn [_] (parser/extract-models "(def b 2)")))
+           (.finally (fn [] (restore-parse) (restore-delete)))
+           (.then (fn [_]
+                    (is (= 2 (count @!parsers)))
+                    (is (= 1 (count (set @!parsers))))
+                    (is (= 2 (count @!trees)))))))))
+
+;; The footer runs an init with a missing grammar before the init of the
+;; suite. Parser.init replaces the wasm module of web-tree-sitter, so this
+;; cannot run inside a test.
+#?(:cljs (def ^:private !inits (atom [])))
+
+#?(:cljs
+   (deftest a-failed-init-is-not-cached
+     (is (= [:failed :ok] @!inits))))
+
+#?(:cljs (-> (backend/init! {:grammar-wasm "/no/such.wasm"})
+             (.then (fn [_] :ok) (fn [_] :failed))
+             (.then (fn [r] (swap! !inits conj r) (setup/init!)))
+             (.then (fn [_] :ok) (fn [_] :failed))
+             (.then (fn [r]
+                      (swap! !inits conj r)
+                      (run_tests_and_exit_BANG_ "cg.parser.extract-test")))))
