@@ -35,11 +35,11 @@
   (try
     (testing "an alias that a require in a .cg module registered"
       (macros/register-alias! 'macros-test-registered 'cg.geo)
-      (is (= 'cg.geo (macros/resolve-alias 'macros-test-registered))))
+      (is (= 'cg.geo (#'macros/resolve-alias 'macros-test-registered))))
     (testing "an alias of the Clojure namespace in *ns*"
       (binding [*ns* (the-ns 'cg.macros-test)]
-        (is (= 'cg.macros (macros/resolve-alias 'macros)))))
+        (is (= 'cg.macros (#'macros/resolve-alias 'macros)))))
     (testing "an unknown symbol comes back as itself"
-      (is (= 'macros-test-unknown (macros/resolve-alias 'macros-test-unknown))))
+      (is (= 'macros-test-unknown (#'macros/resolve-alias 'macros-test-unknown))))
     (finally
       (swap! @#'cg.macros/namespace-aliases dissoc 'macros-test-registered))))

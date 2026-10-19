@@ -329,13 +329,11 @@ re-run this task, then re-run the cg.geo tests."
    :task
    (let [src (or (System/getenv "WASMTS_REGISTRY")
                  "../../wasmts/registry.edn")
-         meta-dest "resources/wasmts-registry.meta.edn"
          clj-dest "src/cg/ts_registry.cljc"]
      (when-not (fs/exists? src)
        (println (str "wasmts registry not found at " src))
        (println "Set WASMTS_REGISTRY=/path/to/registry.edn or check the wasmts checkout.")
        (System/exit 1))
-     (fs/create-dirs "resources")
      (let [wasmts-dir (-> src fs/path fs/parent str)
            jj-result (tasks/shell {:continue true :out :string :err :string :dir wasmts-dir}
                                   "jj" "log" "-r" "@" "--no-graph"
@@ -343,10 +341,6 @@ re-run this task, then re-run the cg.geo tests."
            rev (if (zero? (:exit jj-result))
                  (str/trim (:out jj-result))
                  "(jj revision unavailable)")]
-       (spit meta-dest
-             (str "{:source " (pr-str src) "\n"
-                  " :synced-at " (pr-str (str (java.time.Instant/now))) "\n"
-                  " :wasmts-revision " (pr-str rev) "}\n"))
        ;; A cljc mirror, because squint has no slurp at expansion time.
        ;; Quoted, because the registry holds bare symbols. One sorted entry
        ;; for each line, because the source prints one key for each line.
@@ -367,7 +361,6 @@ re-run this task, then re-run the cg.geo tests."
                     "(def registry\n  '{"
                     (str/join "\n    " (map (fn [[k v]] (str (compact k) " " (compact v))) entries))
                     "})\n"))))
-     (println "Meta:    " meta-dest)
      (println "Mirror:  " clj-dest)
      (tasks/run 'ts:kondo))}
 
@@ -386,13 +379,12 @@ refresh the imported copies:
             "(load-file \"scripts/gen_kondo_hook.clj\") (gen-kondo-hook/-main)")}
 
   ts:check
-  {:doc "Validate that cg.geo can expand cleanly + report mint/registration stats"
+  {:doc "Validate that cg.geo can expand cleanly + report mint stats"
    :task
    (clojure "-M" "-e"
             "(require '[cg.geo] :reload)
-             (let [{:keys [minted registered by-package]} (cg.geo/check-report)]
+             (let [{:keys [minted by-package]} (cg.ts-macros/check-data)]
                (println (str \"Minted defns:        \" minted))
-               (println (str \"Registered ops:      \" registered))
                (println \"By package:\")
                (doseq [[pkg n] (sort by-package)]
                  (println (format \"  %-40s %4d\" pkg n))))")}

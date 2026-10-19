@@ -11,26 +11,12 @@
             [clojure.core.async :as async]
             [clojure.string]
             [cg-app.backend.api :as api]
-            [cg.feature :as feature]
-            [cg.macros :refer [item-> coll->]]
             [cg.geo :as geo]
             [cg.trace :as trace]
             [charred.api :as charred]
             [ring.core.protocols :as protocols]))
 
 (set! *warn-on-reflection* true)
-
-(def sample-point
-  "A sample point feature for testing."
-  (feature/make-feature
-    (feature/point 0 0)
-    {:id "p1" :name "Origin"}))
-
-(def sample-polygon
-  "A sample polygon feature for testing."
-  (feature/make-feature
-    (feature/polygon [[0 0] [10 0] [10 10] [0 10] [0 0]])
-    {:id "poly1" :name "Square"}))
 
 (defn mock-request
   "Create a mock Ring request with given body."
@@ -53,122 +39,8 @@
         (finally (api/session-delete (req nil)))))))
 
 (deftest health-endpoint-test
-  (testing "Health endpoint returns OK status"
-    (let [response (api/health {})]
-      (is (= 200 (:status response)))
-      (is (= "ok" (get-in response [:body :status])))
-      (is (= "cg-app-backend" (get-in response [:body :service])))
-      (is (= "jvm" (get-in response [:body :backend]))))))
-
-(deftest execute-simple-buffer-test
-  (testing "Execute simple buffer operation via CG DSL"
-    (let [model (item-> :features
-                  (geo/buffer 100))
-          bindings {:features [sample-point]}
-          request (mock-request {:flow-graph model
-                                 :bindings bindings})
-          response (api/execute-model request)]
-      (is (= 200 (:status response))
-          "Backend should execute successfully")
-      (is (contains? (:body response) :results)
-          "Response should contain results")
-      (let [results (get-in response [:body :results])]
-        (is (seq results)
-            "Results should not be empty")
-        (is (= 1 (count results))
-            "Should have one buffered feature")))))
-
-(deftest execute-buffer-simplify-pipeline-test
-  (testing "Execute buffer + simplify pipeline via CG DSL"
-    (let [model (item-> :polygons
-                  (geo/buffer 50)
-                  (geo/simplify 1.0))
-          bindings {:polygons [sample-polygon]}
-          request (mock-request {:flow-graph model
-                                 :bindings bindings})
-          response (api/execute-model request)]
-      (is (= 200 (:status response)))
-      (is (seq (get-in response [:body :results]))
-          "Should return buffered and simplified results"))))
-
-(deftest execute-collection-union-test
-  (testing "Execute collection-level union via CG DSL"
-    (let [poly1 (feature/make-feature
-                  (feature/polygon [[0 0] [5 0] [5 5] [0 5] [0 0]])
-                  {:id "p1"})
-          poly2 (feature/make-feature
-                  (feature/polygon [[3 3] [8 3] [8 8] [3 8] [3 3]])
-                  {:id "p2"})
-          model (coll-> :features
-                  (geo/union))
-          bindings {:features [poly1 poly2]}
-          request (mock-request {:flow-graph model
-                                 :bindings bindings})
-          response (api/execute-model request)]
-      (is (= 200 (:status response)))
-      (let [result (first (get-in response [:body :results]))]
-        (is (map? result)
-            "Union should return a single merged feature")))))
-
-(deftest execute-model-missing-bindings-test
-  (testing "Execute model with missing bindings returns error"
-    (let [model (item-> :missing-data
-                  (geo/buffer 100))
-          bindings {}
-          request (mock-request {:flow-graph model
-                                 :bindings bindings})
-          response (api/execute-model request)]
-      (is (= 500 (:status response))
-          "Should return error for missing bindings")
-      (is (contains? (:body response) :error)))))
-
-(deftest transform-geometry-buffer-test
-  (testing "Direct geometry transformation - buffer"
-    (let [request (mock-request {:geometry sample-point
-                                 :operation :buffer
-                                 :params {:distance 10}})
-          response (api/transform-geometry request)]
-      (is (= 200 (:status response)))
-      (is (contains? (:body response) :result)
-          "Should return transformed geometry"))))
-
-(deftest transform-geometry-simplify-test
-  (testing "Direct geometry transformation - simplify"
-    (let [request (mock-request {:geometry sample-polygon
-                                 :operation :simplify
-                                 :params {:tolerance 0.5}})
-          response (api/transform-geometry request)]
-      (is (= 200 (:status response)))
-      (is (contains? (:body response) :result)))))
-
-(deftest transform-geometry-union-test
-  (testing "Direct geometry transformation - union"
-    (let [request (mock-request {:geometry sample-polygon
-                                 :operation :union
-                                 :params {:other sample-polygon}})
-          response (api/transform-geometry request)]
-      (is (= 200 (:status response)))
-      (is (contains? (:body response) :result)))))
-
-(deftest transform-geometry-unknown-operation-test
-  (testing "Unknown operation returns error in result"
-    (let [request (mock-request {:geometry sample-point
-                                 :operation :unknown-op
-                                 :params {}})
-          response (api/transform-geometry request)]
-      (is (= 200 (:status response)))
-      (is (contains? (get-in response [:body :result]) :error)
-          "Should return error for unknown operation"))))
-
-(deftest project-geometry-not-implemented-test
-  (testing "Projection endpoint returns 501 not implemented"
-    (let [request (mock-request {:geometry sample-point
-                                 :from-crs "EPSG:4326"
-                                 :to-crs "EPSG:3857"})
-          response (api/project-geometry request)]
-      (is (= 501 (:status response))
-          "Projection not yet implemented")
-      (is (contains? (:body response) :error)))))
+  (is (= {:status 200 :body {:status "ok"}}
+         (api/health {}))))
 
 (deftest execute-code-def-ending-cg-file-test
   (testing "execute-code runs a def-ending .cg file with a trailing ^:cgproj overlay"
@@ -230,8 +102,7 @@
     (let [fake-id "test-live-execution"
           ch (async/chan 1)]
       (swap! api/executions assoc fake-id
-             {:id fake-id :chan ch :status :running
-              :started-at (System/currentTimeMillis)})
+             {:id fake-id :chan ch :status :running})
       (try
         (let [response (api/execution-start (mock-request {:code "(ignored)"}))]
           (is (= 409 (:status response)))

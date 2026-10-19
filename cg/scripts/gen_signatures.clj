@@ -15,7 +15,7 @@
 (def runtime-nses
   "Namespaces whose load triggers the register-operation! calls. Loading
    them on JVM is fine; the parser never loads them."
-  '[cg.feature cg.dataset cg.dataset.agg cg.geo cg.run cg.macros])
+  '[cg.feature cg.dataset cg.dataset.agg cg.run])
 
 (def generated-path "src/cg/dsl/signatures_generated.cljc")
 

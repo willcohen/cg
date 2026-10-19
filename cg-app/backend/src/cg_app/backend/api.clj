@@ -101,8 +101,6 @@
            (fn [path & opts]
              (apply slurp (resolve-cg-path path) opts)))
     {:sci-ctx ctx
-     :files []
-     :var-meta {}
      :last-access (now-ms)}))
 
 (defn- touch-session!
@@ -117,8 +115,7 @@
              (into {} (filter (fn [[_ s]] (> (:last-access s) cutoff)) m))))))
 
 (defn- get-session-id [request]
-  (or (get-in request [:headers "x-session-id"])
-      (get-in request [:params :session-id])))
+  (get-in request [:headers "x-session-id"]))
 
 (defn- get-session! [request]
   (expire-sessions!)
@@ -232,9 +229,7 @@
 
 (defn health [_request]
   {:status 200
-   :body {:status "ok"
-          :service "cg-app-backend"
-          :backend "jvm"}})
+   :body {:status "ok"}})
 
 (defn- deref-if-var
   "The value of `v` when it is a SCI Var, else `v`. eval-cg of a .cg file that
@@ -298,8 +293,7 @@
 
 (defonce executions
   ;; id -> {:id :chan :status (:running, :complete or :failed) :result
-  ;;        :session-id :started-at :ended-at}. Public, because tests seed a
-  ;; live entry for the 409 path.
+  ;;        :ended-at}. Public, because tests seed a live entry for the 409 path.
   (atom {}))
 
 (def ^:private execution-ttl-ms
@@ -363,9 +357,7 @@
           ch (async/chan (async/sliding-buffer 4096))
           entry {:id id
                  :chan ch
-                 :status :running
-                 :session-id (get-session-id request)
-                 :started-at (now-ms)}
+                 :status :running}
           [_ new] (swap-vals! executions
                               (fn [m] (if (live-execution m) m (assoc m id entry))))]
       (if-not (contains? new id)
@@ -434,54 +426,6 @@
                       :status (name (:status e))}
                (:result e) (assoc :result (:result e)))})))
 
-(defn execute-model
-  "DEPRECATED: Use execute-code instead."
-  [request]
-  (try
-    (let [body (:body request)
-          flow-graph (walk/keywordize-keys (:flow-graph body))
-          bindings (walk/keywordize-keys (or (:bindings body) {}))
-          opts (walk/keywordize-keys (or (:opts body) {}))
-          _ (log/info "Executing Flow Graph with" (count (:nodes flow-graph)) "nodes")
-          results (run/run-model flow-graph bindings opts)
-          result-count (if (coll? results) (count results) 1)]
-      (log/info "Execution successful, produced" result-count "results")
-      {:status 200
-       :body {:status "success"
-              :count result-count
-              :results results
-              :message (str "Executed successfully, produced " result-count " result(s)")}})
-    (catch Exception e
-      (log/error e "Failed to execute Flow Graph")
-      {:status 500
-       :body {:error (.getMessage e)
-              :type (-> e class .getName)}})))
-
-(defn transform-geometry
-  "Transform geometry using cg.geo functions."
-  [request]
-  (try
-    (let [{:keys [geometry operation params]} (:body request)
-          _ (log/info "Transforming geometry with operation:" operation)
-          result (case operation
-                   :buffer (geo/buffer geometry (:distance params))
-                   :simplify (geo/simplify geometry (:tolerance params))
-                   :union (geo/union geometry (:other params))
-                   {:error "Unknown operation"})]
-      {:status 200
-       :body {:result result}})
-    (catch Exception e
-      (log/error e "Failed to transform geometry")
-      {:status 500
-       :body {:error (.getMessage e)}})))
-
-(defn project-geometry
-  "Returns 501: projection is not implemented."
-  [_request]
-  {:status 501
-   :body {:error "Projection not yet implemented"
-          :message "CRS transformation will be available in future version"}})
-
 (defn session-create
   "POST /api/session/create - Create a new isolated session."
   [_request]
@@ -507,34 +451,26 @@
 
 (defn session-load
   "POST /api/session/load: evaluates .cg code in the session. The body has
-   `code` (with an optional `filename`), or `path` for a file on the server."
+   `code` and an optional `filename`."
   [request]
   (try
     (let [sess (get-session! request)
           sid (get-session-id request)
-          {:keys [code path filename]} (:body request)
-          [content label] (cond
-                            code [code (or filename "<eval>")]
-                            path [(slurp (resolve-cg-path path)) path]
-                            :else (throw (ex-info "Provide 'code' or 'path'" {:status 400})))
+          {:keys [code filename]} (:body request)
+          _ (when-not code
+              (throw (ex-info "Provide 'code'" {:status 400})))
+          label (or filename "<eval>")
           _ (log/info "Loading" label "in session" sid)
           ctx (:sci-ctx sess)
           ;; Bind the entry filename (basename) for the eval. A module file can
           ;; then tell, through cg.run/session-file, whether it is the opened
           ;; file or a load-module dependency.
           _ (binding [run/*session-file* (last (str/split label #"/"))]
-              (run/eval-cg* ctx (str "(do " content ")")))
-          vars (user-vars ctx)
-          var-meta-map (into {} (map (fn [v] [(:qualified v) v]) vars))]
-      (swap! sessions update sid
-             (fn [s]
-               (-> s
-                   (update :files #(vec (distinct (conj % label))))
-                   (update :var-meta merge var-meta-map))))
+              (run/eval-cg* ctx (str "(do " code ")")))
+          vars (user-vars ctx)]
       (log/info "Loaded" label "- found" (count vars) "user vars")
       {:status 200
        :body {:status "ok"
-              :files (get-in @sessions [sid :files])
               :vars vars}})
     (catch Exception e
       (log/error e "Failed to load .cg code")
@@ -597,27 +533,5 @@
                       :returned-rows (ds/row-count served))}))
     (catch Exception e
       (log/error e "Failed to get data for var")
-      {:status (or (:status (ex-data e)) 500)
-       :body {:error (.getMessage e)}})))
-
-(defn session-source
-  "POST /api/session/source - Return source file + line for a var."
-  [request]
-  (try
-    (let [sess (get-session! request)
-          {:keys [var]} (:body request)
-          ctx (:sci-ctx sess)
-          env @(:env ctx)
-          [ns-str name-str] (if-let [[_ n s] (re-matches #"(.+)/(.+)" var)]
-                              [n s]
-                              ["user" var])
-          sci-var (get-in env [:namespaces (symbol ns-str) (symbol name-str)])
-          m (when (instance? sci.lang.Var sci-var)
-              (meta sci-var))]
-      {:status 200
-       :body {:file (:file m)
-              :line (:line m)
-              :column (:column m)}})
-    (catch Exception e
       {:status (or (:status (ex-data e)) 500)
        :body {:error (.getMessage e)}})))

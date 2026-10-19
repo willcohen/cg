@@ -136,11 +136,10 @@
       own)))
 
 (defn- thr-binding->graph
-  "A threading_macro binding -> #js {:name :nodes :input :mode}. A node id is
-   `<unq-name>-<n>`, the id that the runtime uses."
+  "A threading_macro binding -> #js {:nodes :input :mode :location
+   :is-template?}. A node id is `<unq-name>-<n>`, the id that the runtime uses."
   [b]
-  (let [bname (or (g b "name") "anon")
-        ops   (or (g b "ops") #js [])
+  (let [ops   (or (g b "ops") #js [])
         nodes (.map ops
                     (fn [op i]
                       #js {:id (str (unq (g op "qualified-name")) "-" (inc i))
@@ -151,7 +150,7 @@
                            ;; :emits-level is dataset, groups or map.
                            :emits-level (g op "emits-level")
                            :visual (g op "visual")}))]
-    #js {:name bname :nodes nodes
+    #js {:nodes nodes
          :input (g b "input") :mode (g b "mode")
          :location (form-loc b) :is-template? (g b "is-template")}))
 
@@ -259,7 +258,6 @@
                             :fields fields
                             :head (str nm)
                             :classification "param"
-                            :param? true
                             :chip? true
                             :source-preview raw
                             :call-site-location (g p "location")}}))))
@@ -352,12 +350,8 @@
                                     :collapsed-width (code-box-width (block-head-text b))
                                     :classification "block"
                                     :block? true
-                                    :block-kind (g b "kind")
-                                    ;; apply-collapse in canvas.cljs keys on
-                                    ;; :has-body?. :expanded? makes CnNode
-                                    ;; stretch the card to the body.
+                                    ;; apply-collapse in canvas.cljs keys on :has-body?.
                                     :has-body? true
-                                    :expanded? true
                                     :body-handle-x (+ body-x-offset (/ block-width 2))
                                     :source-preview (g b "raw")
                                     :call-site-location (g b "location")}}
@@ -380,7 +374,6 @@
                                                    :classification (if expr? "opaque" "block-body")
                                                    :opaque? expr?
                                                    :block-body? true
-                                                   :body-kind (g r "kind")
                                                    :source-preview (g r "raw")
                                                    :call-site-location (g r "location")}})))]
                 (.concat #js [container] kids)))))
@@ -533,9 +526,7 @@
                               :head fn-name
                               :icon (op-icon fn-name)
                               :classification "threading"
-                              :kind "defop-body-step"
                               :model-name body-model
-                              :raw-id raw
                               :divable? divable?
                               :chip? chip?
                               :pinned? (boolean vp)
@@ -558,8 +549,7 @@
                           :source call-site-pid
                           :sourceHandle "body-in"
                           :target (ns-id body-model first-raw)
-                          :sourcePosition "bottom"
-                          :data #js {:kind "defop-body-entry"}}]
+                          :sourcePosition "bottom"}]
                 #js [])
         internal (.map bedges
                        (fn [e i]
@@ -567,15 +557,13 @@
                                to   (strip-colon (str (g e "to")))]
                            #js {:id (str body-model "__body-e" i "-" from "-" to)
                                 :source (ns-id body-model from)
-                                :target (ns-id body-model to)
-                                :data #js {:kind "defop-body-edge"}})))
+                                :target (ns-id body-model to)})))
         exit (if last-raw
                #js [#js {:id (str call-site-pid "__body-exit")
                          :source (ns-id body-model last-raw)
                          :target call-site-pid
                          :targetHandle "body-out"
-                         :targetPosition "top"
-                         :data #js {:kind "defop-body-exit"}}]
+                         :targetPosition "top"}]
                #js [])]
     (.concat entry internal exit)))
 
@@ -669,7 +657,6 @@
                     (aset d "defop-name" (g defop "name"))
                     (aset d "ports" (node-ports defop))
                     (aset d "has-body?" true)
-                    (aset d "expanded?" true)
                     (aset d "body-handle-x" (+ body-x-offset (/ bw 2)))
                     (.concat #js [nd] (body-subnodes defop pid bw pid registry true))))))))
 
@@ -940,10 +927,8 @@
                            :report-spec (when report (aget report 1))
                            :unresolved? (unresolved-at? unres (g node "location"))
                            :defop-name (when defop (g defop "name"))
-                           :ports (when defop (node-ports defop))
                            :side-ports ports
                            :has-body? (boolean bg)
-                           :expanded? (boolean bg)
                            :collapsed-width (when bg (+ room (step-box-width label sub false ports)))
                            :collapsed-height box-h
                            :body-handle-x (when bw (+ body-x-offset (/ bw 2)))
@@ -990,13 +975,11 @@
                     :icon icon
                     :side-ports ports
                     :classification "threading"
-                    :kind "defop-body-step"
                     :in-thread? true
                     :thread-index i
                     :per-row? (per-row-op? qn registry)
                     :pinned? (boolean vp)
                     :model-name prefix
-                    :raw-id raw
                     :divable? (> (.-length inner) 0)
                     :dive-names (.map inner (fn [d] (g d "name")))
                     :emits-level (g bn "emits-level")
@@ -1075,7 +1058,7 @@
                    :type (if (= level "groups") "cnGroupsEdge" "cnThread")
                    :className (str "cg-thread-line mode-" (or mode "none")
                                    (when level (str " cg-edge-" level)))
-                   :data #js {:kind "thread-line" :mode mode :level level}})))))
+                   :data #js {:mode mode}})))))
 
 (defn- step-levels
   [steps]
@@ -1117,7 +1100,7 @@
 
 (defn- side-line-edges
   "A thin line from each card that a step names to the port that takes it."
-  [steps producers model-name]
+  [steps producers]
   (let [lanes (lane-index (.flatMap steps
                                     (fn [n] (.flatMap (step-ports n)
                                                       (fn [p] (aget p "sources"))))))]
@@ -1136,10 +1119,7 @@
                                              :targetHandle (aget p "id")
                                              :type "cnLane"
                                              :className "cg-side-line"
-                                             :data #js {:kind "op-arg"
-                                                        :lane (aget lanes ref)
-                                                        :producer ref
-                                                        :consumer model-name}}))))))))))
+                                             :data #js {:lane (aget lanes ref)}}))))))))))
 
 (defn- model-thread
   "The frame, steps, thread line and side lines of one top-level thread."
@@ -1169,7 +1149,7 @@
                                   :is-template? (g graph "is-template?")})]
     #js {:nodes (.concat #js [frame] kids)
          :edges (.concat (thread-line-edges frame-id (step-ids kids) mode (step-levels kids))
-                         (side-line-edges steps producers nm))}))
+                         (side-line-edges steps producers))}))
 
 (defn- op-frame-inputs
   "The inputs of an op that its steps can name: each input but the one that
@@ -1217,7 +1197,7 @@
     #js {:nodes (.concat #js [frame] steps)
          :edges (.concat (thread-line-edges frame-id (.map steps (fn [s] (aget s "id")))
                                             mode (step-levels steps))
-                         (side-line-edges steps producers prefix))}))
+                         (side-line-edges steps producers))}))
 
 (defn- model-body-edges
   "The body subgraph edges for each op call-site in each model."
@@ -1283,9 +1263,7 @@
                               e #js {:id (str "be-" ref "-" bn)
                                      :source (g p "id")
                                      :sourceHandle (g p "handle")
-                                     :target (str "binding-" bn)
-                                     :data #js {:kind "binding-ref"
-                                                :producer ref :consumer bn}}]
+                                     :target (str "binding-" bn)}]
                           ;; A line out of a frame starts inside it, under the
                           ;; frame unless it is raised.
                           (when (g p "handle") (aset e "zIndex" 1))
@@ -1308,8 +1286,7 @@
                             :target fid
                             :targetHandle "src-in"
                             :type "cnSource"
-                            :className (str "cg-thread-line mode-" (or (g graph "mode") "none"))
-                            :data #js {:kind "thread-source" :producer input}}]
+                            :className (str "cg-thread-line mode-" (or (g graph "mode") "none"))}]
                   #js [])))))
 
 (defn- id-set
@@ -1386,7 +1363,6 @@
                     :classification "model-head"
                     :model-head? true
                     :model-name body-model
-                    :defop-name (g defop "name")
                     :ports (node-ports defop)
                     :call-site-location (g in0 "location")
                     :source-path (g (g defop "source-module") "path")}}))
@@ -1429,14 +1405,11 @@
                                          :head fn-name
                                          :icon (when-not inner (op-icon fn-name))
                                          :classification "threading"
-                                         :kind "defop-body-step"
                                          :model-name body-model
-                                         :raw-id raw
                                          :is-defop? (boolean inner)
                                          :defop-name (when inner (g inner "name"))
                                          :ports (when inner (node-ports inner))
                                          :has-body? (boolean inner)
-                                         :expanded? (boolean inner)
                                          :divable? divable?
                                          :chip? chip?
                                          :dive-names (when branches
@@ -1468,9 +1441,7 @@
             head-edge  (if first-raw
                          #js [#js {:id (str body-model dive-head-suffix "-e")
                                    :source (aget head "id")
-                                   :target (ns-id body-model first-raw)
-                                   :data #js {:kind "model-head"
-                                              :model-name body-model}}]
+                                   :target (ns-id body-model first-raw)}]
                          #js [])
             chain      (.map bedges
                              (fn [e i]
@@ -1478,9 +1449,7 @@
                                      to   (strip-colon (str (g e "to")))]
                                  #js {:id (str body-model "__e" i "-" from "-" to)
                                       :source (ns-id body-model from)
-                                      :target (ns-id body-model to)
-                                      :data #js {:kind "internal"
-                                                 :model-name body-model}})))
+                                      :target (ns-id body-model to)})))
             inner-edges (.flatMap bnodes
                                   (fn [bn]
                                     (let [inner (step-defop bn registry)]
@@ -1512,13 +1481,11 @@
                     :data #js {:label head
                                :head head
                                :classification "ghost"
-                               :kind "ghost"
                                :model-name ghost-id
                                :is-defop? true
                                :defop-name (g defop "name")
                                :body-handle-x (+ body-x-offset (/ bw 2))
-                               :has-body? true
-                               :expanded? true}}]
+                               :has-body? true}}]
         #js {:nodes (.concat #js [nd] (body-subnodes defop ghost-id bw ghost-id registry false))
              :edges (body-subedges defop ghost-id ghost-id)})
       #js {:nodes #js [#js {:id ghost-id
@@ -1528,6 +1495,5 @@
                                        :head fn-name
                                        :icon (op-icon (str fn-name))
                                        :classification "ghost"
-                                       :kind "ghost"
                                        :model-name ghost-id}}]
            :edges #js []})))

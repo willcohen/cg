@@ -196,20 +196,6 @@
             (apply println "ERROR:" args))
      :cljs (apply js/console.error args)))
 
-(defn exception-message
-  "Return the message of an exception or error."
-  [e]
-  #?(:clj (.getMessage ^Throwable e)
-     :cljs (.-message e)))
-
-(defn throw-ex
-  "Throw an ex-info with a message and an optional data map."
-  ([msg]
-   (throw-ex msg {}))
-  ([msg data]
-   #?(:clj (throw (ex-info msg data))
-      :cljs (throw (ex-info msg data)))))
-
 (defn deep-merge
   "Deep merge maps recursively."
   [& maps]

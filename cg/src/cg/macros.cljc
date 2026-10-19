@@ -41,7 +41,7 @@
   [alias-sym full-ns-sym]
   (swap! namespace-aliases assoc alias-sym full-ns-sym))
 
-(defn resolve-alias
+(defn- resolve-alias
   "The full namespace for an alias, or `ns-sym` itself when it is not an
   alias. Registered aliases come first, then the aliases of *ns* (JVM only)."
   [ns-sym]
@@ -63,7 +63,7 @@
   [operation-name counter]
   (util/as-kw (str (util/unq-name operation-name) "-" counter)))
 
-(defn map-positional-to-named
+(defn- map-positional-to-named
   "Map positional args to the names in `param-schema`. With no schema, the
   result is {} for no args, {:value x} for one arg and {:args [...]} for more."
   [args param-schema]
@@ -282,7 +282,7 @@
                             opts)}
       component (assoc :component component))))
 
-(defn extract-config-overrides
+(defn- extract-config-overrides
   "Split `params` into {:config ... :params ...}. The config keys are
   :parallelism, :timeout-ms, :buffer-size and :batch-size."
   [params]
@@ -296,7 +296,7 @@
        :params op-params})
     {:config {} :params params}))
 
-(defn build-source-node [data-ref]
+(defn- build-source-node [data-ref]
   {:type :source
    :id (util/as-kw (str (util/unq-name data-ref) "-src"))
    ;; On :cljs run-model matches data-ref against string binding keys. On
@@ -331,7 +331,7 @@
             next-level (or (:emits-level n) current)]
         (recur (rest nodes) next-level (conj acc n'))))))
 
-(defn build-operation-node
+(defn- build-operation-node
   "Build an operation node from a parsed operation. A registered group gives a
    :type :group node with its expansion."
   [operation mode node-id]
@@ -373,18 +373,18 @@
           map-op? (assoc :component (str (:value params)))
           (:component operation) (assoc :component (:component operation)))))))
 
-(defn build-sink-node [output-binding]
+(defn- build-sink-node [output-binding]
   {:type :sink
    :id :result
    :output-binding output-binding})
 
-(defn build-edges [node-ids]
+(defn- build-edges [node-ids]
   (mapv (fn [from to]
           {:from from :to to :type :data-flow})
         (butlast node-ids)
         (rest node-ids)))
 
-(defn detect-platform []
+(defn- detect-platform []
   #?(:clj :jvm
      :cljs :javascript))
 
@@ -392,16 +392,17 @@
    (defn- model->create-call
      "The return value of a threading macro on :cljs: an object whose toString
       gives the call cg$model.get_staged_model(N). `args-js` is the JS array of
-      the rung args that lift-rung-args took out of the model."
-     ([model-map] (model->create-call model-map nil))
-     ([model-map args-js]
-      (let [id (model/stage-model! model-map)
-            call (if args-js
-                   (str "cg$model.get_staged_model(" id ", " args-js ")")
-                   (str "cg$model.get_staged_model(" id ")"))]
-        (js-obj "toString" (fn [] call))))))
+      the rung args that lift-rung-args took out of the model. The macro does
+      not return a syntax-quoted form, because squint cannot evaluate one at
+      run time (squint issue 822)."
+     [model-map args-js]
+     (let [id (model/stage-model! model-map)
+           call (if args-js
+                  (str "cg$model.get_staged_model(" id ", " args-js ")")
+                  (str "cg$model.get_staged_model(" id ")"))]
+       (js-obj "toString" (fn [] call)))))
 
-(defn build-threading-model
+(defn- build-threading-model
   "Build the model map for item->, coll-> or table-> (`mode` :item, :coll or
    :table). `annotate?` runs annotate-operand-levels; a last map of several
    `operations` is the config."
@@ -424,18 +425,6 @@
     {:nodes (vec (concat [source-node] op-nodes [sink-node]))
      :edges edges
      :config (merge {:platform (detect-platform)} config)}))
-
-;; Because squint calls a `:macros` entry as (f &form &env & args), these fns
-;; take two leading params. squint (from 0.14.200) emits no runtime binding
-;; for a `defmacro`.
-#?(:cljs
-   (do
-     (defn item->* [_form _env data-ref & operations]
-       (model->create-call (build-threading-model :item false data-ref operations)))
-     (defn coll->* [_form _env data-ref & operations]
-       (model->create-call (build-threading-model :coll false data-ref operations)))
-     (defn table->* [_form _env data-ref & operations]
-       (model->create-call (build-threading-model :table true data-ref operations)))))
 
 ;; A printer of compiler forms as source text, for the JS runtime. A :macros
 ;; entry cannot build new forms from the compiler's cljs.core forms.
@@ -512,7 +501,7 @@
        "True for a rung whose arguments are not values: a when-row form,
         and filter with a predicate map (parse-when-row-form reads both)."
        [h items]
-       (or (contains? #{"when-row" "cg.macros/when-row" "when"} h)
+       (or (contains? #{"when-row" "when"} h)
            (and (= "filter" h) (= "map" (form-kind (nth items 1 nil))))))
 
      (defn- lift-rung-args
@@ -571,8 +560,8 @@
 
 ;; The JVM expansion syntax-quotes model/create-model, which resolves to
 ;; cg.model/create-model. An unqualified symbol fails, because the macro
-;; output runs in the user namespace. The CLJS expansion emits no symbols
-;; (see model->create-call).
+;; output runs in the user namespace. squint emits no code for a defmacro.
+;; On JS, cg.run gives threading* to squint as these macros.
 
 (defmacro item->
   "Process each item independently. Returns a model of the computation. A
@@ -580,9 +569,7 @@
 
     (item-> buildings (buffer 100) (simplify 0.1) {:parallelism 8})"
   [data-ref & operations]
-  (let [model-map (build-threading-model :item false data-ref operations)]
-    #?(:clj `(model/create-model ~model-map)
-       :cljs (model->create-call model-map))))
+  `(model/create-model ~(build-threading-model :item false data-ref operations)))
 
 (defmacro coll->
   "Process the collection as a whole. Returns a model of the computation. A
@@ -590,9 +577,7 @@
 
     (coll-> buildings (union-all))"
   [data-ref & operations]
-  (let [model-map (build-threading-model :coll false data-ref operations)]
-    #?(:clj `(model/create-model ~model-map)
-       :cljs (model->create-call model-map))))
+  `(model/create-model ~(build-threading-model :coll false data-ref operations)))
 
 (defmacro table->
   "Process a dataset with table operations. Returns a model of the
@@ -600,6 +585,4 @@
 
     (table-> buildings (filter :height #(> % 50)) (spatial-join parcels))"
   [data-ref & operations]
-  (let [model-map (build-threading-model :table true data-ref operations)]
-    #?(:clj `(model/create-model ~model-map)
-       :cljs (model->create-call model-map))))
+  `(model/create-model ~(build-threading-model :table true data-ref operations)))

@@ -97,53 +97,49 @@
 
 #?(:clj
    (defn create-cg-context
-     "Make a new SCI context for .cg evaluation. `opts` merges into the
-  sci/init map, to add namespaces or classes."
-     ([]
-      (create-cg-context {}))
-     ([opts]
-      (let [ctx (sci/init (merge {:namespaces (merge {'clojure.core {'println println
-                                                                     'print print
-                                                                     'prn prn
-                                                                     'pr pr
-                                                                     'slurp slurp
-                                                                     ;; A script writes its text reports
-                                                                     ;; with spit: ds/write-* writes only
-                                                                     ;; datasets.
-                                                                     'spit spit
-                                                                     ;; A flow, a fetch and a module load
-                                                                     ;; give a Promise on the JS runtime and
-                                                                     ;; a value here.
-                                                                     'await identity
-                                                                     'cg-register-require-alias!
-                                                                     (fn [libspec]
-                                                                       (when-let [{:keys [ns alias]} (extract-alias-from-libspec libspec)]
-                                                                         (macros/register-alias! alias ns)))}}
-                                                     cg-namespaces)
-                                  :classes {'org.locationtech.jts.geom.Geometry {:allow :all}
-                                            'org.locationtech.jts.geom.Point {:allow :all}
-                                            'org.locationtech.jts.geom.LineString {:allow :all}
-                                            'org.locationtech.jts.geom.LinearRing {:allow :all}
-                                            'org.locationtech.jts.geom.Polygon {:allow :all}
-                                            'org.locationtech.jts.geom.MultiPoint {:allow :all}
-                                            'org.locationtech.jts.geom.MultiLineString {:allow :all}
-                                            'org.locationtech.jts.geom.MultiPolygon {:allow :all}
-                                            'org.locationtech.jts.geom.GeometryCollection {:allow :all}
-                                            'org.locationtech.jts.geom.CoordinateSequence {:allow :all}
-                                            'org.locationtech.jts.geom.Coordinate {:allow :all}
-                                            'org.locationtech.jts.geom.Envelope {:allow :all}
-                                            ;; .cg code checks files on disk with (java.io.File. path)
-                                            ;; and .exists. A constructor call by name needs the
-                                            ;; symbol->Class form: an {:allow :all} entry permits only
-                                            ;; method calls on instances.
-                                            'java.io.File java.io.File}}
-                                 opts))]
-        ;; SCI's built-in require is read-only. This `require` in the user
-        ;; namespace shadows it: it registers each alias for macro expansion,
-        ;; then calls clojure.core/require.
-        (sci/eval-string* ctx
-                          "(defn require [& libspecs]
-                             (doseq [ls libspecs]
-                               (cg-register-require-alias! ls))
-                             (apply clojure.core/require libspecs))")
-        ctx))))
+     "Make a new SCI context for .cg evaluation."
+     []
+     (let [ctx (sci/init {:namespaces (merge {'clojure.core {'println println
+                                                             'print print
+                                                             'prn prn
+                                                             'pr pr
+                                                             'slurp slurp
+                                                             ;; A script writes its text reports
+                                                             ;; with spit: ds/write-* writes only
+                                                             ;; datasets.
+                                                             'spit spit
+                                                             ;; A flow, a fetch and a module load
+                                                             ;; give a Promise on the JS runtime and
+                                                             ;; a value here.
+                                                             'await identity
+                                                             'cg-register-require-alias!
+                                                             (fn [libspec]
+                                                               (when-let [{:keys [ns alias]} (extract-alias-from-libspec libspec)]
+                                                                 (macros/register-alias! alias ns)))}}
+                                             cg-namespaces)
+                          :classes {'org.locationtech.jts.geom.Geometry {:allow :all}
+                                    'org.locationtech.jts.geom.Point {:allow :all}
+                                    'org.locationtech.jts.geom.LineString {:allow :all}
+                                    'org.locationtech.jts.geom.LinearRing {:allow :all}
+                                    'org.locationtech.jts.geom.Polygon {:allow :all}
+                                    'org.locationtech.jts.geom.MultiPoint {:allow :all}
+                                    'org.locationtech.jts.geom.MultiLineString {:allow :all}
+                                    'org.locationtech.jts.geom.MultiPolygon {:allow :all}
+                                    'org.locationtech.jts.geom.GeometryCollection {:allow :all}
+                                    'org.locationtech.jts.geom.CoordinateSequence {:allow :all}
+                                    'org.locationtech.jts.geom.Coordinate {:allow :all}
+                                    'org.locationtech.jts.geom.Envelope {:allow :all}
+                                    ;; .cg code checks files on disk with (java.io.File. path)
+                                    ;; and .exists. A constructor call by name needs the
+                                    ;; symbol->Class form: an {:allow :all} entry permits only
+                                    ;; method calls on instances.
+                                    'java.io.File java.io.File}})]
+       ;; SCI's built-in require is read-only. This `require` in the user
+       ;; namespace shadows it: it registers each alias for macro expansion,
+       ;; then calls clojure.core/require.
+       (sci/eval-string* ctx
+                         "(defn require [& libspecs]
+                            (doseq [ls libspecs]
+                              (cg-register-require-alias! ls))
+                            (apply clojure.core/require libspecs))")
+       ctx)))

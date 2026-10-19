@@ -6,7 +6,6 @@
             [cg.macros :refer [item->]]))
 
 (run/load-module "test/fixtures/modules/mod_rung_op.cg")
-(clojure.core/require '[test.mod-rung-op :as op])
 
 (defn scale-model [k opts]
   (item-> :xs (test.mod-rung-op/scaled k opts)))

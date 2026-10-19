@@ -35,7 +35,7 @@ Start the backend before you load the page of the web app. The dev server reads 
 
 A run gives a summary and no geometries. A client gets the geometries of one dataset through `/api/data/:var`.
 
-The clients do not call the other routes. Of those, `POST /api/execute` is deprecated, and `POST /api/project` gives HTTP 501.
+The clients do not call the other routes.
 
 ## Tests
 

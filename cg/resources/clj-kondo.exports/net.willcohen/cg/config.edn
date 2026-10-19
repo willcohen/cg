@@ -18,11 +18,8 @@
  {:analyze-call
   ;; cg.geo mints its whole public surface from the wasmts registry at compile
   ;; time. Without the hook every call into that surface reads as an unresolved
-  ;; var. The macro is :refer'd, so a call site resolves to the ns that defines
-  ;; it; the alias spelling is registered too, for a call site that requires
-  ;; cg.ts-macros without :refer.
+  ;; var.
   {cg.ts-macros/define-all-ts-fns hooks.cg.ts-macros/define-all-ts-fns
-   ts-macros/define-all-ts-fns hooks.cg.ts-macros/define-all-ts-fns
 
    ;; cg's pseudo-threading macros (item->, coll->, table->, and layers->,
    ;; which the parser admits and cg.macros does not define) carry DSL

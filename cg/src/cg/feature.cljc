@@ -141,68 +141,10 @@
   [group-sym]
   (get @group-registry (str group-sym)))
 
-(defn group?
-  "Return true if sym is a registered group."
-  [sym]
-  (contains? @group-registry (str sym)))
-
 (defn all-groups
   "Return the group registry as a map of qualified name to info."
   []
   @group-registry)
-
-#?(:cljs
-   (do
-     (defn wasmts-initialized?
-       "Return true if the environment has loaded WasmTS."
-       []
-       (and (exists? js/wasmts)
-            (exists? js/wasmts.geom)))
-
-     (defn ensure-wasmts-initialized!
-       "Return a promise that resolves when WasmTS is ready. The environment
-       must load WasmTS. This fn polls for 5 seconds, then rejects."
-       []
-       (if (wasmts-initialized?)
-         (js/Promise.resolve)
-         (js/Promise.
-          (fn [resolve reject]
-            (let [start-time (js/Date.now)
-                  max-wait-ms 5000
-                  check-interval 100]
-              (letfn [(check []
-                        (cond
-                          (wasmts-initialized?)
-                          (resolve)
-
-                          (> (- (js/Date.now) start-time) max-wait-ms)
-                          (reject (js/Error. "WasmTS not initialized. Ensure wasmts.js is loaded before CG module."))
-
-                          :else
-                          (js/setTimeout check check-interval)))]
-                (check)))))))
-
-     (defn js-obj?
-       "Check if value is a plain JavaScript object (not a ClojureScript map)"
-       [x]
-       (and (object? x)
-            (not (map? x))
-            (= (type x) js/Object)))
-
-     (defn preserve-type
-       "Apply f to x. When x is a plain JS object, f gets a copy of its keys
-       in a map."
-       [x f]
-       (if (js-obj? x)
-    ;; A squint map is a plain JS object. The result of f needs no
-    ;; conversion back.
-         (let [keys (js/Object.keys x)
-               clj-map (reduce (fn [m k]
-                                 (assoc m k (unchecked-get x k)))
-                               {}
-                               keys)]
-           (f clj-map))
-         (f x)))))
 
 ;; A wasmts PreparedGeometry is a plain object that holds the prepared
 ;; handle and has no methods, and the map? of squint is true for it. Here it
@@ -343,7 +285,7 @@
    (defprotocol SimpleFeaturelike
      "The JVM dispatch of the feature fns. On JS, each fn tests the type of its
      argument."
-     (-to-jts [this] [this srid] [this c1 c2] [this c1 c2 geometry-factory])
+     (-to-jts [this])
      (-to-feature [this] [this properties])
      (-geometry [this])
      (-properties [this])
@@ -355,13 +297,7 @@
 #?(:clj
    (extend-protocol SimpleFeaturelike
      Geometry
-     (-to-jts
-       ([this] this)
-       ([this srid] (reproject-geom this srid))
-       ([this c1 c2] (reproject-geom this c1 c2))
-       ([this _c1 _c2 _geometry-factory]
-        (throw (ex-info "Geometry transformation temporarily disabled - clj-proj API update in progress"
-                        {:geometry this}))))
+     (-to-jts [this] this)
      (-to-feature
        ([this] (-to-feature this {}))
        ([this properties] {:geometry this :properties properties}))
@@ -377,12 +313,7 @@
      (-update-properties [this f] (-update-properties (-to-feature this) f))
 
      clojure.lang.PersistentArrayMap
-     (-to-jts
-       ([this] (-to-jts (get-geometry-from-map this)))
-       ([this srid] (-to-jts (get-geometry-from-map this) srid))
-       ([this c1 c2] (-to-jts (get-geometry-from-map this) c1 c2))
-       ([this c1 c2 geometry-factory]
-        (-to-jts (get-geometry-from-map this) c1 c2 geometry-factory)))
+     (-to-jts [this] (-to-jts (get-geometry-from-map this)))
      (-to-feature
        ([this] this)
        ([this properties] {(get-geometry-field-name-from-map this) (get-geometry-from-map this) :properties properties}))
@@ -414,12 +345,7 @@
                                     (throw (Exception. "Cannot update properties for a map where a meta geometry value is required."))))
 
      clojure.lang.PersistentHashMap
-     (-to-jts
-       ([this] (-to-jts (get-geometry-from-map this)))
-       ([this srid] (-to-jts (get-geometry-from-map this) srid))
-       ([this c1 c2] (-to-jts (get-geometry-from-map this) c1 c2))
-       ([this c1 c2 geometry-factory]
-        (-to-jts (get-geometry-from-map this) c1 c2 geometry-factory)))
+     (-to-jts [this] (-to-jts (get-geometry-from-map this)))
      (-to-feature
        ([this] this)
        ([this properties] {(get-geometry-field-name-from-map this) (get-geometry-from-map this) :properties properties}))
@@ -451,12 +377,7 @@
                                     (throw (Exception. "Cannot update properties for a map where a meta geometry value is required."))))
 
      FastStruct
-     (-to-jts
-       ([this] (-to-jts (get-geometry-from-map this)))
-       ([this srid] (-to-jts (get-geometry-from-map this) srid))
-       ([this c1 c2] (-to-jts (get-geometry-from-map this) c1 c2))
-       ([this c1 c2 geometry-factory]
-        (-to-jts (get-geometry-from-map this) c1 c2 geometry-factory)))
+     (-to-jts [this] (-to-jts (get-geometry-from-map this)))
      (-to-feature
        ([this] this)
        ([this properties] {(get-geometry-field-name-from-map this) (get-geometry-from-map this) :properties properties}))
@@ -488,25 +409,13 @@
                                     (throw (Exception. "Cannot update properties for a map where a meta geometry value is required."))))))
 
 (defn to-jts
-  "Return the geometry as JTS, reprojected by srid or by source and target CRS
-  on the JVM. On JS the reprojecting arities throw."
-  ([this]
-   #?(:clj (-to-jts this)
-      :cljs (if (or (is-geometry? this) (prepared-geometry? this))
-              this
-              (get-geometry-from-map this))))
-  (#_{:clj-kondo/ignore [:unused-binding]}
-   [this srid]
-   #?(:clj (-to-jts this srid)
-      :cljs (throw (js/Error. "WasmTS reprojection not yet implemented"))))
-  (#_{:clj-kondo/ignore [:unused-binding]}
-   [this c1 c2]
-   #?(:clj (-to-jts this c1 c2)
-      :cljs (throw (js/Error. "WasmTS reprojection not yet implemented"))))
-  (#_{:clj-kondo/ignore [:unused-binding]}
-   [this c1 c2 geometry-factory]
-   #?(:clj (-to-jts this c1 c2 geometry-factory)
-      :cljs (throw (js/Error. "WasmTS reprojection not yet implemented")))))
+  "Return the geometry of a feature map. A geometry gives itself. On JS, a
+  prepared geometry also gives itself."
+  [this]
+  #?(:clj (-to-jts this)
+     :cljs (if (or (is-geometry? this) (prepared-geometry? this))
+             this
+             (get-geometry-from-map this))))
 
 (defn to-feature
   "A geometry `g` gives {:geometry g :properties {}}. A feature map gives itself.
@@ -525,18 +434,8 @@
 
 (defn geometry [this]
   #?(:clj (-geometry this)
-     :cljs (cond
-             (is-geometry? this)
+     :cljs (if (is-geometry? this)
              this
-
-             (js-obj? this)
-             (let [geom-val (or (unchecked-get this "geometry")
-                                (unchecked-get this ":geometry"))]
-               (if (and geom-val (is-geometry? geom-val))
-                 geom-val
-                 (throw (js/Error. "No geometry field found in JS object"))))
-
-             :else
              (get-geometry-from-map this))))
 
 (defn properties
@@ -544,26 +443,15 @@
   map."
   [this]
   #?(:clj (-properties this)
-     :cljs (cond
-             (is-geometry? this)
+     :cljs (if (is-geometry? this)
              {}
-
-             (js-obj? this)
-             (let [keys (js/Object.keys this)
-                   result #js {}]
-               (doseq [k keys]
-                 (when-not (= k "geometry")
-                   (unchecked-set result k (unchecked-get this k))))
-               result)
-
-             :else
              (get-properties-from-map this))))
 
 (defn assoc-geometry [this s]
   #?(:clj (-assoc-geometry this s)
      :cljs (if (is-geometry? this)
              s
-             (preserve-type this (fn [m] (assoc m (get-geometry-field-name-from-map m) s))))))
+             (assoc this (get-geometry-field-name-from-map this) s))))
 
 (defn update-geometry
   "Update SimpleFeaturelike by applying f to existing geometry."
@@ -571,7 +459,7 @@
    #?(:clj (-update-geometry this f)
       :cljs (if (is-geometry? this)
               (f this)
-              (preserve-type this (fn [m] (update m (get-geometry-field-name-from-map m) f))))))
+              (update this (get-geometry-field-name-from-map this) f))))
   ([this f & args]
    #?(:clj (apply -update-geometry this f args)
       :cljs (update-geometry this (fn [x] (apply f (cons x args)))))))
@@ -580,17 +468,15 @@
   #?(:clj (-assoc-properties this p)
      :cljs (if (is-geometry? this)
              {:geometry this :properties p}
-             (preserve-type this
-                            (fn [m]
-                              (case (get-map-structure m)
-                                :normalized
-                                (assoc m :properties p)
-                                :one-geom-with-properties-map
-                                (assoc m (first (keys (dissoc m (key (first (geometry-fields m)))))) p)
-                                :one-geom-with-flat-properties
-                                (merge (apply dissoc m (keys (dissoc m (key (first (geometry-fields m)))))) p)
-                                :meta-geometry-value-utilized-and-required
-                                (merge (apply dissoc m (keys (dissoc m (get-geometry-field-name-from-map m)))) p)))))))
+             (case (get-map-structure this)
+               :normalized
+               (assoc this :properties p)
+               :one-geom-with-properties-map
+               (assoc this (first (keys (dissoc this (key (first (geometry-fields this)))))) p)
+               :one-geom-with-flat-properties
+               (merge (apply dissoc this (keys (dissoc this (key (first (geometry-fields this)))))) p)
+               :meta-geometry-value-utilized-and-required
+               (merge (apply dissoc this (keys (dissoc this (get-geometry-field-name-from-map this)))) p)))))
 
 (defn update-properties
   "Update SimpleFeaturelike by applying f to existing properties."
@@ -598,17 +484,15 @@
   #?(:clj (-update-properties this f)
      :cljs (if (is-geometry? this)
              {:geometry this :properties (f {})}
-             (preserve-type this
-                            (fn [m]
-                              (case (get-map-structure m)
-                                :normalized
-                                (update m :properties f)
-                                :one-geom-with-properties-map
-                                (update m (first (keys (dissoc m (key (first (geometry-fields m)))))) f)
-                                :one-geom-with-flat-properties
-                                (throw (js/Error. "Cannot update properties for a map with one geometry and flattened properties."))
-                                :meta-geometry-value-utilized-and-required
-                                (throw (js/Error. "Cannot update properties for a map where a meta geometry value is required."))))))))
+             (case (get-map-structure this)
+               :normalized
+               (update this :properties f)
+               :one-geom-with-properties-map
+               (update this (first (keys (dissoc this (key (first (geometry-fields this)))))) f)
+               :one-geom-with-flat-properties
+               (throw (js/Error. "Cannot update properties for a map with one geometry and flattened properties."))
+               :meta-geometry-value-utilized-and-required
+               (throw (js/Error. "Cannot update properties for a map where a meta geometry value is required."))))))
 
 #?(:clj
    (do

@@ -315,12 +315,6 @@
   [var]
   (aget single-palette (mod (js/Math.abs (str-hash var)) (.-length single-palette))))
 
-(defn humanize
-  "A column name or a value as display text. \"final-grade\" gives \"Final
-   grade\"."
-  [s]
-  (popup/humanize s))
-
 (defn shade
   "The #rrggbb color `c` mixed with black: `k` 0 gives `c` and 1 gives black.
    Any other color text comes back with no change."
@@ -404,11 +398,6 @@
     (when (false? shown-counts) (aset style "counts" false))
     style))
 
-(defn default-style
-  "The layer style with no sink spec."
-  [var fc]
-  (spec->style var fc nil))
-
 (defn- categorical? [style]
   (= "categorical" (aget style "mode")))
 
@@ -425,7 +414,7 @@
           counts (or (aget style "category-counts") #js {})
           rows   (.map (js/Object.keys cc)
                        (fn [k]
-                         #js {:layer-var var :label (humanize k) :value k
+                         #js {:layer-var var :label (popup/humanize k) :value k
                               :swatch-color (aget cc k) :count (aget counts k)}))
           blank  (uncolored-count style)]
       (when (pos? blank)
@@ -436,25 +425,21 @@
               :swatch-color (aget style "color")
               :count (aget style "feature-count")}]))
 
-(defn legend-entries
-  "The legend rows of a styled layer as #js {layer-var label value swatch-color
-   count}: one for each category in color order, then \"No value\" when needed.
-   A style with counts false gives no count."
+(defn layer-legend
+  "The legend of a styled layer: #js {var, layer-type, title, rows}. The title
+   is the color-by column as display text, or nil for a layer of one color. A
+   row is #js {layer-var label value swatch-color count}: one for each category
+   in color order, then \"No value\" when needed. A style with counts false
+   gives rows with no count."
   [var style]
   (let [rows (legend-rows var style)]
     (when (false? (aget style "counts"))
       ;; squint emits `return return delete` for a js-delete in tail position.
       (.forEach rows (fn [r] (js-delete r "count") nil)))
-    rows))
-
-(defn layer-legend
-  "The legend of a styled layer: #js {var, layer-type, title, rows}. The title
-   is the color-by column as display text, or nil for a layer of one color."
-  [var style]
-  #js {:var var
-       :layer-type (aget style "layer-type")
-       :title (when (categorical? style) (humanize (aget style "category-property")))
-       :rows (legend-entries var style)})
+    #js {:var var
+         :layer-type (aget style "layer-type")
+         :title (when (categorical? style) (popup/humanize (aget style "category-property")))
+         :rows rows}))
 
 (defn legends
   "The legend (layer-legend) of each visible layer of a layer table that has

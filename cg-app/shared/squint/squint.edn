@@ -1,5 +1,4 @@
 {:paths ["src"]
  :output-dir "js"
  :extension "jsx"
- :main cg-gui.canvas.canvas
  :jsx-runtime {:import-source "react"}}

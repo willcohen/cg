@@ -11,10 +11,6 @@
 ;;   clj-kondo --lint $(ls cg/examples/*.cg)
 {:config-paths ["imports/net.willcohen/cg"]
 
- ;; UIX's `defui` defines a function. Without this, kondo treats it as
- ;; an opaque call and flags the name + destructured args as unresolved.
- :lint-as {uix.core/defui clojure.core/defn}
-
  ;; cg.parser.* is the static-analysis subsystem. It must stay
  ;; eval-free: parsers walk tree-sitter ASTs only, never invoke the
  ;; DSL evaluator, the operation/group registries, or the macro layer.

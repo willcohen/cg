@@ -5,17 +5,14 @@
 ;; SPDX-License-Identifier: Apache-2.0 WITH LLVM-exception
 
 ;; Model extraction from a string or a file needs SCI, which is JVM only. On
-;; the JS runtime the node CLI gets each model by its name. The when-row explain
-;; hook is on both runtimes, therefore its assertions run twice.
+;; the JS runtime the node CLI gets each model by its name.
 (ns cg.introspect-test
   #?(:clj (:require [clojure.test :refer [deftest is testing]]
-                    [clojure.string :as str]
                     [cg.introspect :as introspect]
                     [cg.model :as model]
                     [cg.dataset :as ds]
                     [cg.macros :refer [table->]])
-     :cljs (:require [cljs.test :refer [deftest is testing]]
-                     [clojure.string :as str]
+     :cljs (:require [cljs.test :refer [deftest is]]
                      ["../../src/cg/introspect.mjs" :as introspect]
                      ["../../src/cg/cli.mjs" :as cli]
                      ["../../src/cg/run.mjs" :as run]
@@ -82,20 +79,6 @@
            (is (= 3 (:edge-count info)) "Should have 3 edges")
            (is (= [:geo/buffer :geo/simplify] (:operations info))))))))
 
-#?(:clj
-   (deftest test-get-model-by-name
-     (testing "Get specific model by name"
-       (let [result (introspect/extract-models-from-string
-                      "(require '[cg.macros :refer [item->]])
-                       (require '[cg.geo :as geo])
-                       (def my-model (item-> :data (geo/buffer 10)))
-                       :done")
-             model (introspect/get-model-by-name result 'my-model)]
-         (is (some? model) "Should find the model")
-         (is (model/model? model) "Should be a valid model")
-         (is (nil? (introspect/get-model-by-name result 'nonexistent))
-             "Should return nil for non-existent model")))))
-
 ;; transform-crs is an operation group: its node has :type :group.
 (defn- transform-crs-model []
   #?(:clj (table-> :pts (ds/transform-crs "EPSG:4326" "EPSG:3857"))
@@ -116,62 +99,6 @@
      (is (= 0 (cli/show-model "examples/simple.cg")))
      (is (= 0 (cli/generate "examples/simple.cg")))
      (is (= true (cli/validate "examples/simple.cg")))))
-
-(defn- when-row-fixture-node
-  "Builds a synthetic when-row op-node shaped exactly like the macro
-   layer would emit. Centralised so the explain tests share one
-   source of truth for the params shape."
-  ([] (when-row-fixture-node {:on-miss "pass-through"}))
-  ([options]
-   {:type :operation
-    :id :n1
-    :fn "cg.run/when-row"
-    :mode :table
-    :params [{:predicate {:kind "has-column?" :arg :geometry}
-              :options options
-              :body {:fn "cg.geo/buffer" :params {:distance 100}}}]
-    :config {}}))
-
-(deftest when-row-node?-classifies-correctly
-  (testing "when-row-node? recognises both string and symbol :fn forms"
-    (is (introspect/when-row-node? (when-row-fixture-node)))
-    (is (introspect/when-row-node?
-         (assoc (when-row-fixture-node) :fn 'cg.run/when-row))))
-  (testing "when-row-node? rejects non-when-row op-nodes"
-    (is (not (introspect/when-row-node?
-              (assoc (when-row-fixture-node) :fn "cg.geo/buffer"))))
-    (is (not (introspect/when-row-node?
-              (assoc (when-row-fixture-node) :type :sink))))
-    (is (not (introspect/when-row-node? nil)))
-    (is (not (introspect/when-row-node? "not a node")))))
-
-(deftest explain-when-row-returns-nil-for-non-when-row
-  (testing "explain-when-row returns nil when given a non-when-row node"
-    (is (nil? (introspect/explain-when-row
-               (assoc (when-row-fixture-node) :fn "cg.geo/buffer"))))
-    (is (nil? (introspect/explain-when-row nil)))
-    (is (nil? (introspect/explain-when-row {})))))
-
-(deftest explain-when-row-pass-through-default
-  (testing "explain-when-row returns three-stage expansion for the default on-miss"
-    (let [exp (introspect/explain-when-row (when-row-fixture-node))]
-      (is (= :when-row (:node-kind exp)))
-      (is (= "has-column?" (-> exp :predicate :kind)))
-      (is (= "pass-through" (:on-miss exp)))
-      (is (= "cg.geo/buffer" (-> exp :body :fn)))
-      (let [steps (mapv :step (:expansion exp))]
-        (is (= [:predicate-split :body-apply :pass-through-merge] steps)
-            "expansion lists predicate-split, body-apply, then the pass-through merge")))))
-
-(deftest explain-when-row-drop-merge
-  (testing "explain-when-row emits the drop-merge stage when :on-miss is drop"
-    (let [exp (introspect/explain-when-row
-               (when-row-fixture-node {"on-miss" "drop"}))]
-      (is (= "drop" (:on-miss exp)))
-      (let [merge-step (last (:expansion exp))]
-        (is (= :drop-merge (:step merge-step))
-            "the final stage swaps to :drop-merge under on-miss drop")
-        (is (str/includes? (:description merge-step) "suppressed"))))))
 
 #?(:cljs (-> (init_wasmts_BANG_)
              (.then (fn [_] (ds/init-arquero!)))

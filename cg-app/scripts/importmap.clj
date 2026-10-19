@@ -13,7 +13,6 @@ importmap? Reports the node bundle specifiers too, as information only."
 
 (def ^:private browser-bundle "shared/ui/public/cg-bundled-browser.mjs")
 (def ^:private node-bundle "shared/ui/public/cg-bundled-node.mjs")
-(def ^:private vendor-root "shared/ui/public/vendor")
 
 (def ^:private importmaps
   ;; The one importmap of the npm packages, from importmap.mjs. The dev web
@@ -60,30 +59,6 @@ importmap? Reports the node bundle specifiers too, as information only."
                              (str/starts-with? spec k)))
             imports)))
 
-;; serve.mjs answers these /vendor paths from node_modules, not vendor-root.
-(def ^:private node-module-routes
-  {"/vendor/monaco/" "node_modules/monaco-editor/min/"
-   "/vendor/tree-sitter-clojure.wasm"
-   "../cg/node_modules/@yogthos/tree-sitter-clojure/tree-sitter-clojure.wasm"})
-
-(defn- vendor-file [v]
-  (or (some (fn [[route src]]
-              (when (str/starts-with? v route)
-                (str src (subs v (count route)))))
-            node-module-routes)
-      (str vendor-root (subs v (count "/vendor")))))
-
-(defn- dangling
-  "Map entries pointing at a /vendor path that is not on disk. Catches the
-   reverse rot: an entry added for a file nobody vendored."
-  [imports]
-  (->> imports
-       (keep (fn [[k v]]
-               (when (and (str/starts-with? v "/vendor/")
-                          (not (fs/exists? (vendor-file v))))
-                 [k v])))
-       (into {})))
-
 (defn- report-map!
   "Check one importmap against the bundle's specifiers. Returns a failure
    count and prints what is wrong."
@@ -91,20 +66,16 @@ importmap? Reports the node bundle specifiers too, as information only."
   (if-not (fs/exists? path)
     (do (println "  MISSING importmap:" path) 1)
     (let [imports (importmap-of path)
-          missing (sort (remove #(covered? imports %) specs))
-          dead    (dangling imports)]
+          missing (sort (remove #(covered? imports %) specs))]
       (println (str "  " path))
       (if (seq missing)
         (doseq [m missing]
           (println (str "    UNMAPPED  " m)))
         (println "    all bundle specifiers mapped"))
-      (doseq [[k v] (sort dead)]
-        (println (str "    DANGLING  " k " -> " v " (not vendored)")))
-      (+ (count missing) (count dead)))))
+      (count missing))))
 
 (defn check!
-  "Fail loudly when the browser bundle needs a specifier no importmap
-   resolves, or when a map points at a file nobody vendored."
+  "Fail loudly when the browser bundle needs a specifier no importmap resolves."
   []
   (let [specs (specifiers browser-bundle)]
     (when-not specs

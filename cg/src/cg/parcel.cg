@@ -262,25 +262,6 @@
       (- 360 diff)
       diff)))
 
-(defn find-corners-by-angle
-  "Deprecated: use find-corners, which also finds curve corners. Give the
-   indexes in the closed ring coords where the direction changes more than
-   threshold degrees. The default threshold is 10.0."
-  ([coords]
-   (find-corners-by-angle coords 10.0))
-  ([coords threshold]
-   (let [n (dec (count coords))
-         angles (mapv (fn [i]
-                        (coord->angle (nth coords i)
-                                      (nth coords (mod (inc i) n))))
-                      (range n))]
-     (filterv (fn [i]
-                (let [prev-angle (nth angles (mod (dec i) n))
-                      curr-angle (nth angles i)
-                      diff (angle-difference prev-angle curr-angle)]
-                  (> diff threshold)))
-              (range n)))))
-
 (defn segment-length
   "Calculate the length of the segment from coordinate i to coordinate
    i+1."
@@ -498,12 +479,7 @@
                                     (into [start-coord] (rest intermediate)))
 
                                   (= :curve (:type c2))
-                                  (conj (vec (butlast intermediate)) end-coord)
-
-                                  :else
-                                  (-> [start-coord]
-                                      (into (rest (butlast intermediate)))
-                                      (conj end-coord)))]
+                                  (conj (vec (butlast intermediate)) end-coord))]
                 edge-coords))
             (range num-corners))))))
 
@@ -513,26 +489,6 @@
   [coords corners]
   (let [edge-coord-seqs (corners->edge-coords coords corners)]
     (mapv f/linestring edge-coord-seqs)))
-
-(defn coords->edges-at-corners
-  "Give one LineString for each span between adjacent corner indexes of the
-   closed ring coords. With no corners, the result is the full boundary as
-   one edge."
-  [coords corners]
-  (if (empty? corners)
-    [(f/linestring coords)]
-    (let [n (dec (count coords))
-          num-corners (count corners)
-          sorted-corners (sort corners)]
-      (mapv (fn [i]
-              (let [start-idx (nth sorted-corners i)
-                    end-idx (nth sorted-corners (mod (inc i) num-corners))
-                    edge-coords (if (<= start-idx end-idx)
-                                  (subvec coords start-idx (inc end-idx))
-                                  (into (subvec coords start-idx (inc n))
-                                        (subvec coords 0 (inc end-idx))))]
-                (f/linestring edge-coords)))
-            (range num-corners)))))
 
 ;; The thresholds: the :thresholds of the opts of analyze-parcel-edges and
 ;; analyze-parcel, and the thresholds argument of the classification fns.
@@ -1659,16 +1615,6 @@
                                             (assoc opts :main-building main-building))
         typed-edges (:edges edge-analysis)
 
-        thresholds (:thresholds opts)
-        width-for (fn [edge-info]
-                    (when (= :street (:abutting edge-info))
-                      (measure-right-of-way-width
-                       (:edge edge-info) parcel-row parcels-ds
-                       (threshold thresholds :right-of-way-width-step)
-                       (threshold thresholds :right-of-way-width-max)
-                       (ds/index-candidates-fn parcels-ds)
-                       (threshold thresholds :right-of-way-width-resolution))))
-
         edges-with-setbacks
         (if buildings-ds
           (mapv (fn [edge-info]
@@ -1677,12 +1623,10 @@
                                                 (:geometry main-building)))]
                     (assoc edge-info
                            :setback            setback
-                           :right-of-way-width (or (:right-of-way-width edge-info)
-                                                   (width-for edge-info)))))
+                           :right-of-way-width (:right-of-way-width edge-info))))
                 typed-edges)
           (mapv (fn [edge-info]
-                  (assoc edge-info :right-of-way-width (or (:right-of-way-width edge-info)
-                                                           (width-for edge-info))))
+                  (assoc edge-info :right-of-way-width (:right-of-way-width edge-info)))
                 typed-edges))
 
         envelope (when buildings-ds
@@ -1762,10 +1706,6 @@
             polys (mapv #(geo/geometry-n geom %) (range n))]
         (max-by-stable geo/area geom-sort-key polys))
       :else nil)))
-
-;; An alias for the callers that use parcel/get-dataset-crs. The fn lives in
-;; cg.layer.
-(def get-dataset-crs layer/get-dataset-crs)
 
 ;; analyze-parcel-edges fails on a MultiPolygon row. The buffer of zero
 ;; width cleans the self-intersections that stop JTS predicate work.
