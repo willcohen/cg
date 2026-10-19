@@ -14,18 +14,15 @@
   "Existing layer ids + desired layers -> #js {:remove [ids] :upsert [entries]}
    in layer-table order. Touches only cgdata-* layers."
   [existing-layer-ids layers]
-  (let [visible-vars (js/Set. (.map (.filter layers
-                                             (fn [l] (and (true? (aget l "visible?"))
-                                                          (aget l "geojson"))))
-                                    (fn [l] (aget l "var"))))
+  (let [upsert (.filter layers
+                        (fn [l] (and (true? (aget l "visible?"))
+                                     (aget l "geojson"))))
+        visible-vars (js/Set. (.map upsert (fn [l] (aget l "var"))))
         remove-ids (.filter existing-layer-ids
                             (fn [id]
                               (and (.startsWith id data-prefix)
                                    (not (.has visible-vars
-                                              (.substring id (.-length data-prefix)))))))
-        upsert (.filter layers
-                        (fn [l] (and (true? (aget l "visible?"))
-                                     (aget l "geojson"))))]
+                                              (.substring id (.-length data-prefix)))))))]
     #js {:remove remove-ids :upsert upsert}))
 
 (defn- valid-lnglat? [lng lat]
@@ -36,17 +33,13 @@
   "[[minLng minLat] [maxLng maxLat]] of the FeatureCollections for fitBounds, or
    nil when no coordinate is in range."
   [geojsons]
-  (let [state #js {:minLng nil :minLat nil :maxLng nil :maxLat nil}
+  (let [b #js [js/Infinity js/Infinity (- js/Infinity) (- js/Infinity)]
         extend! (fn [lng lat]
                   (when (valid-lnglat? lng lat)
-                    (when (or (nil? (aget state "minLng")) (< lng (aget state "minLng")))
-                      (aset state "minLng" lng))
-                    (when (or (nil? (aget state "maxLng")) (> lng (aget state "maxLng")))
-                      (aset state "maxLng" lng))
-                    (when (or (nil? (aget state "minLat")) (< lat (aget state "minLat")))
-                      (aset state "minLat" lat))
-                    (when (or (nil? (aget state "maxLat")) (> lat (aget state "maxLat")))
-                      (aset state "maxLat" lat))))
+                    (when (< lng (aget b 0)) (aset b 0 lng))
+                    (when (< lat (aget b 1)) (aset b 1 lat))
+                    (when (> lng (aget b 2)) (aset b 2 lng))
+                    (when (> lat (aget b 3)) (aset b 3 lat))))
         walk (fn walk [coords]
                (when coords
                  (if (and (number? (aget coords 0)) (number? (aget coords 1)))
@@ -58,9 +51,8 @@
                           (fn [feat]
                             (let [geom (aget feat "geometry")]
                               (when geom (walk (aget geom "coordinates"))))))))
-    (when (some? (aget state "minLng"))
-      #js [#js [(aget state "minLng") (aget state "minLat")]
-           #js [(aget state "maxLng") (aget state "maxLat")]])))
+    (when (js/isFinite (aget b 0))
+      #js [#js [(aget b 0) (aget b 1)] #js [(aget b 2) (aget b 3)]])))
 
 (def max-crs-results 50)
 

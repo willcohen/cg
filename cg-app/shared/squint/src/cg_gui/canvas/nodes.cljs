@@ -141,14 +141,6 @@
 
         :else nil))))
 
-(defn- with-key
-  "A copy of `o` with `k` set to `v`. Uses aset, because of a squint defect
-   with a computed key in an object literal."
-  [o k v]
-  (let [n (js/Object.assign #js {} o)]
-    (aset n k v)
-    n))
-
 (defn ReportParams [^js props]
   (let [d        (.-data props)
         op       (aget d "report-op")
@@ -162,12 +154,12 @@
                                     :editType "EditReportSpec"
                                     :model (aget d "model-name")
                                     :payload #js {:nodeId node-id :spec nxt}}))
-        upd      (fn [k v] (commit! (with-key spec k v)))
+        upd      (fn [k v] (commit! (assoc spec k v)))
         entries  (or (aget spec list-key) #js [])
         set-label (fn [i txt]
                     (upd list-key
                          (.map entries (fn [e j]
-                                         (if (= i j) (with-key e "label" txt) e)))))
+                                         (if (= i j) (assoc e "label" txt) e)))))
         set-rule  (fn [i txt]
                     ;; Build the entry from the label and the parsed rule,
                     ;; because old fragment keys must not stay. Invalid text
@@ -469,14 +461,11 @@
   "The edge for the `groups` level: the default bezier with a `×N` badge at the
    midpoint. React Flow puts the cg-edge-groups class on the wrapping <g>."
   [^js props]
-  (let [res  (getBezierPath
-              #js {:sourceX (.-sourceX props) :sourceY (.-sourceY props)
-                   :sourcePosition (.-sourcePosition props)
-                   :targetX (.-targetX props) :targetY (.-targetY props)
-                   :targetPosition (.-targetPosition props)})
-        path (aget res 0)
-        lx   (aget res 1)
-        ly   (aget res 2)]
+  (let [[path lx ly] (getBezierPath
+                      #js {:sourceX (.-sourceX props) :sourceY (.-sourceY props)
+                           :sourcePosition (.-sourcePosition props)
+                           :targetX (.-targetX props) :targetY (.-targetY props)
+                           :targetPosition (.-targetPosition props)})]
     #jsx [Fragment
           [BaseEdge {:id (.-id props) :path path :markerEnd (.-markerEnd props)}]
           [EdgeLabelRenderer

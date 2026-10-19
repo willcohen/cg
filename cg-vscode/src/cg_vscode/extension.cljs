@@ -17,7 +17,6 @@
          :extension/disposables   []
          :runtime/choice          "auto"
          :runtime/resolved        nil
-         :runtime/jvm-reachable   false
          :runtime/status-bar      nil
          :runtime/output-channel  nil
          :editor/flow-editor-uris #{}
@@ -44,8 +43,7 @@
       (run-status/draw! !state (js/Date.now)))))
 
 (defn ^:export activate [context]
-  (when context
-    (swap! !app-db assoc :extension/context context))
+  (swap! !app-db assoc :extension/context context)
 
   (let [!state !app-db
         ^js channel (vscode/window.createOutputChannel "CG")]
@@ -64,11 +62,7 @@
     (editor/init-editor! !state)
     (editor/setup-split-view! !state)
 
-    (lc/set-when-context! "cg:active" true)
-
-    (.appendLine channel "CG: active")
-
-    #js {:v1 {}}))
+    (.appendLine channel "CG: active")))
 
 (defn ^:export deactivate []
   (runtime/stop-backend!)

@@ -54,9 +54,7 @@
    geometry. The other args pass through."
   [param-types args]
   (mapv (fn [type-str a]
-          (cond
-            (geometry-typed? type-str) (feature/to-jts a)
-            :else a))
+          (if (geometry-typed? type-str) (feature/to-jts a) a))
         param-types
         args))
 
@@ -73,9 +71,7 @@
       first arg to the function of that name in wasmts.geom.prep.PreparedGeometry."
      [receiver ^string method-name args]
      (let [f (aget receiver method-name)
-           call-args (let [arr #js []]
-                       (doseq [a args] (.push arr a))
-                       arr)]
+           call-args (js/Array.from args)]
        (cond
          f (.apply f receiver call-args)
          (feature/prepared-geometry? receiver)
@@ -95,11 +91,8 @@
                       acc
                       (recur (inc i) (aget acc (aget parts i)))))
            fname  (aget parts (dec n))
-           f      (aget parent fname)
-           call-args (let [arr #js []]
-                       (doseq [a args] (.push arr a))
-                       arr)]
-       (.apply f parent call-args))))
+           f      (aget parent fname)]
+       (.apply f parent (js/Array.from args)))))
 
 (defn dispatch-receiver-call
   "Dispatch a :receiver-call registry entry `meta`. A feature-map receiver gets

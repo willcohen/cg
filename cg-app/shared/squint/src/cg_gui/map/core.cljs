@@ -69,12 +69,6 @@
 (defn- hide-identify! [panel]
   (set! (.-display (.-style panel)) "none"))
 
-(defn- clear-children! [el]
-  (loop []
-    (when (.-firstChild el)
-      (.removeChild el (.-firstChild el))
-      (recur))))
-
 (defn- build-identify-panel!
   "Creates the hidden identify panel in the map container and returns
    #js {:panel :body}. `on-close` runs when the close button hides the panel."
@@ -135,7 +129,7 @@
   "Fills the identify panel with one card for each clicked feature, at most 12
    and no duplicates (same var and properties), then shows the panel."
   [panel body feats]
-  (clear-children! body)
+  (.replaceChildren body)
   (let [seen #js {}
         cap  (js/Math.min (.-length feats) 12)]
     (loop [i 0]

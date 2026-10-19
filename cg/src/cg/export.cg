@@ -63,7 +63,7 @@
         ;; cached row has string column names.
         clean (mapv (fn [r]
                       (reduce-kv (fn [m k v]
-                                   (if (contains? #{"indexed-id"} (name k))
+                                   (if (= "indexed-id" (name k))
                                      m
                                      (assoc m (if (= (name k) "geometry")
                                                 :geometry

@@ -162,7 +162,6 @@
     (swap! !state assoc :runtime/choice cfg)
     (-> (check-jvm-reachable port)
         (.then (fn [reachable]
-                 (swap! !state assoc :runtime/jvm-reachable reachable)
                  (let [resolved (lane/resolve-runtime cfg reachable)]
                    (swap! !state assoc :runtime/resolved resolved)
                    {:resolved resolved :reachable reachable :port port}))))))
@@ -188,8 +187,7 @@
     (set! (.-command bar) "cg.setRuntime")
     (.show bar)
     (lc/push-disposable! !state bar)
-    (swap! !state assoc :runtime/status-bar bar)
-    bar))
+    (swap! !state assoc :runtime/status-bar bar)))
 
 (defn- pick-runtime []
   (vscode/window.showQuickPick

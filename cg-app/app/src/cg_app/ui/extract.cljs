@@ -16,14 +16,6 @@
   [text opts]
   (await (parser/extract-models text opts)))
 
-(defn ^:async read-module-text
-  "The text of the module at load path `path` from loader/module-url, or nil
-   when the server does not have it."
-  [path]
-  (let [resp (await (js/fetch (loader/module-url path)))]
-    (when (.-ok resp)
-      (await (.text resp)))))
-
 (defn ^:async follow-loaded-modules!
   "A new flow with the operations of each module that `flow` loads. The flow
    comes back unchanged when no module resolves."
@@ -31,7 +23,7 @@
   (let [extra (await (doc-modules/follow-loaded-modules!
                       flow
                       {:resolve identity
-                       :read    read-module-text
+                       :read    loader/fetch-module-text
                        :parse   (fn [text] (extract-flow text opts))}))]
     (if (zero? (count extra))
       flow

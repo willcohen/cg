@@ -493,7 +493,7 @@
 
 (defn init-editor! [!state]
   (let [extension-uri (.. ^js (:extension/context @!state) -extensionUri)
-        ^js coll (diag/create-collection!)
+        ^js coll (diag/create-collection! "cg")
         ^js kondo-coll (diag/create-collection! "clj-kondo")]
     (swap! !state assoc :editor/diagnostic-collection coll)
     (swap! !state assoc :editor/kondo-collection kondo-coll)

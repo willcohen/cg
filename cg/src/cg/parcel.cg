@@ -1619,8 +1619,8 @@
         (if buildings-ds
           (mapv (fn [edge-info]
                   (let [setback (when main-building
-                                  (geo/distance (:edge edge-info)
-                                                (:geometry main-building)))]
+                                  (compute-setback (:edge edge-info)
+                                                   (:geometry main-building)))]
                     (assoc edge-info
                            :setback            setback
                            :right-of-way-width (:right-of-way-width edge-info))))

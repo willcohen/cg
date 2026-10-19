@@ -22,17 +22,10 @@
   "resources/clj-kondo.exports/net.willcohen/cg/hooks/cg/ts_names.clj")
 
 (defn arity-vectors
-  "Return the argument vectors of one emitted defn form, for both the
-   single-arity shape (defn nm [args] body) and the multi-arity shape
-   (defn nm ([args] body) ...). A docstring or an attribute map before the
-   first arity is skipped."
+  "The argument vectors of one defn from emit-all. emit-all gives each defn in
+   the multi-arity shape (defn nm ([args] body) ...), with no docstring."
   [form]
-  (let [body (drop 2 form)
-        body (if (string? (first body)) (rest body) body)
-        body (if (map? (first body)) (rest body) body)]
-    (if (vector? (first body))
-      [(first body)]
-      (mapv first body))))
+  (mapv first (drop 2 form)))
 
 (defn placeholder-args
   "Rename one argument vector to positional placeholders. The hook gives every

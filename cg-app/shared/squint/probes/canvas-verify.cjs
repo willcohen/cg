@@ -968,8 +968,7 @@ async function opGhost(page, check) {
 
   // With no module label the op goes under the "Ops" tab.
   await tab(page, 'Ops').click();
-  await h.withRandom(page, 0, () =>
-    page.locator('.cg-toolbar-op', { hasText: 'prepare-parcel' }).first().click());
+  await page.locator('.cg-toolbar-op', { hasText: 'prepare-parcel' }).first().click();
   const card = await page.waitForSelector('.react-flow__node[data-id="ghost-1"]', { timeout: 5000 })
     .then(() => page.evaluate(() => {
       const w = document.querySelector('.react-flow__node[data-id="ghost-1"]');
@@ -1198,8 +1197,7 @@ async function chevronAndIcons(page, check) {
 
   await page.click('.cg-toolbar-toggle');
   await page.locator('.cg-toolbar-tab').filter({ hasText: /^Parcel \(/ }).click();
-  await h.withRandom(page, 0.5, () =>
-    page.locator('.cg-toolbar-op').filter({ hasText: /^prepare-parcel$/ }).click());
+  await page.locator('.cg-toolbar-op').filter({ hasText: /^prepare-parcel$/ }).click();
   const ghostOpen = await waitExpanded(page, 'ghost-1', GHOST_BODY, true);
   const ghostBefore = await cardState(page, 'ghost-1', GHOST_BODY);
   await clickChevron('ghost-1');

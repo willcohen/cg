@@ -74,27 +74,22 @@
     (let [canvas (await (js* "import(~{})" "cg-app/canvas"))]
       ((aget canvas "mount") "root"))))
 
-(defn- post!
-  "Posts `msg` on the window bus. The canvas listens for window 'message'."
-  [msg]
-  (.postMessage js/window msg "*"))
-
 (defn post-flow!
   "Merges the positions into the loaded flow and posts cg/flow. Then tells the
    canvas which model Run runs (cg/run-model)."
   []
   (let [{:keys [flow run-model load-n]} @state/app-state]
     (when flow
-      (post! #js {:type "cg/flow"
+      (execution/bus-post! #js {:type "cg/flow"
                   :flow (js/Object.assign
                          (extract/merge-positions-into-flow flow (state/positions))
                          #js {:loadId load-n})})
-      (post! #js {:type "cg/run-model"
+      (execution/bus-post! #js {:type "cg/run-model"
                   :model (or run-model (run-js/model-binding-name flow))}))))
 
 (defn- select-model! [model-name]
   (state/set-run-model! model-name)
-  (post! #js {:type "cg/run-model" :model model-name}))
+  (execution/bus-post! #js {:type "cg/run-model" :model model-name}))
 
 (defn- ModelMenu [^js props]
   (let [names (run-js/model-names (.-flow props))]
@@ -451,7 +446,7 @@
     (useEffect
      (fn []
        (apply-theme-attrs! theme)
-       (post! #js {:type "cg/theme-kind" :mode (state/theme-mode theme)})
+       (execution/bus-post! #js {:type "cg/theme-kind" :mode (state/theme-mode theme)})
        js/undefined)
      #js [theme])
     ;; After the commit, one time: #root now exists in the DOM.
@@ -605,7 +600,7 @@
       (= t "cg/new")
       (do (state/clear-loaded!)
           (status/reset-run!)
-          (post! #js {:type "cg/flow" :flow #js {:loadId (:load-n @state/app-state)}}))
+          (execution/bus-post! #js {:type "cg/flow" :flow #js {:loadId (:load-n @state/app-state)}}))
       ;; From the native shell (File > Save). save! posts cg/file-save-request
       ;; back, because the web side owns the overlay codec.
       (= t "cg/save") (save-file!)

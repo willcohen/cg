@@ -15,11 +15,8 @@
 (defn create-model
   "Create a model from a map of :nodes, :edges and :config. A missing key
   gets an empty default."
-  [{:keys [nodes edges config] :as model}]
-  (merge {:nodes (or nodes [])
-          :edges (or edges [])
-          :config (or config {})}
-         model))
+  [model]
+  (merge {:nodes [] :edges [] :config {}} model))
 
 #?(:cljs
    (defonce ^:private staged-models (atom {:n 0 :by-id {}})))
@@ -54,12 +51,5 @@
       ;; :expansion.
       (update (get-staged-model id) :nodes fill-arg-refs args))))
 
-(defn model?
-  "True when x is a model. On JS, x can be a map or a plain JavaScript
-  object."
-  [x]
-  #?(:clj (and (map? x) (:nodes x) (:edges x))
-     :cljs (and x
-                (or (map? x) (object? x))
-                (or (get x :nodes) (aget x "nodes"))
-                (or (get x :edges) (aget x "edges")))))
+(defn model? [x]
+  (and (map? x) (:nodes x) (:edges x)))

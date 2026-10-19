@@ -7,7 +7,8 @@
 (ns cg-app.ui.state
   "The app-shell store: one atom and a useSyncExternalStore adapter. Storage
    and matchMedia access are guarded, because the node tests have no DOM."
-  (:require ["react" :refer [useSyncExternalStore]]))
+  (:require ["react" :refer [useSyncExternalStore]]
+            [cg-app.ui.runtime :as rt]))
 
 (defonce app-state (atom {:theme "white" :loaded-file nil :load-error nil
                           :flow nil :positions #js {} :module-status "not_loaded"
@@ -39,17 +40,15 @@
 
 (def ^:private theme-storage-key "cg-theme")
 
-(defn- storage [] (aget js/globalThis "localStorage"))
-
 (defn- prefers-dark? []
   (try (.-matches (js/window.matchMedia "(prefers-color-scheme: dark)"))
        (catch :default _ false)))
 
 (defn- read-stored-theme []
-  (try (some-> (storage) (.getItem theme-storage-key)) (catch :default _ nil)))
+  (try (some-> (rt/storage) (.getItem theme-storage-key)) (catch :default _ nil)))
 
 (defn- persist-theme! [t]
-  (try (some-> (storage) (.setItem theme-storage-key t)) (catch :default _ nil)))
+  (try (some-> (rt/storage) (.setItem theme-storage-key t)) (catch :default _ nil)))
 
 (defn theme-mode
   "Carbon theme -> cg-brand mode."
@@ -65,7 +64,7 @@
     resolved))
 
 (defn- clear-stored-theme! []
-  (try (some-> (storage) (.removeItem theme-storage-key)) (catch :default _ nil)))
+  (try (some-> (rt/storage) (.removeItem theme-storage-key)) (catch :default _ nil)))
 
 (defn toggle-theme!
   "Flips the theme, and stores it only when it differs from the OS
@@ -156,8 +155,7 @@
   (swap! app-state assoc :exec nil))
 
 (defn toggle-settings! []
-  (swap! app-state assoc :settings-open (not (:settings-open @app-state)))
-  (:settings-open @app-state))
+  (:settings-open (swap! app-state update :settings-open not)))
 
 (defn set-load-error! [msg]
   (swap! app-state assoc :load-error msg))
@@ -222,8 +220,7 @@
   (swap! app-state assoc :report-result nil :scalar-result nil))
 
 (defn toggle-sidebar! []
-  (swap! app-state assoc :sidebar-open? (not (:sidebar-open? @app-state)))
-  (:sidebar-open? @app-state))
+  (:sidebar-open? (swap! app-state update :sidebar-open? not)))
 
 (defn set-session-vars! [vars]
   (swap! app-state assoc :session-vars (or vars #js [])))
@@ -249,27 +246,22 @@
               (.concat cur #js [entry]))]
     (swap! app-state assoc :map-layers nxt))))
 
+(defn- assign-layer! [var-name changes]
+  (swap! app-state assoc :map-layers
+         (.map (:map-layers @app-state)
+               (fn [l] (if (= var-name (aget l "var")) (js/Object.assign #js {} l changes) l)))))
+
 (defn remove-map-layer!
   "Hides a layer and drops its geojson. The entry stays, because its color
    must survive a later show."
   [var-name]
-  (let [nxt (.map (:map-layers @app-state)
-                  (fn [l]
-                    (if (= var-name (aget l "var"))
-                      (js/Object.assign #js {} l #js {:visible? false :geojson nil})
-                      l)))]
-    (swap! app-state assoc :map-layers nxt)))
+  (assign-layer! var-name #js {:visible? false :geojson nil}))
 
 (defn set-layer-visible!
   "Shows or hides a layer and keeps its geojson, because a run layer has no
    source to fetch it from again."
   [var-name visible?]
-  (let [nxt (.map (:map-layers @app-state)
-                  (fn [l]
-                    (if (= var-name (aget l "var"))
-                      (js/Object.assign #js {} l #js {:visible? (boolean visible?)})
-                      l)))]
-    (swap! app-state assoc :map-layers nxt)))
+  (assign-layer! var-name #js {:visible? (boolean visible?)}))
 
 (defn- retire-cleanup
   "The retired cleanups of `st` plus its current projection cleanup. The map

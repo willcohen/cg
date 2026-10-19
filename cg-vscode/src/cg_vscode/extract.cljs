@@ -12,18 +12,12 @@
             ["../../../cg-app/shared/squint/src/cg_gui/doc/edn.mjs" :as edn]
             [clojure.string :as str]))
 
-(defonce ^:private !grammar-wasm (atom nil))
-
 (defn- grammar-wasm-path
   "createRequire needs import.meta.url, which esbuild shims to a file URL in
    the CJS bundle."
   []
-  ;; Deref after reset!, because squint reset! returns undefined.
-  (when (nil? @!grammar-wasm)
-    (let [req (createRequire (js* "import.meta.url"))]
-      (reset! !grammar-wasm
-              (.resolve req "@yogthos/tree-sitter-clojure/tree-sitter-clojure.wasm"))))
-  @!grammar-wasm)
+  (.resolve (createRequire (js* "import.meta.url"))
+            "@yogthos/tree-sitter-clojure/tree-sitter-clojure.wasm"))
 
 (defn ^:async extract-models
   "Promise of the CgFlow of `text`. A form that the parser rejects becomes a

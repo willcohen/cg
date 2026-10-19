@@ -11,13 +11,9 @@
 (defonce cg-module (atom nil))
 
 (defn ^:async load-cg-module!
-  "Resolves to the cg module. Imports it on the first call. Derefs after
-   reset!, because squint reset! returns undefined."
+  "Resolves to the cg module. Imports it on the first call."
   []
-  (when (nil? @cg-module)
-    (let [m (await (js* "import(~{})" "@wcohen/cg"))]
-      (reset! cg-module m)))
-  @cg-module)
+  (or @cg-module (reset! cg-module (await (js* "import(~{})" "@wcohen/cg")))))
 
 (defn asset-url
   "The URL of a file in an npm package. The page's importmap decides where
@@ -25,11 +21,15 @@
   [specifier]
   (.resolve js/import.meta specifier))
 
-(defn module-url
-  "The page-relative URL of the module at load path `path`. Relative, because
-   the demo is served under a sub-path."
+(defn ^:async fetch-module-text
+  "The text of the .cg module at `path`. The path resolves against the cg
+   root, as the JVM does. The URL is relative to the page, because the demo
+   page is under a sub-path."
   [path]
-  (str "modules/" path))
+  (let [resp (await (js/fetch (str "modules/" path)))]
+    (when-not (.-ok resp)
+      (throw (js/Error. (str "load-module " path ": HTTP " (.-status resp)))))
+    (await (.text resp))))
 
 (defn metadata-mod
   "The metadata namespace off a loaded cg module (nil-safe)."

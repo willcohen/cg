@@ -5,7 +5,7 @@
 ;; SPDX-License-Identifier: Apache-2.0 WITH LLVM-exception
 
 (ns importmap
-  "Does every bare specifier in the built browser bundle resolve through each
+  "Does every bare specifier in the built browser bundle resolve through the
 importmap? Reports the node bundle specifiers too, as information only."
   (:require [babashka.fs :as fs]
             [cheshire.core :as json]
@@ -14,10 +14,10 @@ importmap? Reports the node bundle specifiers too, as information only."
 (def ^:private browser-bundle "shared/ui/public/cg-bundled-browser.mjs")
 (def ^:private node-bundle "shared/ui/public/cg-bundled-node.mjs")
 
-(def ^:private importmaps
+(def ^:private importmap-path
   ;; The one importmap of the npm packages, from importmap.mjs. The dev web
   ;; app, the demo and the cg-vscode map page each use all of it.
-  ["shared/ui/public/importmap.json"])
+  "shared/ui/public/importmap.json")
 
 ;; Static, side-effect and dynamic imports, with either quote and with or without
 ;; a space. The bundle is minified, and a loose scan also matches string content.
@@ -26,24 +26,15 @@ importmap? Reports the node bundle specifiers too, as information only."
 (def ^:private specifier-re
   #"(?<![\w$.])(?:from|import)\s*\(?\s*[\"']([@\w][@\w./-]*)[\"']")
 
-(defn- specifiers
-  "Every bare module specifier in a built bundle: static, side-effect and
-   dynamic imports, with either quote and with or without a space."
-  [path]
+(defn- captures [re path]
   (when (fs/exists? path)
-    (->> (re-seq specifier-re (slurp path))
-         (map second)
-         set)))
+    (->> (re-seq re (slurp path)) (map second) set)))
 
 ;; A static node: import fails in a browser, and no importmap can fix it. The
 ;; browser config keeps node:* external only because those imports are dynamic
 ;; and sit in Node-guarded fns that never run in a webview.
 (def ^:private static-node-re
   #"(?<![\w$.])(?:from|import)\s*[\"'](node:[^\"']+)[\"']")
-
-(defn- static-node-imports [path]
-  (when (fs/exists? path)
-    (->> (re-seq static-node-re (slurp path)) (map second) set)))
 
 (defn- importmap-of
   "The {specifier -> target} map out of the imports of an importmap JSON file."
@@ -77,7 +68,7 @@ importmap? Reports the node bundle specifiers too, as information only."
 (defn check!
   "Fail loudly when the browser bundle needs a specifier no importmap resolves."
   []
-  (let [specs (specifiers browser-bundle)]
+  (let [specs (captures specifier-re browser-bundle)]
     (when-not specs
       (println "MISSING bundle:" browser-bundle)
       (println "  build it first: bb build:cg")
@@ -85,7 +76,7 @@ importmap? Reports the node bundle specifiers too, as information only."
     (println "browser bundle bare specifiers:" (count specs))
     (doseq [s (sort specs)] (println "  " s))
     (println)
-    (let [statics (static-node-imports browser-bundle)
+    (let [statics (captures static-node-re browser-bundle)
           _ (when (seq statics)
               (println "STATIC node: imports in the BROWSER bundle:")
               (doseq [s (sort statics)] (println "    " s))
@@ -93,10 +84,10 @@ importmap? Reports the node bundle specifiers too, as information only."
               (println "  no importmap entry can fix it. Find the :cljs require")
               (println "  and make it a guarded dynamic import instead.")
               (println))
-          map-failures (reduce + (map #(report-map! specs %) importmaps))
+          map-failures (report-map! specs importmap-path)
           failures (+ (count statics) map-failures)]
       (println)
-      (when-let [node-specs (specifiers node-bundle)]
+      (when-let [node-specs (captures specifier-re node-bundle)]
         (println "node bundle bare specifiers (resolved from node_modules,"
                  "not an importmap):")
         (doseq [s (sort node-specs)]
@@ -114,7 +105,7 @@ importmap? Reports the node bundle specifiers too, as information only."
       (if (pos? failures)
         (do (println (str "importmap check: " failures " problem(s)"))
             (when (pos? map-failures)
-              (println "  every bundle specifier must appear in each importmap"))
+              (println "  every bundle specifier must appear in the importmap"))
             (when (seq statics)
               (println "  a static node: import cannot be mapped; fix the require"))
             (System/exit 1))

@@ -17,13 +17,6 @@
 (def ^:private tb-line "var(--cds-border-subtle-01, var(--cg-line-soft, var(--vscode-panel-border, #444)))")
 (def ^:private mono "var(--cg-font-mono, monospace)")
 
-(defn- defop->ui-op
-  "An OperationDecl (JS) -> the #js {name, desc} that the op button takes."
-  [op]
-  #js {:name (aget op "name")
-       :desc (str (.-length (or (aget op "inputs") #js [])) " in / "
-                  (.-length (or (aget op "outputs") #js [])) " out")})
-
 (defn- loaded-defop-tabs
   "Groups the :operations of the CgFlow by :source-module label into one tab
    each, sorted. Operations with no source-module go in an \"Ops\" tab."
@@ -34,7 +27,7 @@
                 (let [sm    (aget op "source-module")
                       label (or (and sm (aget sm "label")) "Ops")]
                   (when-not (aget groups label) (aset groups label #js []))
-                  (.push (aget groups label) (defop->ui-op op)))))
+                  (.push (aget groups label) (catalog/ui-op op)))))
     (.map (.sort (js/Object.keys groups))
           (fn [label]
             #js {:id label :label label :ops (aget groups label)}))))

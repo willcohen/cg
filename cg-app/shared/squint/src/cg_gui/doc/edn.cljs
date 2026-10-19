@@ -72,16 +72,7 @@
   (let [[items next-i] (read-coll s i "}")]
     (when (odd? (count items))
       (throw (js/Error. "edn: map literal with odd number of forms")))
-    ;; Built by mutation: squint inlines (assoc <loop-local-literal> k v) to an
-    ;; object spread whose computed key has no [brackets].
-    (let [m {}]
-      (loop [idx 0]
-        (when (< idx (count items))
-          ;; aset on a JS object is squint-idiomatic; kondo types it array-only
-          #_{:clj-kondo/ignore [:type-mismatch]}
-          (aset m (nth items idx) (nth items (inc idx)))
-          (recur (+ idx 2))))
-      [m next-i])))
+    [(apply hash-map items) next-i]))
 
 (def ^:private number-re #"^[+-]?(\d+(\.\d*)?|\.\d+)([eE][+-]?\d+)?$")
 
@@ -142,17 +133,10 @@
                   "}")
     :else (str v)))
 
-(declare ^:private render-overlay*)
-
 (defn render-overlay
   "Renders a parsed-overlay map as a ^:cgproj block: one line for each top-level
    entry, and one line for each entry of a collection with more than one."
   [parsed]
-  (if (zero? (count (js/Object.entries parsed)))
-    "^:cgproj\n{}"
-    (render-overlay* parsed)))
-
-(defn- render-overlay* [parsed]
   (let [entries (js/Object.entries parsed)
         render-entries
         (fn [prefix open close es print-entry]
@@ -176,7 +160,9 @@
 
                :else (str prefix (print-inline v)))))
          entries)]
-    (str "^:cgproj\n" (str/join "\n" lines) "}")))
+    (if (zero? (count entries))
+      "^:cgproj\n{}"
+      (str "^:cgproj\n" (str/join "\n" lines) "}"))))
 
 (defn strip-keys
   "Converts parsed-overlay maps to squint maps, recursively: removes the colon

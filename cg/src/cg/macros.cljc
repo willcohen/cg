@@ -207,6 +207,17 @@
         (parse-regular-operation-form form)))
     {:fn (util/as-sym (str form)) :params {}}))
 
+(defn- registry-info
+  "The registry info that `get-info` gives for `fn-sym`. A bare name also
+   tries the cg. prefix, then the namespace of the bare op."
+  [get-info fn-sym]
+  (let [s (str fn-sym)]
+    (or (get-info fn-sym)
+        (when (neg? (.indexOf s "/"))
+          (or (get-info (str "cg." s))
+              (when-let [ns-name (feature/get-bare-op-namespace s)]
+                (get-info (str ns-name "/" s))))))))
+
 (defn- parse-regular-operation-form
   "`parse-operation-form` for a list that is not a when-row. When the arg count
    equals the schema param count, a last map literal is a positional arg."
@@ -227,17 +238,8 @@
                                   name-part (subs s (inc slash))
                                   resolved-ns (resolve-alias ns-part)]
                               (str resolved-ns "/" name-part)))))
-        fn-sym-str (str fn-sym)
-        bare? #?(:clj (neg? (.indexOf fn-sym-str "/"))
-                 :cljs (neg? (.indexOf fn-sym-str "/")))
-        op-info (or (feature/get-operation-info fn-sym)
-                    (feature/get-group-info fn-sym)
-                    (when bare?
-                      (or (feature/get-operation-info (str "cg." fn-sym-str))
-                          (feature/get-group-info (str "cg." fn-sym-str))
-                          (when-let [ns-name (feature/get-bare-op-namespace fn-sym-str)]
-                            (or (feature/get-operation-info (str ns-name "/" fn-sym-str))
-                                (feature/get-group-info (str ns-name "/" fn-sym-str)))))))
+        op-info (registry-info (some-fn feature/get-operation-info feature/get-group-info)
+                               fn-sym)
         ;; The rung's args fill the other params, because the threading driver
         ;; supplies the :role :table input.
         param-schema (some->> (:params op-info)
@@ -305,31 +307,18 @@
    :schema {}})
 
 (defn- op-signature-level
-  "The declared output level of an op, or nil when the op declares none.
-   Resolves a bare name as parse-regular-operation-form does."
+  "The declared output level of an op, or nil when the op declares none."
   [fn-sym]
-  (let [s (str fn-sym)
-        bare? (neg? (.indexOf s "/"))
-        info (or (feature/get-operation-info fn-sym)
-                 (when bare?
-                   (or (feature/get-operation-info (str "cg." s))
-                       (when-let [ns-name (feature/get-bare-op-namespace s)]
-                         (feature/get-operation-info (str ns-name "/" s))))))]
-    (-> info :outputs first :level)))
+  (-> (registry-info feature/get-operation-info fn-sym) :outputs first :level))
 
 (defn- annotate-operand-levels
   "Set :operand-level, the level that flows in (from :dataset), on each op
    node. A node with :emits-level changes the level for the nodes after it."
   [op-nodes]
-  (loop [nodes op-nodes
-         current :dataset
-         acc []]
-    (if (empty? nodes)
-      acc
-      (let [n (first nodes)
-            n' (assoc n :operand-level current)
-            next-level (or (:emits-level n) current)]
-        (recur (rest nodes) next-level (conj acc n'))))))
+  (second (reduce (fn [[level acc] n]
+                    [(or (:emits-level n) level) (conj acc (assoc n :operand-level level))])
+                  [:dataset []]
+                  op-nodes)))
 
 (defn- build-operation-node
   "Build an operation node from a parsed operation. A registered group gives a
@@ -408,8 +397,7 @@
    `operations` is the config."
   [mode annotate? data-ref operations]
   (let [[ops config] (if (and (map? (last operations))
-                              (> (count operations) 1)
-                              (not (list? (last operations))))
+                              (> (count operations) 1))
                        [(butlast operations) (last operations)]
                        [operations {}])
         parsed-ops (mapv parse-operation-form ops)

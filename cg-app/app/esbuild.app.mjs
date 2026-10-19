@@ -6,29 +6,11 @@
 
 // Bundle the app shell into one browser ESM file. React is in the bundle.
 import * as esbuild from 'esbuild';
-import { mkdirSync, copyFileSync, writeFileSync } from 'fs';
-
-mkdirSync('dist', { recursive: true });
+import { copyFileSync, writeFileSync } from 'fs';
+import { appOptions } from './esbuild.app-options.mjs';
 
 const result = await esbuild.build({
-  entryPoints: ['js/cg_app/ui/app.jsx'],
-  bundle: true,
-  format: 'esm',
-  platform: 'browser',
-  // The importmap of the host page resolves these at run time. fs/promises
-  // and module are node-only imports of web-tree-sitter. They are behind
-  // isNode checks and never run in a browser.
-  external: ['@wcohen/cg', 'cg-app/canvas', 'fs/promises', 'module',
-             'maplibre-gl', 'backproj', 'maplibre-proj', 'proj-wasm'],
-  jsx: 'automatic',
-  jsxImportSource: 'react',
-  // squint emits top-level `await import(...)` for requires. Top-level await
-  // needs es2022.
-  target: ['es2022'],
-  sourcemap: true,
-  minify: false,
-  minifyWhitespace: true,
-  define: { 'process.env.NODE_ENV': '"production"' },
+  ...appOptions,
   metafile: true,
   outfile: 'dist/cg-app.mjs',
 });

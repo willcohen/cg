@@ -30,11 +30,7 @@
   "The CRS of the first geometry of `dataset` as an \"EPSG:N\" string, or
    nil."
   [dataset]
-  (when dataset
-    (let [first-row (first (ds/rows dataset :as-maps))
-          geom (:geometry first-row)]
-      (when geom
-        (normalize-crs (f/get-crs geom))))))
+  (some-> dataset (ds/rows :as-maps) first :geometry f/get-crs normalize-crs))
 
 ;; /api/data reads the tag and reprojects its response to 4326. The session
 ;; dataset stays in the analysis CRS.

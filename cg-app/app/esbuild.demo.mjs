@@ -13,12 +13,10 @@
 // pages cannot drift apart. Each replacement must match, or the build stops.
 import * as esbuild from 'esbuild';
 import * as sass from 'sass';
-import { entries, imports, jsd } from '../importmap.mjs';
+import { entries, imports, jsd, pageUrls } from '../importmap.mjs';
 import { fileURLToPath } from 'node:url';
 import { dirname, join } from 'node:path';
-import {
-  existsSync, mkdirSync, rmSync, copyFileSync, readFileSync, writeFileSync, readdirSync,
-} from 'node:fs';
+import { mkdirSync, rmSync, copyFileSync, readFileSync, writeFileSync, readdirSync } from 'node:fs';
 
 const here = dirname(fileURLToPath(import.meta.url)); // cg-app/app
 const cgApp = join(here, '..');
@@ -27,7 +25,6 @@ const cg = join(repo, 'cg');
 const out = join(repo, 'docs');
 
 const fail = (msg) => { console.error('build:demo: ' + msg); process.exit(1); };
-
 
 // Imports of Node built-ins sit behind Node checks and never run in a browser.
 const nodeOnly = /^(node:|fs$|fs\/promises$|module$|path$|url$|worker_threads$)/;
@@ -56,7 +53,6 @@ const externalsOf = (metafile) => {
   return s;
 };
 
-mkdirSync(out, { recursive: true });
 // vendor/ held gdal-wasm before it was on npm.
 for (const stale of ['cg-app.mjs', 'cg-wasmts-handler.mjs', 'index.html', 'css', 'examples',
                      'modules', 'vendor']) {
@@ -71,7 +67,6 @@ const result = await esbuild.build({
   target: ['es2022'],
   jsx: 'automatic',
   jsxImportSource: 'react',
-  loader: { '.js': 'js', '.mjs': 'js', '.jsx': 'jsx' },
   define: { 'process.env.NODE_ENV': '"production"' },
   // cg's own build keeps every top-level form (cg/esbuild.config.mjs).
   treeShaking: false,
@@ -108,16 +103,14 @@ html = html.slice(0, mapStart)
   + '<script>window.__CG_JS_ONLY__ = true;</script>\n'
   + '<script type="importmap">\n' + JSON.stringify({ imports }, null, 2) + '\n'
   + html.slice(mapEnd);
-replace('href="/vendor/react-flow.css"', `href="${jsd('@xyflow/react', 'dist/style.css').url}"`);
+for (const [from, to] of Object.entries(pageUrls)) replace(`"${from}"`, `"${to}"`);
 replace('href="/canvas/cg.css"', 'href="css/cg.css"');
 replace('href="/css/styles.css"', 'href="css/styles.css"');
 replace('href="/css/cg-shell.css"', 'href="css/cg-shell.css"');
-replace('href="/vendor/maplibre-gl.css"', `href="${jsd('maplibre-gl', 'dist/maplibre-gl.css').url}"`);
 replace('<link rel="manifest" href="./manifest.webmanifest">\n', '');
 const swStart = html.indexOf('<script>\n  // PWA only');
 if (swStart < 0) fail('app/public/index.html has no service worker script');
 html = html.slice(0, swStart) + html.slice(html.indexOf('</script>\n', swStart) + '</script>\n'.length);
-replace('src="/vendor/wasmts/wasmts.js"', `src="${jsd('@wcohen/wasmts', 'dist/wasmts.js').url}"`);
 replace('from "/dist/cg-app.mjs"', 'from "./cg-app.mjs"');
 if (/(href|src)="\/[^/]|from\s+"\/[^/]/.test(html)) fail('docs/index.html keeps a root-absolute URL');
 writeFileSync(join(out, 'index.html'), html);

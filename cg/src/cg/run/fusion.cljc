@@ -21,8 +21,8 @@
 
 (defn node->op-key
   "The registry key of `node`, a string on both runtimes, from :fn. A bare
-   name gets its namespace from bare-op-namespaces, as in
-   cg.run/operation->step."
+   name gets its namespace from bare-op-namespaces, because a per-row op
+   registers as \"<ns>/<op-name>\"."
   [node]
   (let [raw (:fn node)
         s (cond
@@ -96,6 +96,8 @@
 
 #?(:clj
    ;; A row fn can return a persistent map, and the assoc! of the next step fails on one.
+   ;; A FastStruct row of tech.v3.dataset is not an IEditableCollection, and (transient row)
+   ;; on it throws ClassCastException. Thus this fn copies such a row with (into {} row).
    (defn- ensure-transient
      "Return `r` as a transient row map."
      [r]
@@ -177,13 +179,5 @@
                                "exc=" (.getName (class t))
                                "msg=" (.getMessage t)))
                    (assoc! r :error (ex-message t))))))
-           ;; A FastStruct row of tech.v3.dataset is not an
-           ;; IEditableCollection, and (transient row) on it throws
-           ;; ClassCastException. Copy it with (into {} row) first. A Clojure
-           ;; map needs no copy.
-           #?(:clj
-              (if (instance? clojure.lang.IEditableCollection row)
-                (transient row)
-                (transient (into {} row)))
-              :cljs (transient row))
+           #?(:clj (ensure-transient row) :cljs (transient row))
            (map-indexed vector row-fns))))

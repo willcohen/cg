@@ -5,12 +5,15 @@
 ;; SPDX-License-Identifier: Apache-2.0 WITH LLVM-exception
 
 (ns cg-app.ui.save-test
-  "The save serializer: cg-text output decodes back through the real cg
+  "The save serializer: the saved text decodes back through the real cg
    metadata module. Also the shape of the cg/file-save-request message."
   (:require [cljs.test :as t :refer [deftest is]]
             ["../../../../../cg/src/cg/metadata.mjs" :as md]
             ["../../../src/cg_app/ui/loader.mjs" :as loader]
             ["../../../src/cg_app/ui/save.mjs" :as save]))
+
+(defn- saved-text [text flow positions]
+  (aget (save/request-for "x.cg" {:text text} flow positions) "content"))
 
 (def code "(def buffered\n  (table-> parcels\n           (geo/buffer 10)))")
 
@@ -23,23 +26,23 @@
                                     :end-line 6 :end-column 38}}})
 
 (deftest saved-text-roundtrips-through-decode
-  (let [txt (save/cg-text text-with-overlay flow-with-overlay
-                          {"buffer-1" #js [111 222]})
+  (let [txt (saved-text text-with-overlay flow-with-overlay
+                        {"buffer-1" #js [111 222]})
         ps  (loader/overlay-positions md txt)]
     (is (.includes txt "(geo/buffer 10)"))
     (is (= 111 (aget (aget ps "buffer-1") 0)))
     (is (= 222 (aget (aget ps "buffer-1") 1)))))
 
 (deftest saved-text-appends-overlay-when-absent
-  (let [txt (save/cg-text (str code "\n") #js {:overlay nil}
-                          {"buffered__buffer-1" #js [10 20]})
+  (let [txt (saved-text (str code "\n") #js {:overlay nil}
+                        {"buffered__buffer-1" #js [10 20]})
         ps  (loader/overlay-positions md txt)]
     (is (.includes txt "(geo/buffer 10)"))
     (is (= 10 (aget (aget ps "buffered__buffer-1") 0)))))
 
 (deftest save-request-shape
-  (let [req (save/save-request "x.cg" "(def x 1)\n" #js {:overlay nil}
-                               {"a" #js [1 2]})]
+  (let [req (save/request-for "x.cg" {:text "(def x 1)\n"} #js {:overlay nil}
+                              {"a" #js [1 2]})]
     (is (= "cg/file-save-request" (aget req "type")))
     (is (= "x.cg" (aget req "name")))
     (is (.includes (aget req "content") "^:cgproj"))))

@@ -188,8 +188,7 @@ const runOk = async (page) => {
         && !options.some((v) => v.endsWith('boston.cg')),
       'options=' + JSON.stringify(options));
 
-    const empty = await page.evaluate(() =>
-      (document.querySelector('[data-testid=status]') || {}).textContent);
+    const empty = await statusText(page);
     await page.selectOption('[data-testid=examples-menu]',
       options ? options.find((v) => v.endsWith('parcel.cg')) : 'parcel.cg').catch(() => null);
     const first = await page.waitForFunction(() => {

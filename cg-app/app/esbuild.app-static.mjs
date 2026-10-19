@@ -17,6 +17,7 @@ import { dirname, join } from 'node:path';
 import {
   mkdirSync, rmSync, cpSync, copyFileSync, readFileSync, writeFileSync, readdirSync,
 } from 'node:fs';
+import { appOptions } from './esbuild.app-options.mjs';
 
 const here = dirname(fileURLToPath(import.meta.url)); // cg-app/app
 const cgApp = join(here, '..');
@@ -24,25 +25,8 @@ const repo = join(cgApp, '..');                       // monorepo root
 const out = join(here, 'dist-static');
 
 rmSync(out, { recursive: true, force: true });
-mkdirSync(join(out, 'dist'), { recursive: true });
 
-// Keep this config the same as in esbuild.app.mjs.
-await esbuild.build({
-  entryPoints: [join(here, 'js', 'cg_app', 'ui', 'app.jsx')],
-  bundle: true,
-  format: 'esm',
-  platform: 'browser',
-  external: ['@wcohen/cg', 'cg-app/canvas', 'fs/promises', 'module',
-             'maplibre-gl', 'backproj', 'maplibre-proj', 'proj-wasm'],
-  jsx: 'automatic',
-  jsxImportSource: 'react',
-  target: ['es2022'],
-  sourcemap: true,
-  minify: false,
-  minifyWhitespace: true,
-  define: { 'process.env.NODE_ENV': '"production"' },
-  outfile: join(out, 'dist', 'cg-app.mjs'),
-});
+await esbuild.build({ ...appOptions, outfile: join(out, 'dist', 'cg-app.mjs') });
 copyFileSync(join(repo, 'cg', 'node_modules', 'web-tree-sitter', 'web-tree-sitter.wasm'),
              join(out, 'dist', 'web-tree-sitter.wasm'));
 
@@ -116,10 +100,9 @@ const mapAt = html.indexOf('{ "imports": {') + '{ "imports": {'.length;
 html = html.slice(0, mapAt)
   + Object.entries(vendored).map(([k, v]) => `\n    ${JSON.stringify(k)}: ${JSON.stringify(v)},`).join('')
   + html.slice(mapAt);
-for (const base of ['vendor', 'css', 'canvas', 'dist']) {
+for (const base of ['vendor', 'css', 'canvas', 'dist', 'cg-bundled-browser.mjs']) {
   html = html.replaceAll(`"/${base}`, `"./${base}`);
 }
-html = html.replaceAll('"/cg-bundled-browser.mjs', '"./cg-bundled-browser.mjs');
 writeFileSync(join(out, 'index.html'), html);
 
 console.log('Built static bundle at', out);

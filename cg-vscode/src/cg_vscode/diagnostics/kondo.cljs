@@ -8,10 +8,6 @@
   "Builds the clj-kondo command for a .cg buffer and reads its JSON findings.
    The buffer goes on standard input, because clj-kondo skips .cg files.")
 
-(def lane-config
-  "The clj-kondo config as EDN: JSON output, with nothing silenced."
-  "{:output {:format :json}}")
-
 (defn argv
   "The clj-kondo arguments for the .cg buffer `path`. The cache is off, because
    a shared cache mixes the programs: a .cg program with no ns form puts its
@@ -20,7 +16,7 @@
   ["--lint" "-"
    "--filename" path
    "--cache" "false"
-   "--config" lane-config])
+   "--config" "{:output {:format :json}}"])
 
 (def ^:private level->severity
   {"error" :error
@@ -51,10 +47,7 @@
   "Reads clj-kondo's stdout into diagnostic maps. Returns [] when the text is
    not JSON."
   [stdout]
-  (if (or (nil? stdout) (zero? (count (str stdout))))
-    []
-    (let [parsed (try (js/JSON.parse (str stdout))
-                      (catch :default _ nil))]
-      (if parsed
-        (findings->diagnostic-data (:findings parsed))
-        []))))
+  (if-let [parsed (try (js/JSON.parse (str stdout))
+                       (catch :default _ nil))]
+    (findings->diagnostic-data (:findings parsed))
+    []))

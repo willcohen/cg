@@ -60,8 +60,5 @@
                         (aget location "start-line")
                         (aget location "end-line")
                         rendered))
-      (let [nodes    (reduce (fn [m [id pos]] (assoc m id {":pos" (vec pos)}))
-                             {}
-                             (js/Object.entries positions))
-            rendered (str (edn/render-overlay {":nodes" nodes}) "\n")]
-        (str (str/trimr text) "\n\n" rendered)))))
+      (str (str/trimr text) "\n\n"
+           (edn/render-overlay (update-overlay-positions {} positions)) "\n"))))
