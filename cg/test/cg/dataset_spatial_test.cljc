@@ -31,8 +31,7 @@
   (mapv (fn [r] (get r :id)) (ds/rows d :as-maps)))
 
 (deftest select-intersects-keeps-the-rows-that-intersect
-  (testing "a point in the first square selects only that row"
-    (is (= [1] (ids (ds/select-intersects (two-squares) (feature/point 5 5)))))))
+  (is (= [1] (ids (ds/select-intersects (two-squares) (feature/point 5 5))))))
 
 (defn- indexed-squares []
   (ds/add-spatial-index (two-squares)))

@@ -5,8 +5,7 @@
 ;; SPDX-License-Identifier: Apache-2.0 WITH LLVM-exception
 
 (ns cg-vscode.run-relay-test
-  "The canvas messages of a JS run in the CG Map tab.
-   Runs standalone: node test/cg_vscode/run_relay_test.mjs."
+  "The canvas messages of a JS run in the CG Map tab."
   (:require [cljs.test :as t :refer [deftest is]]
             ["../../src/cg_vscode/run_relay.mjs" :as relay]))
 
@@ -47,8 +46,4 @@
              "cg/csp-violation"]]
     (is (= [] (relay/canvas-messages #js {:type t} file)) t)))
 
-(.then (js/Promise.resolve (t/run-tests))
-       (fn [results]
-         (let [fail (or (get results "fail") 0)
-               err (or (get results "error") 0)]
-           (js/process.exit (if (pos? (+ fail err)) 1 0)))))
+(.then (js/Promise.resolve (t/run-tests)) #(js/process.exit (if (t/successful? %) 0 1)))

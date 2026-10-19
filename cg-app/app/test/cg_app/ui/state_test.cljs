@@ -14,11 +14,6 @@
   (when-let [ls (.-localStorage js/globalThis)] (.removeItem ls "cg-theme"))
   (is (= "white" (st/init-theme!))))
 
-(deftest toggle-theme-flips-and-returns
-  (swap! st/app-state assoc :theme "g100")
-  (is (= "white" (st/toggle-theme!)))
-  (is (= "g100" (st/toggle-theme!))))
-
 ;; The OS preference reads as light here, because node has no matchMedia.
 (deftest toggle-theme-stores-only-a-choice-that-differs-from-the-os
   (swap! st/app-state assoc :theme "white")

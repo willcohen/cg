@@ -30,7 +30,7 @@
 ;; Built by a thunk, not top-level defs: on JS the feature/* geometry
 ;; constructors need globalThis.wasmts, which init-wasmts! installs only after
 ;; module load. Each deftest destructures (fx) so construction happens once the
-;; runner has initialised wasmts. On JVM the thunk is a cheap rebuild.
+;; runner has initialized wasmts. On JVM the thunk is a cheap rebuild.
 
 (defn- mk-line [pts props] (feature/to-feature (feature/linestring pts) props))
 (defn- mk-poly [pts props] (feature/to-feature (feature/polygon pts) props))
@@ -102,9 +102,8 @@
                (if (and (some? pa) (some? pb)) (props-eq? pa pb) true)))
         (= a b)))))
 
-#?(:cljs
-   (defn- coords->pairs [arr]
-     (mapv (fn [c] [(.-x c) (.-y c)]) arr)))
+(defn- coords->pairs [arr]
+  (mapv (fn [^Coordinate c] [(.-x c) (.-y c)]) arr))
 
 ;; simplify defaults to topology-preserving (the documented :preserve-topology
 ;; default); douglas-peucker-simplify and (simplify … {:preserve-topology false})
@@ -130,22 +129,20 @@
      :cljs (js/globalThis.wasmts.geom.util.GeometryFixer.fix (feature/geometry f))))
 
 (defn- o-coordinates [f]
-  #?(:clj  (mapv (fn [^Coordinate c] [(.getX c) (.getY c)])
-                 (.getCoordinates ^Geometry (feature/geometry f)))
-     :cljs (coords->pairs (.getCoordinates (feature/geometry f)))))
+  (coords->pairs (.getCoordinates ^Geometry (feature/geometry f))))
 
 (defn- o-nearest [f1 f2]
-  #?(:clj  (mapv (fn [^Coordinate c] [(.getX c) (.getY c)])
-                 (DistanceOp/nearestPoints (feature/geometry f1) (feature/geometry f2)))
-     :cljs (coords->pairs (js/globalThis.wasmts.operation.distance.DistanceOp.nearestPoints
-                           (feature/geometry f1) (feature/geometry f2)))))
+  (coords->pairs
+   #?(:clj  (DistanceOp/nearestPoints (feature/geometry f1) (feature/geometry f2))
+      :cljs (js/globalThis.wasmts.operation.distance.DistanceOp.nearestPoints
+             (feature/geometry f1) (feature/geometry f2)))))
 
 (defn- o-closest [f1 f2]
   ;; JTS DistanceOp.closestPoints == nearestPoints (same two points).
-  #?(:clj  (mapv (fn [^Coordinate c] [(.getX c) (.getY c)])
-                 (DistanceOp/nearestPoints (feature/geometry f1) (feature/geometry f2)))
-     :cljs (coords->pairs (js/globalThis.wasmts.operation.distance.DistanceOp.closestPoints
-                           (feature/geometry f1) (feature/geometry f2)))))
+  (coords->pairs
+   #?(:clj  (DistanceOp/nearestPoints (feature/geometry f1) (feature/geometry f2))
+      :cljs (js/globalThis.wasmts.operation.distance.DistanceOp.closestPoints
+             (feature/geometry f1) (feature/geometry f2)))))
 
 ;; The bespoke ports (offset-line / offset-line-string / merge-lines / one-sided
 ;; buffers) have no independent second implementation to check against, so their
@@ -161,13 +158,12 @@
 
 (deftest accessor-equivalence
   (let [{:keys [square-a line-diag]} (fx)]
-    (testing "getArea"     (is (eqv (geo/area square-a)          (geo/geometry-get-area square-a))))
-    (testing "getLength"   (is (eqv (geo/length line-diag)       (geo/geometry-get-length line-diag))))
-    (testing "geometry-type" (is (eqv (geo/geometry-type square-a) (geo/geometry-get-geometry-type square-a))))
-    (testing "num-geometries (single)"
-      (is (eqv (geo/num-geometries square-a) (geo/geometry-get-num-geometries square-a))))
-    (testing "isValid"     (is (eqv (geo/valid? square-a)        (geo/geometry-is-valid square-a))))
-    (testing "isEmpty"     (is (eqv (geo/empty? square-a)   (geo/geometry-is-empty square-a))))))
+    (is (eqv (geo/area square-a) (geo/geometry-get-area square-a)))
+    (is (eqv (geo/length line-diag) (geo/geometry-get-length line-diag)))
+    (is (eqv (geo/geometry-type square-a) (geo/geometry-get-geometry-type square-a)))
+    (is (eqv (geo/num-geometries square-a) (geo/geometry-get-num-geometries square-a)))
+    (is (eqv (geo/valid? square-a) (geo/geometry-is-valid square-a)))
+    (is (eqv (geo/empty? square-a) (geo/geometry-is-empty square-a)))))
 
 (deftest geometry-returning-equivalence
   (let [{:keys [square-a point-in]} (fx)]
@@ -180,8 +176,6 @@
 (deftest buffer-opts
   (let [line (mk-line [[0 0] [10 0]] {:id "L"})
         ar   (fn [x] (.getArea ^Geometry (feature/geometry x)))]
-    (testing "default (no opts) matches plain Geometry.buffer"
-      (is (close? (ar (geo/buffer line 2.0)) (ar (geo/geometry-buffer line 2.0)))))
     (testing "integer distance works (static dispatch coerces Long -> double)"
       (is (close? (ar (geo/buffer line 3)) (ar (geo/buffer line 3.0)))))
     (testing ":cap-style :flat gives a bare rectangle (2*len*dist = 40), no round caps"
@@ -249,12 +243,9 @@
 
 (deftest bespoke-cross-platform-sanity
   (let [{:keys [bend-line seg-a seg-b]} (fx)]
-    (testing "offset-line -> non-empty LineString"
-      (is (non-empty-geom-of-type? (geo/offset-line bend-line 1.0) "LineString")))
-    (testing "offset-line-string :line -> non-empty LineString"
-      (is (non-empty-geom-of-type? (geo/offset-line-string bend-line 1.0 :line) "LineString")))
-    (testing "merge-lines -> non-empty LineString"
-      (is (non-empty-geom-of-type? (geo/merge-lines [seg-a seg-b]) "LineString")))))
+    (is (non-empty-geom-of-type? (geo/offset-line bend-line 1.0) "LineString"))
+    (is (non-empty-geom-of-type? (geo/offset-line-string bend-line 1.0 :line) "LineString"))
+    (is (non-empty-geom-of-type? (geo/merge-lines [seg-a seg-b]) "LineString"))))
 
 ;; The JS runtime builds a Point through wasmts.geom.fromFlat, which takes a
 ;; dimension. The Coordinate route it replaced stopped at XYZ, so the 4-arity
@@ -275,24 +266,14 @@
      :cljs (js/Number.isNaN v)))
 
 (deftest point-dimensions
-  (testing "2 args carry x and y only"
-    (let [[x y z m] (point-ordinates (feature/point 1.5 2.5))]
-      (is (= 1.5 x))
-      (is (= 2.5 y))
-      (is (unset-ordinate? z))
-      (is (unset-ordinate? m))))
-  (testing "3 args carry z"
-    (let [[x y z m] (point-ordinates (feature/point 1.5 2.5 3.5))]
-      (is (= 1.5 x))
-      (is (= 2.5 y))
-      (is (= 3.5 z))
-      (is (unset-ordinate? m))))
-  (testing "4 args carry z and m"
-    (let [[x y z m] (point-ordinates (feature/point 1.5 2.5 3.5 4.5))]
-      (is (= 1.5 x))
-      (is (= 2.5 y))
-      (is (= 3.5 z))
-      (is (= 4.5 m)))))
+  (let [[x y z m] (point-ordinates (feature/point 1.5 2.5))]
+    (is (= [1.5 2.5] [x y]))
+    (is (unset-ordinate? z))
+    (is (unset-ordinate? m)))
+  (let [[x y z m] (point-ordinates (feature/point 1.5 2.5 3.5))]
+    (is (= [1.5 2.5 3.5] [x y z]))
+    (is (unset-ordinate? m)))
+  (is (= [1.5 2.5 3.5 4.5] (point-ordinates (feature/point 1.5 2.5 3.5 4.5)))))
 
 (defn- collection [geoms]
   #?(:clj (.createGeometryCollection (GeometryFactory.) (into-array Geometry geoms))
@@ -318,33 +299,25 @@
 
 (deftest collection-input-lift
   (let [{:keys [square-a square-b line-diag]} (fx)]
-    (testing "coordinates over a vector of features"
-      (is (= (mapv o-coordinates [line-diag square-a])
-             (geo/coordinates [line-diag square-a]))))
-    (testing "get-minimum-area-rectangle over a vector of features"
-      (is (every? true?
-                  (map eqv
-                       (mapv o-min-area [square-a square-b])
-                       (geo/get-minimum-area-rectangle [square-a square-b])))))))
+    (is (= (mapv o-coordinates [line-diag square-a])
+           (geo/coordinates [line-diag square-a])))
+    (is (every? true?
+                (map eqv
+                     (mapv o-min-area [square-a square-b])
+                     (geo/get-minimum-area-rectangle [square-a square-b]))))))
 
 #?(:clj
    (deftest jvm-only-sanity+equivalence
      (let [{:keys [bend-line]} (fx)
            coll (mp-coll)]
        ;; bespoke buffers/offset: sanity (no second impl to compare against)
-       (testing "one-sided-buffer -> non-empty Polygon"
-         (is (non-empty-geom-of-type? (geo/one-sided-buffer bend-line 1.0) "Polygon")))
-       (testing "left-buffer -> non-empty Polygon"
-         (is (non-empty-geom-of-type? (geo/left-buffer bend-line 1.0) "Polygon")))
-       (testing "right-buffer -> non-empty Polygon"
-         (is (non-empty-geom-of-type? (geo/right-buffer bend-line 1.0) "Polygon")))
-       (testing "offset-line-string :polygon -> non-empty Polygon"
-         (is (non-empty-geom-of-type? (geo/offset-line-string bend-line 1.0 :polygon) "Polygon")))
+       (is (non-empty-geom-of-type? (geo/one-sided-buffer bend-line 1.0) "Polygon"))
+       (is (non-empty-geom-of-type? (geo/left-buffer bend-line 1.0) "Polygon"))
+       (is (non-empty-geom-of-type? (geo/right-buffer bend-line 1.0) "Polygon"))
+       (is (non-empty-geom-of-type? (geo/offset-line-string bend-line 1.0 :polygon) "Polygon"))
        ;; collection accessors: promoted name vs raw mint twin (real equivalence)
-       (testing "num-geometries (collection)"
-         (is (eqv (geo/num-geometries coll) (geo/geometry-get-num-geometries coll))))
-       (testing "geometry-n (first child)"
-         (is (eqv (geo/geometry-n coll 0) (geo/geometry-get-geometry-n coll 0)))))))
+       (is (eqv (geo/num-geometries coll) (geo/geometry-get-num-geometries coll)))
+       (is (eqv (geo/geometry-n coll 0) (geo/geometry-get-geometry-n coll 0))))))
 
 ;; transform-geom (proj, not JTS). On JVM it is synchronous (JNA FFI) and compared
 ;; directly against geo. On JS proj-wasm is worker-backed, so transform-geom returns

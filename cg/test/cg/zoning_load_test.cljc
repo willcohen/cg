@@ -28,16 +28,9 @@
   (is (= [true true] (vec result))
       "a first load of zoning.cg defines zoning.cg and parcel.cg"))
 
-#?(:cljs
-   (defn ^:async run-zoning-first! []
-     (await (run/load-module zoning))
-     (check-both! (run/eval-cg both-src))))
-
 (deftest zoning-loads-first
-  #?(:clj (do (run/reset-context!)
-              (run/load-module zoning)
-              (check-both! (run/eval-cg both-src)))
-     :cljs (run-zoning-first!)))
+  #?(:clj (do (run/reset-context!) (run/load-module zoning)))
+  (check-both! (run/eval-cg both-src)))
 
 #?(:clj
    (deftest parcel-does-not-load-zoning
@@ -46,4 +39,5 @@
      (is (nil? (run/eval-cg "(find-ns 'cg.zoning)")))))
 
 #?(:cljs (-> (init_wasmts_BANG_)
+             (.then (fn [_] (run/load-module zoning)))
              (.then (fn [_] (run_tests_and_exit_BANG_ "cg.zoning-load-test")))))

@@ -5,8 +5,7 @@
 ;; SPDX-License-Identifier: Apache-2.0 WITH LLVM-exception
 
 (ns cg-vscode.canvas-html-test
-  "The page of the canvas webview against the sources of the shared canvas.
-   Runs standalone: node test/cg_vscode/canvas_html_test.mjs."
+  "The page of the canvas webview against the sources of the shared canvas."
   (:require [clojure.string :as str]
             [cljs.test :as t :refer [deftest is]]
             ["fs" :as fs]
@@ -64,12 +63,6 @@
                   (mapcat (fn [m] (str/split (second m) #"\s+")))
                   distinct)]
     (is (pos? (count used)))
-    (doseq [c used]
-      (is (contains? canvas-html/carbon-components c)
-          (str "the canvas webview has no style for the Carbon component " c)))))
+    (is (= [] (remove #(contains? canvas-html/carbon-components %) used)))))
 
-(.then (js/Promise.resolve (t/run-tests))
-       (fn [results]
-         (let [fail (or (get results "fail") 0)
-               err (or (get results "error") 0)]
-           (js/process.exit (if (pos? (+ fail err)) 1 0)))))
+(.then (js/Promise.resolve (t/run-tests)) #(js/process.exit (if (t/successful? %) 0 1)))

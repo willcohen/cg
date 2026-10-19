@@ -7,7 +7,7 @@
 ;; Model extraction from a string or a file needs SCI, which is JVM only. On
 ;; the JS runtime the node CLI gets each model by its name.
 (ns cg.introspect-test
-  #?(:clj (:require [clojure.test :refer [deftest is testing]]
+  #?(:clj (:require [clojure.test :refer [deftest is]]
                     [cg.introspect :as introspect]
                     [cg.model :as model]
                     [cg.dataset :as ds]
@@ -24,60 +24,51 @@
 
 #?(:clj
    (deftest test-extract-models-from-string
-     (testing "Extract single model from code string"
-       (let [{:keys [result models]} (introspect/extract-models-from-string
-                                       "(require '[cg.macros :refer [item->]])
-                                        (require '[cg.geo :as geo])
-                                        (def buffer-model
-                                          (item-> :data (geo/buffer 10)))
-                                        :done")]
-         (is (= :done result) "Should return last expression value")
-         (is (= 1 (count models)) "Should find exactly one model")
-         (is (contains? models 'buffer-model) "Should find buffer-model")
-         (is (model/model? (get models 'buffer-model)) "buffer-model should be a valid model")))))
+     (let [{:keys [result models]} (introspect/extract-models-from-string
+                                     "(require '[cg.macros :refer [item->]])
+                                      (require '[cg.geo :as geo])
+                                      (def buffer-model
+                                        (item-> :data (geo/buffer 10)))
+                                      :done")]
+       (is (= :done result))
+       (is (= 1 (count models)))
+       (is (model/model? (get models 'buffer-model))))))
 
 #?(:clj
    (deftest test-extract-multiple-models
-     (testing "Extract multiple models from code string"
-       (let [{:keys [models]} (introspect/extract-models-from-string
-                                "(require '[cg.macros :refer [item-> coll->]])
-                                 (require '[cg.geo :as geo])
-                                 (def model1 (item-> :data (geo/buffer 10)))
-                                 (def model2 (coll-> :data (geo/union)))
-                                 (def not-a-model 42)
-                                 :done")]
-         (is (= 2 (count models)) "Should find exactly two models")
-         (is (contains? models 'model1) "Should find model1")
-         (is (contains? models 'model2) "Should find model2")
-         (is (not (contains? models 'not-a-model)) "Should not include non-models")
-         (is (model/model? (get models 'model1)))
-         (is (model/model? (get models 'model2)))))))
+     (let [{:keys [models]} (introspect/extract-models-from-string
+                              "(require '[cg.macros :refer [item-> coll->]])
+                               (require '[cg.geo :as geo])
+                               (def model1 (item-> :data (geo/buffer 10)))
+                               (def model2 (coll-> :data (geo/union)))
+                               (def not-a-model 42)
+                               :done")]
+       (is (= 2 (count models)) "not-a-model is not a model")
+       (is (model/model? (get models 'model1)))
+       (is (model/model? (get models 'model2))))))
 
 #?(:clj
    (deftest test-extract-models-from-file
-     (testing "Extract models from example file"
-       (let [{:keys [models file]} (introspect/extract-models-from-file
-                                     "test/fixtures/threading-macros.cg")]
-         (is (= "test/fixtures/threading-macros.cg" file))
-         (is (pos? (count models)) "Should find at least one model")
-         (is (every? model/model? (vals models))
-             "All extracted values should be valid models")))))
+     (let [{:keys [models file]} (introspect/extract-models-from-file
+                                   "test/fixtures/threading-macros.cg")]
+       (is (= "test/fixtures/threading-macros.cg" file))
+       (is (pos? (count models)))
+       (is (every? model/model? (vals models))))))
 
 #?(:clj
    (deftest test-list-models
-     (testing "List models with summary info"
-       (let [{:keys [models]} (introspect/extract-models-from-string
-                                "(require '[cg.macros :refer [item->]])
-                                 (require '[cg.geo :as geo])
-                                 (def m (item-> :data (geo/buffer 10) (geo/simplify 1.0)))
-                                 :done")
-             summary (introspect/list-models models)]
-         (is (= 1 (count summary)))
-         (let [info (first summary)]
-           (is (= 'm (:name info)))
-           (is (= 4 (:node-count info)) "Should have source + 2 ops + sink")
-           (is (= 3 (:edge-count info)) "Should have 3 edges")
-           (is (= [:geo/buffer :geo/simplify] (:operations info))))))))
+     (let [{:keys [models]} (introspect/extract-models-from-string
+                              "(require '[cg.macros :refer [item->]])
+                               (require '[cg.geo :as geo])
+                               (def m (item-> :data (geo/buffer 10) (geo/simplify 1.0)))
+                               :done")
+           summary (introspect/list-models models)]
+       (is (= 1 (count summary)))
+       (let [info (first summary)]
+         (is (= 'm (:name info)))
+         (is (= 4 (:node-count info)) "Should have source + 2 ops + sink")
+         (is (= 3 (:edge-count info)))
+         (is (= [:geo/buffer :geo/simplify] (:operations info)))))))
 
 ;; transform-crs is an operation group: its node has :type :group.
 (defn- transform-crs-model []

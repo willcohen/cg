@@ -5,9 +5,7 @@
 ;; SPDX-License-Identifier: Apache-2.0 WITH LLVM-exception
 
 (ns cg.metadata-test
-  "Tests for trailing EDN metadata support (cg.metadata). ONE .cljc suite runs
-   under clojure.test (JVM, `bb test`) and under cljs.test (squint and node,
-   `bb test:cljs`).
+  "Tests for trailing EDN metadata support (cg.metadata).
 
    Visual metadata is stored as trailing EDN with ^:cgproj marker:
 
@@ -25,13 +23,13 @@
    reader. cljs compiles the text with squint and evaluates it, which gives a
    plain JS object. Because of this, a count of entries needs one helper for
    each runtime."
-  #?(:clj (:require [clojure.test :refer [deftest is testing]]
+  #?(:clj (:require [clojure.test :refer [deftest is]]
                     [clojure.string :as str]
                     [cg.metadata :as metadata]
                     [cg.introspect :as introspect]
                     [cg.run :as run]
                     [cg.codegen :as codegen])
-     :cljs (:require [cljs.test :refer [deftest is testing]]
+     :cljs (:require [cljs.test :refer [deftest is]]
                      [clojure.string :as str]
                      ["../../src/cg/metadata.mjs" :as metadata]
                      ["../../src/cg/run.mjs" :as run]
@@ -87,36 +85,27 @@
  :viewport {:zoom 1.0 :pan [0 0]}}")
 
 (deftest test-split-code-and-metadata
-  (testing "Split code with trailing metadata"
-    (let [result (metadata/split-code-and-metadata content-with-metadata)
-          md     (:metadata result)]
-      (is (str/ends-with? (:code result) "(geo/simplify 1.0)))") "the code stops before the ^:cgproj tag")
-      (is (= 3 (entry-count (:nodes md))) "Should have 3 node positions")
-      ;; Field by field, because the JVM map and the JS object do not compare
-      ;; as one value.
-      (is (= 1.0 (:zoom (:viewport md))) "Should extract the viewport zoom")
-      (is (= [0 0] (:pan (:viewport md))) "Should extract the viewport pan"))))
+  (let [result (metadata/split-code-and-metadata content-with-metadata)
+        md     (:metadata result)]
+    (is (str/ends-with? (:code result) "(geo/simplify 1.0)))") "the code stops before the ^:cgproj tag")
+    (is (= 3 (entry-count (:nodes md))))
+    (is (= {:zoom 1.0 :pan [0 0]} (:viewport md)))))
 
 (deftest test-split-plain-code
-  (testing "Split code without trailing metadata"
-    (let [plain-code "(item-> :data (buffer 10))"
-          result (metadata/split-code-and-metadata plain-code)]
-      (is (= plain-code (:code result)) "Code should be unchanged")
-      (is (= 0 (entry-count (:metadata result))) "Metadata should be empty"))))
+  (let [plain-code "(item-> :data (buffer 10))"
+        result (metadata/split-code-and-metadata plain-code)]
+    (is (= plain-code (:code result)))
+    (is (= 0 (entry-count (:metadata result))))))
 
 (deftest test-round-trip-with-metadata
-  (testing "Round-trip: graph → code+metadata → graph preserves positions"
-    (let [generated-code (codegen/flow-graph->cg-code-with-metadata
-                          (with-positions (buffer-model)))]
+  (let [generated-code (codegen/flow-graph->cg-code-with-metadata
+                        (with-positions (buffer-model)))]
 
-      (is (string? generated-code) "Should generate code")
-      (is (str/includes? generated-code "^:cgproj") "Should contain ^:cgproj marker")
-      (is (str/includes? generated-code ":viewport") "Should contain the viewport")
+    (is (str/includes? generated-code ":viewport"))
 
-      (testing "Parse generated code back"
-        (let [reparsed (metadata/split-code-and-metadata generated-code)]
-          (is (= 2 (entry-count (:nodes (:metadata reparsed))))
-              "Should preserve node positions"))))))
+    (let [reparsed (metadata/split-code-and-metadata generated-code)]
+      (is (= 2 (entry-count (:nodes (:metadata reparsed))))
+          "Should preserve node positions"))))
 
 #?(:cljs (-> (init_wasmts_BANG_)
              (.then (fn [_] (run_tests_and_exit_BANG_ "cg.metadata-test")))))

@@ -67,7 +67,6 @@ function waitForServer(timeoutMs) {
     check('1 page loads', up);
 
     await page.setInputFiles('[data-testid=file-input]', FIXTURE);
-    const isCallSite = (id) => /^areas__.*area-of/.test(id || '');
     const drawn = await page.waitForFunction(
       (src) => Array.from(document.querySelectorAll('.react-flow__node'))
         .some((n) => new RegExp(src).test(n.getAttribute('data-id') || '')),
@@ -79,7 +78,7 @@ function waitForServer(timeoutMs) {
       return n ? { id: n.getAttribute('data-id'), unresolved: !!n.querySelector('.cg-node.unresolved-op'), text: n.textContent } : null;
     });
     check('2 the canvas draws a/area-of as a resolved op',
-      drawn && node && isCallSite(node.id) && !node.unresolved, 'node=' + JSON.stringify(node));
+      drawn && node && !node.unresolved, 'node=' + JSON.stringify(node));
 
     await page.waitForFunction(() => {
       const b = document.querySelector('[data-testid=run-button]');

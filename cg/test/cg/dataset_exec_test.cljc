@@ -80,7 +80,6 @@
     (is (= 2 (ds/row-count d)) "the row count survives the reprojection")
     (let [geoms (ds/column d :geometry)
           g     (nth geoms 0)]
-      (is (= 2 (count geoms)) "both geometries survive")
       ;; EPSG:2249 is in US feet: x and y are in the hundreds of thousands.
       (is (> (abs (geo/x g)) 1000.0) "x is in projected units")
       (is (> (abs (geo/y g)) 1000.0) "y is in projected units")
@@ -111,17 +110,14 @@
             (has-substring? fns "transform-coords"))
         "the chain carries the transform step")
     ;; An edge that points at a missing node silently drops the branch.
-    (doseq [f froms]
-      (is (some? (first (filter (fn [i] (= i f)) ids)))
-          (str "edge from " f " points at a real node")))
-    (doseq [t tos]
-      (is (some? (first (filter (fn [i] (= i t)) ids)))
-          (str "edge to " t " points at a real node")))
-    (let [to-set (set tos)
+    (let [real (set ids)
+          to-set (set tos)
           next-of (zipmap froms tos)
           path (take-while some? (iterate #(get next-of %)
                                           (first (remove #(contains? to-set %) ids))))]
-      (is (= (set ids) (set path)) "the edges make one path through each node"))))
+      (is (every? #(contains? real %) (concat froms tos))
+          "each edge points at a real node")
+      (is (= real (set path)) "the edges make one path through each node"))))
 
 ;; The cljs reprojection runs on the joint pool: the proj handler and the
 ;; wasmts handler are on the same worker, so the coordinates do not cross a

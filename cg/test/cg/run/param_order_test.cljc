@@ -8,11 +8,7 @@
   "An op gets its named params in the order of its registered :params schema.
    On the JVM, a map of more than 8 entries is a hash map, which keeps no
    insertion order. Because of this, each op here takes 9 params. When `vals`
-   set the order, the JVM ops got the params map below as (5 7 3 8 2 4 6 9 1).
-
-   ONE .cljc suite runs on both runtimes. Each path that changes a params map to
-   positional args has a test: a source op, an item op, a per-row chain (fused
-   on the JVM), and the body of a when-row."
+   set the order, the JVM ops got the params map below as (5 7 3 8 2 4 6 9 1)."
   #?(:clj (:require [clojure.test :refer [deftest is]]
                     [cg.run :as run]
                     [cg.dataset :as ds]

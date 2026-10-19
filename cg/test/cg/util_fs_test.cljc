@@ -29,10 +29,6 @@
   #?(:clj (str (Files/createTempDirectory "cg-util-fs" (make-array FileAttribute 0)))
      :cljs (fs/mkdtempSync (node-path/join (os/tmpdir) "cg-util-fs"))))
 
-(defn- write-text! [path text]
-  #?(:clj (spit path text)
-     :cljs (fs/writeFileSync path text)))
-
 (deftest make-dirs-creates-nested-directories
   (let [root (temp-dir)
         nested (str root "/a/b/c")]
@@ -43,8 +39,8 @@
 
 (deftest list-file-names-gives-names-not-paths
   (let [root (temp-dir)]
-    (write-text! (str root "/one.parquet") "x")
-    (write-text! (str root "/two.parquet") "y")
+    (util/write-file! (str root "/one.parquet") "x")
+    (util/write-file! (str root "/two.parquet") "y")
     (is (= ["one.parquet" "two.parquet"] (vec (sort (util/list-file-names root)))))))
 
 (deftest list-file-names-on-a-missing-directory-is-empty
@@ -53,7 +49,7 @@
 (deftest delete-file-removes-and-reports
   (let [root (temp-dir)
         f (str root "/gone.txt")]
-    (write-text! f "x")
+    (util/write-file! f "x")
     (is (true? (util/delete-file! f)))
     (is (false? (util/file-exists? f)))
     (is (false? (util/delete-file! f)) "second delete: nothing to remove")))
@@ -69,12 +65,7 @@
   (let [f (str (temp-dir) "/kinds.edn")]
     (util/write-edn! f {:keyword-cols #{"a" "b"} :n 3 :v ["x" nil true]})
     (let [v (util/read-edn f)]
-      (is (contains? (:keyword-cols v) "a"))
-      (is (= 2 (count (:keyword-cols v))))
-      (is (= 3 (:n v)))
-      (is (= "x" (first (:v v))))
-      (is (nil? (second (:v v))))
-      (is (true? (nth (:v v) 2))))))
+      (is (= {:keyword-cols #{"a" "b"} :n 3 :v ["x" nil true]} v)))))
 
 ;; A cache sidecar that the JVM wrote must read on the JS runtime too.
 (deftest read-edn-reads-the-edn-that-the-jvm-writes

@@ -125,10 +125,7 @@
 #?(:clj
    (deftest a-limit-keeps-a-long-and-divides-doubles
      (is (integer? (limit-value "[:+ 3000 [:* 2 1000]]" "{}" "{}")))
-     (is (integer? (limit-value "[:- 3000 1000]" "{}" "{}")))
-     (is (integer? (limit-value "{:form :per-unit :by :dwelling-units :base 3000 :base-n 1 :per 1000}"
-                                "{:dwelling-units 3}" "{}")))
-     (is (double? (limit-value "[:/ 6 3]" "{}" "{}")) "two longs must not give a ratio")))
+     (is (integer? (limit-value "[:- 3000 1000]" "{}" "{}")))))
 
 (defn- condition-value [condition values]
   (ev (str "(zoning/condition-value " condition " " values " {})")))

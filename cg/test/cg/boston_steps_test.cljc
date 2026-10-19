@@ -33,9 +33,8 @@
     (run/eval-cg (str "(require '[" ns-name " :as " alias "]) " alias "/" v))))
 
 (deftest the-boston-steps
-  (testing "roll-up-parcels is a table op, because it takes a table"
-    (is (some? (feature/get-operation-info "boston/roll-up-parcels"))))
-  (testing "analyze-parcels is a table op"
+  (testing "roll-up-parcels and analyze-parcels are table ops, because they take a table"
+    (is (some? (feature/get-operation-info "boston/roll-up-parcels")))
     (is (some? (feature/get-operation-info "boston/analyze-parcels"))))
   (testing "the other steps are plain fns, because they take no table or row"
     (doseq [n ["boston/label-neighborhood" "boston/ensure-analysis!"]]

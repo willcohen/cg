@@ -67,7 +67,6 @@
     (await (session/set-backend-url! "http://localhost:9999"))
     (is (= "http://localhost:9999" (rt/backend-url)))
     (is (= "http://localhost:9999" (:backend-url @state/app-state)))
-    (is (pos? (count @!urls)))
     (is (= 0 (.indexOf (str (last @!urls)) "http://localhost:9999")))
     ;; the test files that run later need the default
     (await (session/set-backend-url! nil))))
@@ -159,7 +158,7 @@
     (session/stop-health-loop!)
     (js-delete js/globalThis "__CG_JS_ONLY__")
     (rt/init!)
-    (is (zero? @!calls) "a JS-only page never fetches the backend")))
+    (is (zero? @!calls))))
 
 (.then (js/Promise.resolve (t/run-tests))
        (fn [results]

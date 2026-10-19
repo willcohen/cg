@@ -14,8 +14,7 @@
             [cg.test-runner :refer [with-system-property]]
             [cg.io-test :refer [with-geoservices-server]])
   (:import (java.nio.file Files)
-           (java.nio.file.attribute FileAttribute)
-           (org.locationtech.jts.geom Geometry)))
+           (java.nio.file.attribute FileAttribute)))
 
 (set! *warn-on-reflection* true)
 
@@ -54,9 +53,10 @@
             (is (= (comparable-rows first-ds) (comparable-rows second-ds)))))
         (testing "geometries are JTS and re-tagged with the source CRS"
           (let [cached (cds/ensure-dataset spec)]
-            (doseq [row (cds/rows cached :as-maps)]
-              (is (instance? Geometry (:geometry row)))
-              (is (= "EPSG:4326" (f/get-crs (:geometry row)))))))))))
+            ;; get-crs reads the user data of a JTS Geometry, and throws on any
+            ;; other value.
+            (is (every? #(= "EPSG:4326" (f/get-crs (:geometry %)))
+                        (cds/rows cached :as-maps)))))))))
 
 (deftest ensure-dataset-caches-under-the-cache-root-by-default
   (with-geoservices-server

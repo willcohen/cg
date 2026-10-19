@@ -103,8 +103,4 @@
 (deftest an-idle-tab-says-that-nothing-runs
   (is (.includes (status-html/body-html rs/idle-run 0) "Nothing runs")))
 
-(.then (js/Promise.resolve (t/run-tests))
-       (fn [results]
-         (let [fail (or (get results "fail") 0)
-               err (or (get results "error") 0)]
-           (js/process.exit (if (pos? (+ fail err)) 1 0)))))
+(.then (js/Promise.resolve (t/run-tests)) #(js/process.exit (if (t/successful? %) 0 1)))
