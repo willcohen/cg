@@ -12,16 +12,20 @@
    shares host data structures, so the crossing is transparent). A synthetic
    fixture parcel with known categorization makes a regression fail an
    assertion, not just the eye."
-  (:require [clojure.test :refer [deftest is testing use-fixtures]]
-            [cg.run :as run]
-            [cg.dataset :as ds]))
+  #?(:clj (:require [clojure.test :refer [deftest is testing use-fixtures]]
+                    [cg.run :as run]
+                    [cg.dataset :as ds])
+     :cljs (:require [cljs.test :refer [deftest is testing]]
+                     ["../../src/cg/run.mjs" :as run]
+                     ["../../src/cg/dataset.mjs" :as ds]
+                     ["./wasmts_setup.mjs" :refer [init_wasmts_BANG_]]
+                     ["./test_runner.mjs" :refer [run_tests_and_exit_BANG_]])))
 
-(set! *warn-on-reflection* true)
+#?(:clj (set! *warn-on-reflection* true))
 
-(use-fixtures :once
-  (fn [t]
-    (run/load-module "src/cg/parcel.cg")
-    (t)))
+(def ^:private parcel "src/cg/parcel.cg")
+
+#?(:clj (use-fixtures :once (fn [t] (run/load-module parcel) (t))))
 
 ;; One parcel in EPSG:2249 with a front, two sides and a rear, in the shape
 ;; that analyze-parcel gives.
@@ -55,23 +59,25 @@
       (is (= "EPSG:2249" (:crs (meta (:debug-boundary layers))))))))
 
 ;; String column names, because the map styler keys on "category".
-(deftest debug-layers-have-no-default-crs
-  (testing "the caller names the CRS of its rows: no 1-arity form"
-    (is (thrown? Exception
-                 (run/eval-cg "(require '[cg.parcel :as parcel]) (parcel/debug-layers [])")))
-    (is (thrown? Exception
-                 (run/eval-cg "(require '[cg.parcel :as parcel]) (parcel/debug-layer-builders [])")))))
+#?(:clj
+   (deftest debug-layers-have-no-default-crs
+     (testing "the caller names the CRS of its rows: no 1-arity form"
+       (is (thrown? Exception
+                    (run/eval-cg "(require '[cg.parcel :as parcel]) (parcel/debug-layers [])")))
+       (is (thrown? Exception
+                    (run/eval-cg "(require '[cg.parcel :as parcel]) (parcel/debug-layer-builders [])"))))))
 
-(deftest debug-setback-labels-read-the-units
-  (let [layers (run/eval-cg
-                "(require '[cg.parcel :as parcel] '[cg.feature :as f])
+#?(:clj
+   (deftest debug-setback-labels-read-the-units
+     (let [layers (run/eval-cg
+                   "(require '[cg.parcel :as parcel] '[cg.feature :as f])
                  (parcel/debug-layers
                   [{:parcel-id \"S-2\"
                     :main-building {:geometry (f/polygon [[40 30] [60 30] [60 50] [40 50] [40 30]])}
                     :edges [{:edge (f/linestring [[0 0] [100 0]]) :edge-type :front :setback 30.0}]}]
                   \"EPSG:3857\" {:length \"m\"})")
-        labels (vec (ds/column (:debug-setbacks layers) "label"))]
-    (is (= ["30.0 m"] labels) "the label takes the length unit of the caller")))
+           labels (vec (ds/column (:debug-setbacks layers) "label"))]
+       (is (= ["30.0 m"] labels) "the label takes the length unit of the caller"))))
 
 (deftest debug-edges-carries-category-and-identity
   (let [layers (emit)
@@ -145,7 +151,8 @@
       (is (contains? cols "label"))
       (is (contains? cols "category"))
       (is (contains? cols "parcel-id"))
-      (is (= #{"30.0 ft" "40.0 ft"} (set (ds/column sb "label"))))
+      ;; JS prints 30.0 as "30".
+      #?(:clj (is (= #{"30.0 ft" "40.0 ft"} (set (ds/column sb "label")))))
       (is (= #{"front" "side"} (set (ds/column sb "category")))))
     (testing "each row has a materialized indicator geometry"
       (is (every? some? (ds/column sb :geometry))))))
@@ -158,3 +165,8 @@
     (testing "and carry the parcel identity"
       (is (= #{"TEST-1"} (set (ds/column (:debug-envelope layers) "parcel-id"))))
       (is (= #{"TEST-1"} (set (ds/column (:debug-boundary layers) "parcel-id")))))))
+
+#?(:cljs (-> (init_wasmts_BANG_)
+             (.then (fn [_] (ds/init-arquero!)))
+             (.then (fn [_] (run/load-module parcel)))
+             (.then (fn [_] (run_tests_and_exit_BANG_ "cg.parcel-debug-layers-test")))))

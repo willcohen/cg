@@ -465,8 +465,8 @@
 
 (check "max-by-stable: equal key -> tiebreak wins, order-independent" true
   (let [items [{:a 5 :k [2.0 0.0]} {:a 5 :k [1.0 0.0]} {:a 3 :k [9.0 0.0]}]]
-    (= (parcel/max-by-stable :a :k items)
-       (parcel/max-by-stable :a :k (reverse items))
+    (= (parcel/max-by-stable :a #(:k %) items)
+       (parcel/max-by-stable :a #(:k %) (reverse items))
        {:a 5 :k [1.0 0.0]})))
 (check "primary-zoning: equal intersection area -> order-independent" true
   (let [pg (f/polygon [[0 0] [10 0] [10 10] [0 10] [0 0]])

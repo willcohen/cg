@@ -12,13 +12,19 @@
    proven against the fn-parameterized cores they replaced.
 
    Run with: clojure -M:test -e (cognitect... ) or the full bb test."
-  (:require [cg.dataset :as ds :refer [summarize]]
-            [cg.run :as run]
-            [cg.macros :refer [table->]]
-            [clojure.edn :as edn]
-            [clojure.test :refer [deftest is testing]]))
+  #?(:clj (:require [cg.dataset :as ds :refer [summarize]]
+                    [cg.run :as run]
+                    [cg.macros :refer [table->]]
+                    [cg.test-runner :refer [after]]
+                    [clojure.edn :as edn]
+                    [clojure.test :refer [deftest is testing]])
+     :cljs (:require [cljs.test :refer [deftest is testing]]
+                     ["../../src/cg/dataset.mjs" :as ds]
+                     ["../../src/cg/run.mjs" :as run]
+                     ["./wasmts_setup.mjs" :refer [init_wasmts_BANG_]]
+                     ["./test_runner.mjs" :refer [run_tests_and_exit_BANG_ after]])))
 
-(set! *warn-on-reflection* true)
+#?(:clj (set! *warn-on-reflection* true))
 
 (def rows
   "Synthetic study-area rows: two districts, three blocks, one row with
@@ -121,41 +127,39 @@
       (is (= 1 (get-in pt [:rows 0 :cells :rs-2 :n]))
           "only block A has two 2-unit rows"))))
 
+(def ^:private flow-spec
+  "{:value :units :as-int true
+    :weight :rows
+    :scope :d :scopes [:rs-2 :rs-3]
+    :where [{:col :d :present true}
+            {:col :units :positive-number true}]
+    :buckets [{:label \"1\"   :eq 1}
+              {:label \"2\"   :eq 2}
+              {:label \"3\"   :eq 3}
+              {:label \"4-6\" :range [4 6]}
+              {:label \"7+\"  :gte 7}]}")
+
 (deftest summarize-runs-in-a-table-flow
   (testing "(table-> :rows (summarize {...})) executes via run-model"
-    (let [spec {:value :units :as-int true
-                :weight :rows
-                :scope :d :scopes [:rs-2 :rs-3]
-                :where [{:col :d :present true}
-                        {:col :units :positive-number true}]
-                :buckets [{:label "1"   :eq 1}
-                          {:label "2"   :eq 2}
-                          {:label "3"   :eq 3}
-                          {:label "4-6" :range [4 6]}
-                          {:label "7+"  :gte 7}]}
-          model (table-> :rows
-                  (summarize {:value :units :as-int true
-                              :weight :rows
-                              :scope :d :scopes [:rs-2 :rs-3]
-                              :where [{:col :d :present true}
-                                      {:col :units :positive-number true}]
-                              :buckets [{:label "1"   :eq 1}
-                                        {:label "2"   :eq 2}
-                                        {:label "3"   :eq 3}
-                                        {:label "4-6" :range [4 6]}
-                                        {:label "7+"  :gte 7}]}))
-          direct (ds/summarize rows spec)
-          via-flow (run/run-model model {:rows (ds/->dataset rows)}
-                                  {:timeout-ms 60000})]
-      (is (= (mapv :total direct) (mapv :total via-flow))
-          "flow-executed summarize matches the direct call")
-      (is (= (mapv :cells direct) (mapv :cells via-flow))))))
+    (let [direct (ds/summarize rows (run/eval-cg flow-spec))
+          model (run/eval-cg (str "(require '[cg.macros :refer [table->]])"
+                                  " (table-> :rows (summarize " flow-spec "))"))]
+      (after (run/run-model model {:rows (ds/->dataset rows)} {:timeout-ms 60000})
+             (fn [via-flow]
+               (is (= (mapv :total direct) (mapv :total via-flow))
+                   "flow-executed summarize matches the direct call")
+               (is (= (mapv :cells direct) (mapv :cells via-flow))))))))
 
-(deftest summarize-model-is-serializable
-  (testing "the flow model carries the spec as data (no functions)"
-    (let [model (table-> :rows (summarize {:value :units
-                                           :buckets [{:label "1" :eq 1}]}))
-          printed (pr-str model)]
-      (is (not (re-find #"#function|#object" printed))
-          "model must round-trip as EDN — functions would violate the Flow-Graph rule")
-      (is (some? (clojure.edn/read-string printed))))))
+#?(:clj
+   (deftest summarize-model-is-serializable
+     (testing "the flow model carries the spec as data (no functions)"
+       (let [model (table-> :rows (summarize {:value :units
+                                              :buckets [{:label "1" :eq 1}]}))
+             printed (pr-str model)]
+         (is (not (re-find #"#function|#object" printed))
+             "model must round-trip as EDN — functions would violate the Flow-Graph rule")
+         (is (some? (clojure.edn/read-string printed)))))))
+
+#?(:cljs (-> (init_wasmts_BANG_)
+             (.then (fn [_] (ds/init-arquero!)))
+             (.then (fn [_] (run_tests_and_exit_BANG_ "cg.report-test")))))

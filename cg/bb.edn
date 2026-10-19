@@ -48,6 +48,7 @@
        "test/cg/dataset_exec_test.cljc"
        "test/cg/trace_test.cljc"
        "test/cg/util_fs_test.cljc"
+       "test/cg/util_test.cljc"
        "test/cg/run/when_row_runtime_test.cljc"
        "test/cg/run/per_row_dispatch_test.cljc"
        "test/cg/run/param_order_test.cljc"
@@ -67,7 +68,18 @@
        "test/cg/parser/validate_test.cljc"
        "test/cg/parser/op_defn_test.cljc"
        "test/cg/dsl/signatures_test.cljc"
-       "test/cg/dataset_test.cljc"]))
+       "test/cg/dataset_test.cljc"
+       "test/cg/run_test.cljc"
+       "test/cg/run/op_registry_test.cljc"
+       "test/cg/run/fusion_test.cljc"
+       "test/cg/report_test.cljc"
+       "test/cg/report_crosstab_test.cljc"
+       "test/cg/parcel_flatten_row_test.cljc"
+       "test/cg/parcel_lot_type_smoke_test.cljc"
+       "test/cg/parcel_edge_split_test.cljc"
+       "test/cg/parcel_schema_test.cljc"
+       "test/cg/parcel_debug_layers_test.cljc"
+       "test/cg/boston_steps_test.cljc"]))
 
   npm:install
   {:doc "Install npm dependencies for ClojureScript build."

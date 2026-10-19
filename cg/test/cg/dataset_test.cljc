@@ -476,6 +476,18 @@
                           #"GeoParquet is not available"
                           (f)))))
 
+(deftest the-dataset-verbs-sort-filter-and-group
+  (let [d (dataset/->dataset {:zone ["R1" "R2" "R1"] :area [3 1 2]})
+        areas #(mapv :area (dataset/rows % :as-maps))]
+    (is (= [1 2 3] (areas (dataset/order-by d :area))))
+    (is (= [3 2 1] (areas (dataset/order-by d :area :desc))))
+    (is (= [3 2] (areas (dataset/filter-column d :area #(> % 1)))))
+    (is (= {"R1" [3 2] "R2" [1]} (update-vals (dataset/group-by-column d :zone) areas)))))
+
+(deftest json-round-trips-through-a-string
+  (is (= {:zone "R1" :area [3 1]}
+         (dataset/read-json (dataset/write-json {:zone "R1" :area [3 1]})))))
+
 #?(:cljs (-> (init_wasmts_BANG_)
              (.then (fn [_] (dataset/init-arquero!)))
              ;; when-row resolves as "cg.run/when-row", and the pre-filled cljs

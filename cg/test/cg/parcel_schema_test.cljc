@@ -9,23 +9,28 @@
    gives a parcel schema, a zoning schema and a full thresholds map.
    These tests give made-up names and values, and check that the readers
    use them, and that a missing key throws."
-  (:require [clojure.test :refer [deftest is testing use-fixtures]]
-            [cg.run :as run]))
+  #?(:clj (:require [clojure.test :refer [deftest is testing use-fixtures]]
+                    [cg.run :as run])
+     :cljs (:require [cljs.test :refer [deftest is testing]]
+                     ["../../src/cg/run.mjs" :as run]
+                     ["../../src/cg/dataset.mjs" :as ds]
+                     ["./wasmts_setup.mjs" :refer [init_wasmts_BANG_]]
+                     ["./test_runner.mjs" :refer [run_tests_and_exit_BANG_]])))
 
-(set! *warn-on-reflection* true)
+#?(:clj (set! *warn-on-reflection* true))
 
-(use-fixtures :once
-  (fn [t]
-    (run/load-module "src/cg/parcel.cg")
-    (run/load-module "src/cg/zoning.cg")
-    (t)))
+#?(:clj (use-fixtures :once
+          (fn [t]
+            (run/load-module "src/cg/parcel.cg")
+            (run/load-module "src/cg/zoning.cg")
+            (t))))
 
 (defn- ev [code]
   (run/eval-cg (str "(require '[cg.parcel :as parcel] '[cg.zoning :as zoning]"
                     " '[cg.feature :as f] '[cg.dataset :as ds])\n" code)))
 
-(defn- cg-var [qualified-sym]
-  (deref (run/eval-cg (str "#'" qualified-sym))))
+(defn- cg-var [ns-name var-name]
+  (run/eval-cg (str "(require '[" ns-name " :as m]) m/" var-name)))
 
 (def ^:private metre-units
   {:length "m" :area "m2" :large-area "ha" :area-per-large-area 10000.0})
@@ -65,9 +70,9 @@
                      {:edge (f/linestring [[10.3 0.0] [20.0 1.0]])}
                      {})")
                nil
-               (catch Exception e e))]
+               (catch #?(:clj Exception :cljs :default) e e))]
     (is (some? e) "no fallback: the library holds no threshold")
-    (is (re-find #"the thresholds has no :" (str (ex-message e) (some-> e ex-cause ex-message)))
+    (is (re-find #?(:clj #"the thresholds has no :" :cljs #"the thresholds has no ") (str (ex-message e) (some-> e ex-cause ex-message)))
         "the message names the key")))
 
 (deftest the-thresholds-name-no-unit-and-state-their-units
@@ -87,8 +92,8 @@
                               {:schema {:parcel-id-keys [:LOT_ID]}
                                :thresholds " (pr-str (dissoc unit-free-thresholds :units)) "}))"))
                  nil
-                 (catch Exception e e))]
-      (is (re-find #":units" (str (some-> e ex-message) (some-> e ex-cause ex-message)))))))
+                 (catch #?(:clj Exception :cljs :default) e e))]
+      (is (re-find (re-pattern (str :units)) (str (some-> e ex-message) (some-> e ex-cause ex-message)))))))
 
 (deftest a-vertex-tolerance-override-reaches-the-junction-tests
   ;; The two street edges miss each other by 0.3, and meet at a shallow
@@ -104,7 +109,7 @@
     (is (true? loose))))
 
 (deftest zone-attrs-read-the-zoning-schema
-  (let [attrs  (cg-var "cg.zoning/zone-to-primary-attrs")
+  (let [attrs  (cg-var "cg.zoning" "zone-to-primary-attrs")
         schema {:district-col :DIST :subdistrict-col :SUB
                 :subdistrict-type-col :KIND :max-far-col :FAR
                 :rear-setback-col :REAR :max-height-col :HT
@@ -193,9 +198,9 @@
   (let [e (try (ev "(parcel/preliminary-checks
                      (transient {:geometry (f/polygon [[0 0] [1 0] [1 1] [0 0]])}) {})")
                nil
-               (catch Exception e e))]
+               (catch #?(:clj Exception :cljs :default) e e))]
     (is (some? e) "no default: the library names no column")
-    (is (re-find #":required-id-keys" (str (ex-message e) (ex-message (ex-cause e))))
+    (is (re-find (re-pattern (str :required-id-keys)) (str (ex-message e) (ex-message (ex-cause e))))
         "the message names the key")))
 
 (defn- circle-coords
@@ -239,3 +244,9 @@
                      imp)))")]
     (is (= 50.0 (:impervious-area out)))
     (is (not (contains? out :impervious-sf)))))
+
+#?(:cljs (-> (init_wasmts_BANG_)
+             (.then (fn [_] (ds/init-arquero!)))
+             (.then (fn [_] (run/load-module "src/cg/parcel.cg")))
+             (.then (fn [_] (run/load-module "src/cg/zoning.cg")))
+             (.then (fn [_] (run_tests_and_exit_BANG_ "cg.parcel-schema-test")))))

@@ -16,18 +16,22 @@
    Slice boundaries land near vertices as the rule rather than the exception:
    the abutting condition changes where a neighbor's corner meets the frontage,
    and that corner is normally a vertex of this edge too."
-  (:require [clojure.test :refer [deftest is testing use-fixtures]]
-            [cg.run :as run]))
+  #?(:clj (:require [clojure.test :refer [deftest is testing use-fixtures]]
+                    [cg.run :as run])
+     :cljs (:require [cljs.test :refer [deftest is testing]]
+                     ["../../src/cg/run.mjs" :as run]
+                     ["./wasmts_setup.mjs" :refer [init_wasmts_BANG_]]
+                     ["./test_runner.mjs" :refer [run_tests_and_exit_BANG_]])))
 
-(set! *warn-on-reflection* true)
+#?(:clj (set! *warn-on-reflection* true))
 
-(use-fixtures :once
-  (fn [t]
-    (run/load-module "src/cg/parcel.cg")
-    (t)))
+(def ^:private parcel "src/cg/parcel.cg")
+
+#?(:clj (use-fixtures :once (fn [t] (run/load-module parcel) (t))))
 
 (defn- ev [code]
-  (run/eval-cg (str "(require '[cg.parcel :as parcel])\n" code)))
+  (run/eval-cg (str "(require '[cg.parcel :as parcel] '[cg.math :as math] '[cg.feature :as f])\n"
+                    code)))
 
 ;; An L-shaped edge: 25 ft east, then 20 ft north. The corner vertex sits at
 ;; arc length 25.
@@ -61,7 +65,7 @@
                  (mapv (fn [i]
                          (let [[x1 y1] (nth pts i)
                                [x2 y2] (nth pts (inc i))]
-                           (cg.math/sqrt (+ (* (- x2 x1) (- x2 x1))
+                           (math/sqrt (+ (* (- x2 x1) (- x2 x1))
                                             (* (- y2 y1) (- y2 y1))))))
                        (range (dec (count pts)))))]
   (vec (for [off [-0.05 -0.01 -0.001 -0.0001 0.0 0.0001 0.001 0.01 0.05]]
@@ -94,7 +98,7 @@
 (deftest ring-closure-edge-yields-a-measurable-junction-angle
   (testing "the seam edge meets its neighbor at a real angle, not nil"
     (let [interior (ev (str "
-(let [edges (mapv cg.feature/linestring
+(let [edges (mapv f/linestring
                   (parcel/corners->edge-coords " square-ring " " square-corners "))]
   (:interior (parcel/edge-junction-angle (last edges) (first edges) 1.0e-3 true)))"))]
       (is (some? interior) "a repeated point here used to make this nil")
@@ -104,3 +108,7 @@
   (is (= 25.0 (ev "(parcel/snap-arc-to-vertex [0.0 25.0 45.0] 25.0004 0.1)")))
   (is (= 24.0 (ev "(parcel/snap-arc-to-vertex [0.0 25.0 45.0] 24.0 0.1)"))
       "a cut well clear of any vertex is left where the sampler put it"))
+
+#?(:cljs (-> (init_wasmts_BANG_)
+             (.then (fn [_] (run/load-module parcel)))
+             (.then (fn [_] (run_tests_and_exit_BANG_ "cg.parcel-edge-split-test")))))

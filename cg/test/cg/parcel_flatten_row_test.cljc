@@ -12,18 +12,21 @@
    gives seven of them their own columns, because the reports read
    :lot-area at the top level. It keeps the scalar values,
    gives a keyword as its name, and drops the nested values."
-  (:require [clojure.test :refer [deftest is testing use-fixtures]]
-            [cg.run :as run]))
+  #?(:clj (:require [clojure.test :refer [deftest is testing use-fixtures]]
+                    [cg.run :as run])
+     :cljs (:require [cljs.test :refer [deftest is testing]]
+                     ["../../src/cg/run.mjs" :as run]
+                     ["./wasmts_setup.mjs" :refer [init_wasmts_BANG_]]
+                     ["./test_runner.mjs" :refer [run_tests_and_exit_BANG_]])))
 
-(set! *warn-on-reflection* true)
+#?(:clj (set! *warn-on-reflection* true))
 
-(use-fixtures :once
-  (fn [t]
-    (run/load-module "src/cg/parcel.cg")
-    (t)))
+(def ^:private parcel "src/cg/parcel.cg")
+
+#?(:clj (use-fixtures :once (fn [t] (run/load-module parcel) (t))))
 
 (defn- flatten-row [row]
-  ((deref (run/eval-cg "#'cg.parcel/flatten-row")) row))
+  ((run/eval-cg "(require '[cg.parcel :as parcel]) parcel/flatten-row") row))
 
 (def ^:private analyzed-row
   {:LOT_ID "P1"
@@ -57,3 +60,7 @@
       (is (not (contains? flat :edges)))
       (is (not (contains? flat :perimeter)))
       (is (= :a-geometry (:geometry flat))))))
+
+#?(:cljs (-> (init_wasmts_BANG_)
+             (.then (fn [_] (run/load-module parcel)))
+             (.then (fn [_] (run_tests_and_exit_BANG_ "cg.parcel-flatten-row-test")))))

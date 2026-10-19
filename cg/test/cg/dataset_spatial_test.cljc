@@ -37,6 +37,11 @@
 (defn- indexed-squares []
   (ds/add-spatial-index (two-squares)))
 
+(deftest query-spatial-index-gives-the-payloads-whose-envelopes-meet
+  (let [envelope-of #(geo/geometry-get-envelope-internal (feature/point % 5))]
+    (is (= 1 (count (ds/query-spatial-index (indexed-squares) (envelope-of 5) :geometry))))
+    (is (= 0 (count (ds/query-spatial-index (indexed-squares) (envelope-of 50) :geometry))))))
+
 (deftest index-candidates-fn-gives-the-index-payloads-near-a-geometry
   (testing "the candidates of a point in the first square: one payload, as on the JVM"
     (let [candidates-of (ds/index-candidates-fn (indexed-squares) :geometry)

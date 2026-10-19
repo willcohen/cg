@@ -341,6 +341,26 @@
       (is (= "pt-1" #?(:clj (:id (feature/properties r))
                        :cljs (.-id (feature/properties r))))))))
 
+(deftest coordinate-count-counts-the-vertices-of-a-geometry-or-a-feature
+  (let [{:keys [square-a]} (fx)]
+    (is (= 5 (feature/coordinate-count (feature/geometry square-a))))
+    (is (= 5 (feature/coordinate-count square-a)))))
+
+;; A row with two geometries has none until its metadata names one.
+(deftest set-geometry-field-meta-names-the-geometry-of-a-row
+  (let [row {:lot (feature/polygon [[0 0] [10 0] [10 10] [0 10] [0 0]])
+             :bldg (feature/polygon [[2 2] [4 2] [4 4] [2 4] [2 2]])
+             :zone "R1"}]
+    (is (= :unknown (feature/get-map-structure row)))
+    (is (= 4.0 (geo/area (feature/get-geometry-from-map
+                          (feature/set-geometry-field-meta row :bldg)))))))
+
+(deftest update-geometry-and-update-properties-apply-a-fn
+  (let [{:keys [square-a]} (fx)]
+    (is (< 100.0 (geo/area (feature/geometry (feature/update-geometry square-a #(geo/buffer % 1))))))
+    (is (= {:id "A" :zone "R1"}
+           (feature/properties (feature/update-properties square-a #(assoc % :zone "R1")))))))
+
 #?(:cljs (defn ^:async teardown! [] (await (geo/shutdown-proj!))))
 
 #?(:cljs (-> (init_wasmts_BANG_)

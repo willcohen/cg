@@ -16,10 +16,14 @@
 
    The fixture is deterministic and needs no cache and no probe run, so
    this gate runs in the suite instead of behind a 26-minute recompute."
-  (:require [cg.dataset :as ds]
-            [clojure.test :refer [deftest is testing]]))
+  #?(:clj (:require [cg.dataset :as ds]
+                    [clojure.test :refer [deftest is testing]])
+     :cljs (:require [cljs.test :refer [deftest is testing]]
+                     [clojure.string :as str]
+                     ["../../src/cg/dataset.mjs" :as ds]
+                     ["./test_runner.mjs" :refer [run_tests_and_exit_BANG_]])))
 
-(set! *warn-on-reflection* true)
+#?(:clj (set! *warn-on-reflection* true))
 
 (def ^:private dims
   "Verbatim, all eight dimensions the probe printed."
@@ -125,6 +129,16 @@
      :no  (count (filter false? vals))
      :unk (count (filter #(= % :unknown) vals))}))
 
+#?(:cljs
+   (defn- format
+     "The %5d of clojure.core/format, which squint lacks."
+     [fmt & args]
+     (let [args (atom args)]
+       (str/replace fmt #"%5d" (fn [_]
+                                 (let [n (first @args)]
+                                   (swap! args rest)
+                                   (.padStart (str n) 5)))))))
+
 (defn- cap-layout
   "The probe's two yes/no lines, given three yes/no/unk triples."
   [ab ac eb]
@@ -176,3 +190,5 @@
       (is (= ["     add-unit   B:     0 yes /     0 no /     0 unk    C:     0 yes /     0 no /     0 unk"
               "     extend     B:     0 yes /     0 no /     0 unk"]
              (new-cap-lines blank))))))
+
+#?(:cljs (run_tests_and_exit_BANG_ "cg.report-crosstab-test"))
