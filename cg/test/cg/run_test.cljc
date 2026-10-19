@@ -17,7 +17,7 @@
                     [cg.dataset :as dataset]
                     [cg.trace :as trace]
                     [cg.macros :refer [table->]]
-                    [cg.test-runner :refer [after poll]]
+                    [cg.test-runner :refer [after error-message poll]]
                     [sci.core :as sci]
                     [tech.v3.dataset :as ds])
      :cljs (:require [cljs.test :refer [deftest is testing]]
@@ -27,7 +27,7 @@
                      ["../../src/cg/dataset.mjs" :as dataset]
                      ["../../src/cg/parser/core.mjs" :as parser]
                      ["./wasmts_setup.mjs" :refer [init_wasmts_BANG_]]
-                     ["./test_runner.mjs" :refer [run_tests_and_exit_BANG_ after]]))
+                     ["./test_runner.mjs" :refer [run_tests_and_exit_BANG_ after error-message]]))
   #?(:clj (:import [org.locationtech.jts.geom Geometry TopologyException])))
 
 #?(:clj (set! *warn-on-reflection* true))
@@ -302,11 +302,14 @@
          (is (nil? (deref (get copied '*session-file*))))
          (is (nil? (deref (get copied '*script-file*))))))))
 
-;; A fn, because wasmts starts after the module loads.
+;; A fn, because wasmts starts after the module loads. Each op of the cases
+;; changes this shape: it has a cut corner, a notch, and a vertex 0.1 off its
+;; base.
 (defn- table-op-polys []
-  [(f/polygon [[0 0] [4 0] [4 4] [0 4] [0 0]])
-   (f/polygon [[10 0] [14 0] [14 4] [10 4] [10 0]])
-   (f/polygon [[20 0] [24 0] [24 4] [20 4] [20 0]])])
+  (mapv (fn [x]
+          (f/polygon (mapv (fn [[a b]] [(+ x a) b])
+                           [[0 0] [2 0.1] [4 0] [4 3] [3 4] [2 2] [0 4] [0 0]])))
+        [0 10 20]))
 
 (defn- run-table-op [op-fn params]
   (let [test-ds (dataset/->dataset {:id [1 2 3]
@@ -321,7 +324,10 @@
                :config {}}]
     (run/run-model model {:data test-ds} {:timeout-ms 10000})))
 
-(defn- check-table-op! [[op params geom-type]]
+(defn- check-table-op!
+  "`check`, when given, is true of each output geometry and false of each
+   input."
+  [[op params geom-type check]]
   (after (run-table-op op params)
          (fn [result]
            (testing (str op)
@@ -329,19 +335,18 @@
              (is (= 3 (dataset/row-count result)))
              (is (every? #(dataset/has-column? result %) [:geometry :id :name]))
              (is (every? #(= geom-type (geo/geometry-type %)) (dataset/column result :geometry)))
-             (when (= 'cg.geo/buffer op)
-               (is (every? #(> (geo/area %) 16.0) (dataset/column result :geometry))
-                   "each 4 x 4 square grew"))))))
+             (when check
+               (is (every? check (dataset/column result :geometry))))))))
 
 ;; The boundary of a polygon with no hole is a LinearRing.
 (deftest table-mode-maps-a-geometry-op-over-the-geometry-column
   (reduce (fn [p op-case] (after p (fn [_] (check-table-op! op-case))))
           nil
-          [['cg.geo/buffer {:distance 5} "Polygon"]
-           ['cg.geo/simplify {:tolerance 0.5} "Polygon"]
+          [['cg.geo/buffer {:distance 5} "Polygon" #(> (geo/area %) 16.0)]
+           ['cg.geo/simplify {:tolerance 0.5} "Polygon" #(= 7 (count (f/coordinates %)))]
            ['cg.geo/centroid {} "Point"]
-           ['cg.geo/convex-hull {} "Polygon"]
-           ['cg.geo/envelope {} "Polygon"]
+           ['cg.geo/convex-hull {} "Polygon" #(= 15.5 (geo/area %))]
+           ['cg.geo/envelope {} "Polygon" #(= 16.0 (geo/area %))]
            ['cg.geo/boundary {} "LinearRing"]]))
 
 (deftest test-table-mode-context-store
@@ -360,6 +365,22 @@
 
     (dataset/unregister-dataset-context! ctx-id)
     (is (nil? (dataset/get-dataset-context ctx-id)) "Context should be removed")))
+
+(deftest run-model-leaves-no-dataset-context
+  (let [d (dataset/->dataset [{:n 1} {:n 2}])
+        before (set (keys @dataset/dataset-context-store))
+        added (fn [] (remove before (keys @dataset/dataset-context-store)))
+        model (run/eval-cg "(require '[cg.macros :refer [table->]]) (table-> :input (rc-incr))")
+        unknown-op (update model :nodes
+                           (partial mapv #(cond-> % (= :operation (:type %)) (assoc :fn "nope.ns/f"))))]
+    (-> (after (run/run-model model {:input d} {:timeout-ms 15000})
+               (fn [out]
+                 (is (= [2 4] (mapv :doubled (dataset/rows out :as-maps))))
+                 (is (empty? (added)) "a run")
+                 (error-message #(run/run-model unknown-op {:input d} {:timeout-ms 15000}))))
+        (after (fn [msg]
+                 (is (some? msg))
+                 (is (empty? (added)) "a run that fails in the build"))))))
 
 (deftest test-dataset-batching
   (let [n-rows 100

@@ -49,13 +49,15 @@
     (.. panel -webview (postMessage m))))
 
 (defn- post-status! [^js panel ^js text]
-  (.. panel -webview (postMessage #js {:type "cg/status" :text text})))
+  (when (identical? panel @!panel)
+    (.. panel -webview (postMessage #js {:type "cg/status" :text text}))))
 
 (defn- stash-and-post!
   "Stashes `msg` for replay and posts it when the webview is ready."
   [^js panel ^js msg]
-  (reset! !last-run msg)
-  (when @!ready (post-pending! panel)))
+  (when (identical? panel @!panel)
+    (reset! !last-run msg)
+    (when @!ready (post-pending! panel))))
 
 (defn- post-needs-backend!
   "The :unsupported route: the .cg needs the JVM backend (load-module or file I/O)

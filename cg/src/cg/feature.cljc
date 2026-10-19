@@ -894,117 +894,37 @@
                  (geometry geom))]
          (.getNumPoints g)))))
 
-#?(:clj
-   (do
-     (defn point?
-       "Check if geometry is a Point."
-       [geom]
-       (let [^org.locationtech.jts.geom.Geometry g (if (is-geometry? geom)
-                                                     geom
-                                                     (geometry geom))]
-         (instance? org.locationtech.jts.geom.Point g)))
+(defn point?
+  "Check if geometry is a Point."
+  [geom]
+  (= "Point" (.getGeometryType ^Geometry (geometry geom))))
 
-     (defn linestring?
-       "Check if geometry is a LineString."
-       [geom]
-       (let [^org.locationtech.jts.geom.Geometry g (if (is-geometry? geom)
-                                                     geom
-                                                     (geometry geom))]
-         (instance? org.locationtech.jts.geom.LineString g)))
+(defn linestring?
+  "Check if geometry is a LineString."
+  [geom]
+  (= "LineString" (.getGeometryType ^Geometry (geometry geom))))
 
-     (defn polygon?
-       "Check if geometry is a Polygon."
-       [geom]
-       (let [^org.locationtech.jts.geom.Geometry g (if (is-geometry? geom)
-                                                     geom
-                                                     (geometry geom))]
-         (instance? org.locationtech.jts.geom.Polygon g)))
+(defn polygon?
+  "Check if geometry is a Polygon."
+  [geom]
+  (= "Polygon" (.getGeometryType ^Geometry (geometry geom))))
 
-     (defn multi-point?
-       "Check if geometry is a MultiPoint."
-       [geom]
-       (let [^org.locationtech.jts.geom.Geometry g (if (is-geometry? geom)
-                                                     geom
-                                                     (geometry geom))]
-         (instance? org.locationtech.jts.geom.MultiPoint g)))
+(defn multi-point?
+  "Check if geometry is a MultiPoint."
+  [geom]
+  (= "MultiPoint" (.getGeometryType ^Geometry (geometry geom))))
 
-     (defn multi-linestring?
-       "Check if geometry is a MultiLineString."
-       [geom]
-       (let [^org.locationtech.jts.geom.Geometry g (if (is-geometry? geom)
-                                                     geom
-                                                     (geometry geom))]
-         (instance? org.locationtech.jts.geom.MultiLineString g)))
+(defn multi-linestring?
+  "Check if geometry is a MultiLineString."
+  [geom]
+  (= "MultiLineString" (.getGeometryType ^Geometry (geometry geom))))
 
-     (defn multi-polygon?
-       "Check if geometry is a MultiPolygon."
-       [geom]
-       (let [^org.locationtech.jts.geom.Geometry g (if (is-geometry? geom)
-                                                     geom
-                                                     (geometry geom))]
-         (instance? org.locationtech.jts.geom.MultiPolygon g)))
+(defn multi-polygon?
+  "Check if geometry is a MultiPolygon."
+  [geom]
+  (= "MultiPolygon" (.getGeometryType ^Geometry (geometry geom))))
 
-     (defn geometry-collection?
-       "Check if geometry is a GeometryCollection."
-       [geom]
-       (let [^org.locationtech.jts.geom.Geometry g (if (is-geometry? geom)
-                                                     geom
-                                                     (geometry geom))]
-         (instance? org.locationtech.jts.geom.GeometryCollection g))))
-   :cljs
-   (do
-     (defn point?
-       "Check if geometry is a Point."
-       [geom]
-       (let [g (if (is-geometry? geom)
-                 geom
-                 (geometry geom))]
-         (= (.getGeometryType g) "Point")))
-
-     (defn linestring?
-       "Check if geometry is a LineString."
-       [geom]
-       (let [g (if (is-geometry? geom)
-                 geom
-                 (geometry geom))]
-         (= (.getGeometryType g) "LineString")))
-
-     (defn polygon?
-       "Check if geometry is a Polygon."
-       [geom]
-       (let [g (if (is-geometry? geom)
-                 geom
-                 (geometry geom))]
-         (= (.getGeometryType g) "Polygon")))
-
-     (defn multi-point?
-       "Check if geometry is a MultiPoint."
-       [geom]
-       (let [g (if (is-geometry? geom)
-                 geom
-                 (geometry geom))]
-         (= (.getGeometryType g) "MultiPoint")))
-
-     (defn multi-linestring?
-       "Check if geometry is a MultiLineString."
-       [geom]
-       (let [g (if (is-geometry? geom)
-                 geom
-                 (geometry geom))]
-         (= (.getGeometryType g) "MultiLineString")))
-
-     (defn multi-polygon?
-       "Check if geometry is a MultiPolygon."
-       [geom]
-       (let [g (if (is-geometry? geom)
-                 geom
-                 (geometry geom))]
-         (= (.getGeometryType g) "MultiPolygon")))
-
-     (defn geometry-collection?
-       "Check if geometry is a GeometryCollection."
-       [geom]
-       (let [g (if (is-geometry? geom)
-                 geom
-                 (geometry geom))]
-         (= (.getGeometryType g) "GeometryCollection")))))
+(defn geometry-collection?
+  "Check if geometry is a GeometryCollection."
+  [geom]
+  (= "GeometryCollection" (.getGeometryType ^Geometry (geometry geom))))

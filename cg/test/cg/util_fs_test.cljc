@@ -81,8 +81,6 @@
   (let [f (str (temp-dir) "/sidecar.edn")]
     (util/write-file! f "{:keyword-cols #{\"lot-type\"} :three-valued-cols #{} :crs \"EPSG:2249\"}")
     (let [v (util/read-edn f)]
-      (is (contains? (:keyword-cols v) "lot-type"))
-      (is (zero? (count (:three-valued-cols v))))
-      (is (= "EPSG:2249" (:crs v))))))
+      (is (= {:keyword-cols #{"lot-type"} :three-valued-cols #{} :crs "EPSG:2249"} v)))))
 
 #?(:cljs (run_tests_and_exit_BANG_ "cg.util-fs-test"))

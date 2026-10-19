@@ -10,7 +10,7 @@
   (:require ["react" :refer [useState useMemo useEffect useRef]]
             [cg-gui.canvas.host :as host]))
 
-(def ^:private default-pane-width 300)
+(def default-pane-width 300)
 (def ^:private min-pane-width 180)
 (def ^:private max-pane-width 800)
 

@@ -50,6 +50,17 @@
       (is (= :error (sev :pipeline-type-mismatch)))
       (is (= :error (sev :single-overlay)))))
 
+  (testing "each code of cg.parser.types is from cg-typecheck"
+    (let [source (fn [code]
+                   (:source (first (data/cg-flow->diagnostic-data
+                                    {:diagnostics
+                                     [{:code code :severity :error :message "m"
+                                       :location {:start-line 1 :start-column 1
+                                                  :end-line 1 :end-column 1}}]}))))]
+      (is (= [] (remove #(= "cg-typecheck" (source %))
+                        [:unresolved-op :rung-not-op :op-arity-mismatch :type-mismatch
+                         :pipeline-type-mismatch :op-output-mismatch])))))
+
   (testing "severity keywords pass through (VSCode enum mapping at boundary)"
     (let [mk (fn [sev] {:diagnostics [{:code :x :severity sev :message "m"
                                        :location {:start-line 1 :start-column 1

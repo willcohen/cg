@@ -65,6 +65,14 @@ const examples = join(repo, 'cg', 'examples');
 for (const f of readdirSync(examples).filter((n) => n.endsWith('.cg') || n === 'index.json')) {
   copyFileSync(join(examples, f), join(out, 'examples', f));
 }
+// run/load-module reads its files from modules/src/cg/.
+const cgSrc = join(repo, 'cg', 'src', 'cg');
+mkdirSync(join(out, 'modules', 'src', 'cg'), { recursive: true });
+for (const f of readdirSync(cgSrc).filter((n) => n.endsWith('.cg'))) {
+  copyFileSync(join(cgSrc, f), join(out, 'modules', 'src', 'cg', f));
+}
+// cg.run finds the WasmTS worker handler next to the bundle that holds it.
+copyFileSync(join(repo, 'cg', 'dist', 'cg-wasmts-handler.mjs'), join(out, 'cg-wasmts-handler.mjs'));
 // The PWA serves these files from the root.
 for (const f of ['manifest.webmanifest', 'sw.js', 'icon.svg']) {
   copyFileSync(join(here, 'public', f), join(out, f));

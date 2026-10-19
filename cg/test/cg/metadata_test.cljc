@@ -97,8 +97,7 @@
   (testing "Split code with trailing metadata"
     (let [result (metadata/split-code-and-metadata content-with-metadata)
           md     (:metadata result)]
-      (is (string? (:code result)) "Should extract code")
-      (is (> (count (:code result)) 0) "Code should not be empty")
+      (is (str/ends-with? (:code result) "(geo/simplify 1.0)))") "the code stops before the ^:cgproj tag")
       (is (= 3 (entry-count (:nodes md))) "Should have 3 node positions")
       ;; Field by field, because the JVM map and the JS object do not compare
       ;; as one value.
@@ -193,8 +192,8 @@
          (is (pos? (count (:models result))) "Should extract models")
 
          (let [loaded-graph (first (vals (:models result)))]
-           (is (every? metadata/has-position? (:nodes loaded-graph))
-               "All nodes should have positions from metadata"))))))
+           (is (= [[100 100] [250 100]] (mapv (comp :pos :visual) (take 2 (:nodes loaded-graph))))
+               "the source and the buffer take their positions from the metadata"))))))
 
 #?(:cljs (-> (init_wasmts_BANG_)
              (.then (fn [_] (run_tests_and_exit_BANG_ "cg.metadata-test")))))

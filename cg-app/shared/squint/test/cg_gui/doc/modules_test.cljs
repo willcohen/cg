@@ -56,7 +56,9 @@
                     (fake-host reads)))]
     (is (= ["prepare-parcel" "zone-tables" "district-stats"]
            (mapv (fn [op] (get op "name")) ops)))
-    (is (not (some (fn [id] (= id "/abs/src/cg/missing.cg")) reads))
+    (is (= ["/abs/src/cg/none.cg" "/abs/src/cg/broken.cg"
+            "/abs/src/cg/parcel.cg" "/abs/src/cg/zoning-rules.cg"]
+           (vec reads))
         "an unresolved module is not read")))
 
 (deftest ^:async no-loaded-modules-gives-no-ops

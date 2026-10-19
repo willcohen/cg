@@ -9,9 +9,10 @@
    cg-vscode.diagnostics builds the vscode Diagnostic objects.")
 
 (def ^:private typecheck-codes
-  "Codes emitted by cg.parser.types (signature lookup + type checking).
-   Everything else falls under cg-parser (extract + validate)."
-  #{:unresolved-op :type-mismatch})
+  "The codes of cg.parser.types (its checker-codes). Each other code is from
+   cg-parser (extract and validate)."
+  #{:unresolved-op :rung-not-op :op-arity-mismatch :type-mismatch
+    :pipeline-type-mismatch :op-output-mismatch})
 
 (defn- code->source [code]
   (if (contains? typecheck-codes code) "cg-typecheck" "cg-parser"))

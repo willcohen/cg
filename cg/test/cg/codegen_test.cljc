@@ -40,6 +40,13 @@
                              "(require '[cg.dataset :as ds])"
                              "(table-> :buildings (ds/filter (fn [row] (> (:area row) 1000))))"))))
 
+;; transform-crs is an operation group: its node has :type :group.
+(defn- transform-crs-model []
+  #?(:clj (table-> :pts (ds/transform-crs "EPSG:4326" "EPSG:3857"))
+     :cljs (run/eval-cg (str "(require '[cg.macros :refer [table->]])"
+                             "(require '[cg.dataset :as ds])"
+                             "(table-> :pts (ds/transform-crs \"EPSG:4326\" \"EPSG:3857\"))"))))
+
 (defn- with-visual
   "Put a visual position on the first node. The JVM model is an immutable map.
    The cljs model is a plain JS object, and codegen reads what is on it."
@@ -88,6 +95,10 @@
   (let [code1 "(item->  :data  (buffer  10)  (simplify  0.1))"
         code2 "(item-> :data (buffer 10) (simplify 0.1))"]
     (is (= (mg/normalize-code code1) (mg/normalize-code code2)))))
+
+(deftest a-group-op-keeps-its-call
+  (is (= "(table-> :pts\n  (dataset/transform-crs \"EPSG:4326\" \"EPSG:3857\"))"
+         (mg/flow-graph->cg-code (transform-crs-model)))))
 
 (deftest test-table-macro-code-generation
   (let [generated (mg/flow-graph->cg-code (filter-table-model))]

@@ -541,6 +541,7 @@
         [run set-run] (useState #js {:text "" :status "idle" :file nil})
         [run-model set-run-model] (useState nil)
         [pane-w set-pane-w] (useState 1200)
+        [row-w set-row-w] (useState 1200)
         roomy?  (>= pane-w search-min-px)
         minimap? (>= pane-w minimap-min-px)
         ;; The op names the reader entered, outermost first. Empty means the
@@ -569,6 +570,7 @@
         auto-fit (useRef true)
         refit-pending (useRef false)
         pane-ref (useRef nil)
+        row-ref (useRef nil)
         fit-now! (fn []
                    (when-let [inst (.-current rf)]
                      (fit-legibly! inst (.-current pane-ref))
@@ -640,16 +642,20 @@
     (useEffect
      (fn []
        (let [pane  (.-current pane-ref)
+             row   (.-current row-ref)
              timer (atom nil)
              ro    (when (and pane (aget js/globalThis "ResizeObserver"))
                      (js/ResizeObserver.
                       (fn [entries]
-                        (set-pane-w (.. (aget entries 0) -contentRect -width))
+                        (.forEach entries
+                                  (fn [^js e]
+                                    ((if (identical? row (.-target e)) set-row-w set-pane-w)
+                                     (.. e -contentRect -width))))
                         (js/clearTimeout @timer)
                         (reset! timer (js/setTimeout
                                        (fn [] (when (.-current auto-fit) (fit-now!)))
                                        150)))))]
-         (when ro (.observe ro pane))
+         (when ro (.observe ro pane) (.observe ro row))
          (fn []
            (js/clearTimeout @timer)
            (when ro (.disconnect ro)))))
@@ -864,7 +870,8 @@
        #js [trace-state progress-state run-model])
       #jsx [:div {:style #js {:width "100%" :height "100%"
                               :display "flex" :flexDirection "column"}}
-            [:div {:style #js {:flex "1" :minHeight "0" :display "flex"
+            [:div {:ref row-ref
+                   :style #js {:flex "1" :minHeight "0" :display "flex"
                                :flexDirection "row"}}
              [:div {:ref pane-ref
                     :style #js {:flex "1" :minWidth "0" :height "100%"
@@ -981,7 +988,8 @@
                                   #js {:opacity 0.45 :cursor "default"})
                          :onClick (fn [_] (host/post! #js {:type "cg/run"}))}
                 (if run-model (str "Run " run-model) "Run")]]]]
-             [console/Console {:flow received :run run :narrow (not minimap?)}]]
+             [console/Console {:flow received :run run
+                               :narrow (< row-w (+ minimap-min-px console/default-pane-width))}]]
             (when palette-open
               #jsx [palette/Palette {:operations (when received (aget received "operations"))
                                      ;; place-ghost ignores the palette's random x and y.

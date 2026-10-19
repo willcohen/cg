@@ -869,33 +869,24 @@
      step-fn)))
 
 (defn- table-source-step
-  "A source step for table-> mode: it registers the dataset context and emits
-  `ds` in batches, each in a FlowDataset wrapper."
+  "A source step for table-> mode: it emits `ds` in batches, each in a
+  FlowDataset wrapper."
   [ds opts]
-  ;; No index in the cljs context: no step queries it, and its build walks
-  ;; each geometry of the table for each flow.
-  (let [ctx-id (dataset/register-dataset-context!
-                ds #?(:clj opts :cljs (assoc opts :build-index? false)))
-        batches (dataset/dataset->batches ds opts)
+  (let [batches (dataset/dataset->batches ds opts)
         batch-count (count batches)
         table-meta {:cg.dataset/table-rows (dataset/row-count ds)}
         wrapped-batches (mapv #(dataset/wrap-dataset % table-meta) batches)]
     (fn step-fn
-      ([] {:params {:context-id ctx-id
-                    :batch-count batch-count}
+      ([] {:params {:batch-count batch-count}
            :ins {:trigger "Start signal"}
            :outs {:out "Dataset batches"}})
 
       ([_args]
        {:batch-count batch-count
         :batches wrapped-batches
-        :context-id ctx-id
         :emitting false})
 
-      ([state lifecycle]
-       (when (= lifecycle :clojure.core.async.flow/stop)
-         (dataset/unregister-dataset-context! (:context-id state)))
-       state)
+      ([state _lifecycle] state)
 
       ([state _in-name _msg]
        (if (:emitting state)
@@ -2119,10 +2110,12 @@
               :let [r (:data-ref node)]]
           (if #?(:clj (or (instance? clojure.lang.Named r) (string? r))
                  :cljs (string? r))
-            [r #?(:clj (eval-cg (str file-ns (name r)))
-                  :cljs (if file-ns
-                          (unchecked-get file-ns (util/munge-name (name r)))
-                          (eval-cg (name r))))]
+            [r (or (try #?(:clj (eval-cg (str file-ns (name r)))
+                           :cljs (if file-ns
+                                   (unchecked-get file-ns (util/munge-name (name r)))
+                                   (eval-cg (name r))))
+                        (catch #?(:clj Exception :cljs :default) _ nil))
+                   (throw (ex-info (str "the table :" (name r) " does not exist") {:table (name r)})))]
             [r r]))))
 
 (defn- model-names-or-nil
@@ -2317,33 +2310,64 @@
          path)))
 
 #?(:cljs
+   (defn- ^:async read-module-text
+     "The text of the module `path`, from the reader of set-module-reader!, else
+      from the file (Node)."
+     [path]
+     (await (js/Promise.resolve (if-let [f @module-reader]
+                                  (f path)
+                                  (util/read-file (module-file path)))))))
+
+#?(:cljs
+   (defn- module-ns-name
+     "The name of the ns form of the module source `text`, or nil. It skips
+      metadata on the name, such as ^:no-doc."
+     [text]
+     (second (re-find #"\(ns\s+(?:\^\S+\s+)*([^\s\)]+)" text))))
+
+#?(:cljs
+   (defn- ^:async register-module-ops! [text ns-name]
+     (when (re-find op-marker text)
+       (await (parser/init! nil)))
+     (register-ops-of! text ns-name
+                       (fn [munged] (unchecked-get (module-namespace ns-name) munged)))))
+
+#?(:cljs
+   (defn- ^:async register-dep-ops!
+     "Registers the ops of each module that `text` loads with run/load-module,
+      and of the modules that those load, with no run. A rung binds its args
+      by the param names of its op when the module compiles, and the
+      load-module calls of the module run only after the compile. `seen` is an
+      atom of the visited paths, which ends a cycle."
+     [text seen]
+     (doseq [[_ path] (re-seq #"\(run/load-module\s+\"([^\"]+)\"\)" text)]
+       (when-not (or (contains? @seen path) (get @module-loads path))
+         (swap! seen conj path)
+         (let [dep     (await (read-module-text path))
+               ns-name (module-ns-name dep)]
+           (when ns-name
+             (await (register-module-ops! dep ns-name))
+             (await (register-dep-ops! dep seen))))))))
+
+#?(:cljs
    (defn ^:async load-module-text!
      "Evaluate `text` as the CG module of `path`. See load-module."
      [path text]
-     ;; Skips metadata on the name, such as ^:no-doc.
-     (let [ns-name (second (re-find #"\(ns\s+(?:\^\S+\s+)*([^\s\)]+)" text))]
+     (let [ns-name (module-ns-name text)]
        (when-not ns-name
          (throw (ex-info (str "Module must start with (ns ...) form: " path)
                          {:path path})))
-       (let [info {:ns-name ns-name :path path}
-             aliases (vals (into {} (map (fn [[n a]] [a [n a]])) (code-aliases text)))
-             _ (swap! module-loads assoc path info)
-             ;; The aliases first: the threading macros resolve them while
-             ;; the module compiles.
-             _ (doseq [[n a] aliases]
-                 (when-not (= n "cg.macros")
-                   (macros/register-alias! a n)))
-             _ (when (re-find op-marker text)
-                 (await (parser/init! nil)))
-             _ (register-ops-of! text ns-name
-                                 (fn [munged] (unchecked-get (module-namespace ns-name) munged)))
-             module-fn ((js* "(0, eval)")
-                        (module-js text (map (fn [[_ a]] (util/munge-alias a)) aliases)))]
-         (set-globals! (eval-globals))
+       (let [info {:ns-name ns-name :path path}]
+         (swap! module-loads assoc path info)
          (try
-           (await (.apply module-fn nil
-                          (vec (cons (module-namespace ns-name)
-                                     (map (fn [[n _]] (ns-module n)) aliases)))))
+           (await (register-dep-ops! text (atom #{path})))
+           ;; The aliases first: the threading macros resolve them while
+           ;; the module compiles.
+           (let [aliases (alias-values! text)
+                 _ (await (register-module-ops! text ns-name))
+                 module-fn ((js* "(0, eval)") (module-js text (keys aliases)))]
+             (set-globals! (eval-globals))
+             (await (.apply module-fn nil (vec (cons (module-namespace ns-name) (vals aliases))))))
            (catch :default e
              (swap! module-loads dissoc path)
              (throw e)))
@@ -2356,11 +2380,7 @@
       is loaded or loading. Reads the file with the reader of set-module-reader!."
      [path]
      (or (get @module-loads path)
-         (await (load-module-text!
-                 path
-                 (await (js/Promise.resolve (if-let [f @module-reader]
-                                              (f path)
-                                              (util/read-file (module-file path))))))))))
+         (await (load-module-text! path (await (read-module-text path)))))))
 
 #?(:cljs
    (defn ^:async load-entry-module!

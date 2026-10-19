@@ -445,8 +445,7 @@
 
    :cljs
    (defn ^:async crs->projjson
-     "Return a Promise of the CRS string as PROJJSON. Throws if the CRS is not
-      PROJJSON and init-proj! did not run."
+     "Return a Promise of the CRS string as PROJJSON."
      [crs]
      (when (string? crs)
        (let [s (str/trim crs)]
@@ -454,8 +453,7 @@
            (if (str/starts-with? s "{")
              s
              (do
-               (when-not @proj-initialized?
-                 (throw (js/Error. "PROJ not initialized. Call init-proj! first.")))
+               (await (init-proj!))
                (let [ctx (await (proj/context_create))
                      pj  (await (proj/proj_create #js {:context ctx :definition s}))]
                  (await (proj/proj_as_projjson #js {:context ctx :pj pj}))))))))))
@@ -463,11 +461,9 @@
 #?(:cljs
    (do
      (defn ^:async get-or-create-transformer
-       "Return a Promise of {:ctx <context> :tx <transformer>} for the CRS pair.
-        Throws if init-proj! did not run."
+       "Return a Promise of {:ctx <context> :tx <transformer>} for the CRS pair."
        [source-crs target-crs]
-       (when-not @proj-initialized?
-         (throw (js/Error. "PROJ not initialized. Call init-proj! first.")))
+       (await (init-proj!))
        (let [cache-key [source-crs target-crs]]
          (or (get @transformer-cache cache-key)
              (let [ctx (await (proj/context_create))

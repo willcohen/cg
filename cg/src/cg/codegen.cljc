@@ -35,11 +35,10 @@
       "item->")))
 
 (defn- operation-node?
-  "True for an operation node. :type can be a keyword or a string."
+  "True for an operation node or an operation group node (transform-crs).
+   :type can be a keyword or a string."
   [node]
-  (let [type (get-prop node :type)]
-    (or (= type :operation)
-        (= type "operation"))))
+  (contains? #{:operation "operation" :group "group"} (get-prop node :type)))
 
 (defn- source-node?
   [node]
@@ -133,7 +132,8 @@
                     raw-fn
                     (when-let [ns-name (feature/get-bare-op-namespace raw-fn)]
                       (str ns-name "/" raw-fn)))
-        info (when qualified (feature/get-operation-info qualified))]
+        info (when qualified (or (feature/get-operation-info qualified)
+                                 (feature/get-group-info qualified)))]
     (seq (mapv :name (:params info)))))
 
 (defn- node->operation-call

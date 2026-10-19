@@ -8,7 +8,7 @@
 
 import { resolve } from 'path';
 import * as fs from 'fs';
-import { fileURLToPath } from 'url';
+import { fileURLToPath, pathToFileURL } from 'url';
 
 
 // Set up fs module globally BEFORE importing cg.mjs
@@ -51,6 +51,7 @@ async function initWasmTS() {
     }
     await new Promise((r) => setTimeout(r, 50));
   }
+  return { jsFile: wasmJsFile, binary: wasmBinary };
 }
 
 function showHelp() {
@@ -62,11 +63,15 @@ COMMANDS:
       threading-macro binding of the file (item->, coll->, table->), or the
       binding that --model names. The default timeout is 60000 ms.
 
-  show-model <file> [--format edn|json]
-      Print the Flow Graph of each model of the file.
+  show-model <file> [--binding NAME]
+      Print the name, the node count, the edge count and the operations of
+      each model of the file. With --binding, print the Flow Graph of the
+      model NAME only.
 
-  generate <file> [--format edn|code]
-      Write the .cg source again from the models of the file.
+  generate <file> [--binding NAME] [--output FILE]
+      Write the .cg source again from the models of the file. With
+      --binding, use the model NAME only. Print the source, or with
+      --output, write it to FILE.
 
   validate <file>
       Make sure that code -> model -> code gives the code again.
@@ -85,7 +90,7 @@ async function main() {
   }
 
   // Initialize WasmTS BEFORE importing CG module
-  await initWasmTS();
+  const wasmts = await initWasmTS();
 
   // Dynamic import AFTER WasmTS and nodeFs are set up
   const cg = await import('../dist/cg.mjs');
@@ -104,6 +109,12 @@ async function main() {
   async function runFile(filePath, opts = {}) {
     try {
       await initializeCG();
+      // A reprojection step needs the PROJ handler of the joint pool. A
+      // worker cannot see the fetch shim of initWasmTS, so it gets the bytes.
+      await cg.run.init_cg_workers_BANG_({
+        'wasmts-js-url': pathToFileURL(wasmts.jsFile).href,
+        'wasmts-wasm-binary': wasmts.binary,
+      });
       const code = await cg.cli.run_model_file(filePath, opts);
       process.exit(typeof code === 'number' ? code : 0);
     } catch (error) {

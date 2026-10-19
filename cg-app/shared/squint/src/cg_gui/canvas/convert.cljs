@@ -1059,13 +1059,16 @@
         (fn [n] (aget n "id"))))
 
 (defn- thread-line-edges
-  "The thread line of a frame: source port, each step in order, result port."
+  "The thread line of a frame: source port, each step in order, result port.
+   A line carries the output of the step that it leaves, so it takes the
+   :emits-level of that step."
   [frame-id ids mode levels]
-  (let [stops (.concat #js [nil] ids #js [nil])]
+  (let [stops  (.concat #js [nil] ids #js [nil])
+        levels (.concat #js [nil] levels)]
     (.map (.slice stops 1)
           (fn [to i]
             (let [from  (aget stops i)
-                  level (when from (aget levels i))]
+                  level (aget levels i)]
               #js {:id (str frame-id "__line-" i)
                    :source (or from frame-id)
                    :sourceHandle (if from "thread-out" "thread-src")

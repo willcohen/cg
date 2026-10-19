@@ -38,7 +38,8 @@
   [csp-source nonce cdn-hosts]
   (str "default-src 'none'; "
        "script-src 'nonce-" nonce "' 'unsafe-eval' 'wasm-unsafe-eval' " csp-source " " cdn-hosts "; "
-       "connect-src " csp-source " " cdn-hosts " " basemap-hosts "; "
+       ;; https: lets a run fetch the data sources that a .cg names.
+       "connect-src " csp-source " " cdn-hosts " " basemap-hosts " https:; "
        "img-src " csp-source " data: blob: " basemap-hosts "; "
        "style-src 'unsafe-inline' " csp-source "; "
        ;; A worker-router worker is a blob: module with a static import of its

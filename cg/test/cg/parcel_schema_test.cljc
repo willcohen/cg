@@ -72,7 +72,7 @@
                nil
                (catch #?(:clj Exception :cljs :default) e e))]
     (is (some? e) "no fallback: the library holds no threshold")
-    (is (re-find #?(:clj #"the thresholds has no :" :cljs #"the thresholds has no ") (str (ex-message e) (some-> e ex-cause ex-message)))
+    (is (re-find #"the thresholds has no :?corner-max-angle-deg" (str (ex-message e) (some-> e ex-cause ex-message)))
         "the message names the key")))
 
 (deftest the-thresholds-name-no-unit-and-state-their-units
@@ -93,7 +93,7 @@
                                :thresholds " (pr-str (dissoc unit-free-thresholds :units)) "}))"))
                  nil
                  (catch #?(:clj Exception :cljs :default) e e))]
-      (is (re-find (re-pattern (str :units)) (str (some-> e ex-message) (some-> e ex-cause ex-message)))))))
+      (is (re-find #"the thresholds has no :?units" (str (some-> e ex-message) (some-> e ex-cause ex-message)))))))
 
 (deftest a-vertex-tolerance-override-reaches-the-junction-tests
   ;; The two street edges miss each other by 0.3, and meet at a shallow

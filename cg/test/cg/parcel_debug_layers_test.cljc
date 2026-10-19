@@ -52,11 +52,13 @@
     (testing "each is a materialized dataset (EmittedVarsAreMaterializedDatasets)"
       (is (ds/dataset? (:debug-edges layers)))
       (is (ds/dataset? (:debug-envelope layers)))
-      (is (ds/dataset? (:debug-boundary layers))))
+      (is (ds/dataset? (:debug-boundary layers)))
+      (is (ds/dataset? (:debug-setbacks layers))))
     (testing "geometry stays EPSG:2249, tagged so /api/data reprojects to 4326"
       (is (= "EPSG:2249" (:crs (meta (:debug-edges layers)))))
       (is (= "EPSG:2249" (:crs (meta (:debug-envelope layers)))))
-      (is (= "EPSG:2249" (:crs (meta (:debug-boundary layers))))))))
+      (is (= "EPSG:2249" (:crs (meta (:debug-boundary layers)))))
+      (is (= "EPSG:2249" (:crs (meta (:debug-setbacks layers))))))))
 
 ;; String column names, because the map styler keys on "category".
 #?(:clj

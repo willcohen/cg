@@ -5,10 +5,11 @@
 // SPDX-License-Identifier: Apache-2.0 WITH LLVM-exception
 
 // Dev server for the app shell (bb dev:app). resolve() maps each page URL to
-// its file in the monorepo.
+// its file in the monorepo. It listens on 127.0.0.1 only, because /modules/
+// serves each file of cg/, and a host on the LAN must not read them.
 import { createServer } from 'node:http';
 import { readFile, stat } from 'node:fs/promises';
-import { join, dirname, extname } from 'node:path';
+import { join, dirname, extname, sep } from 'node:path';
 import { fileURLToPath } from 'node:url';
 import { imports as cdnImports, pageUrls } from '../importmap.mjs';
 
@@ -22,22 +23,26 @@ const MIME = { '.html': 'text/html', '.mjs': 'text/javascript', '.js': 'text/jav
   '.json': 'application/json', '.map': 'application/json', '.cg': 'text/plain',
   '.ttf': 'font/ttf', '.woff': 'font/woff', '.woff2': 'font/woff2' };
 
+// The request path can hold '..'. Return null when the path goes out of root.
+function under(root, rel) {
+  const f = join(root, rel);
+  return f === root || f.startsWith(root + sep) ? f : null;
+}
+
 function resolve(url) {
   const p = url.split('?')[0];
   if (p === '/' || p === '/index.html') return join(PUB, 'index.html');
-  if (p.startsWith('/dist/')) return join(APP, p);
-  if (p.startsWith('/canvas/')) return join(APP, '..', 'shared', 'squint', 'dist', p.slice('/canvas/'.length));
+  if (p.startsWith('/dist/')) return under(join(APP, 'dist'), p.slice('/dist/'.length));
+  if (p.startsWith('/canvas/')) return under(join(APP, '..', 'shared', 'squint', 'dist'), p.slice('/canvas/'.length));
   // The app shell fetches the files of run/load-module here. Their paths are
   // relative to the cg core root.
-  if (p.startsWith('/modules/') && !p.includes('..'))
-    return join(ROOT, 'cg', p.slice('/modules/'.length));
-  if (p.startsWith('/examples/') && !p.includes('..'))
-    return join(ROOT, 'cg', p.slice(1));
-  if (p.startsWith('/css/')) return join(SHARED_PUB, p);
+  if (p.startsWith('/modules/')) return under(join(ROOT, 'cg'), p.slice('/modules/'.length));
+  if (p.startsWith('/examples/')) return under(join(ROOT, 'cg', 'examples'), p.slice('/examples/'.length));
+  if (p.startsWith('/css/')) return under(join(SHARED_PUB, 'css'), p.slice('/css/'.length));
   if (p === '/cg-bundled-browser.mjs') return join(SHARED_PUB, p);
   // cg.run finds the WasmTS worker handler next to the bundle that holds it.
   if (p === '/cg-wasmts-handler.mjs') return join(ROOT, 'cg', 'dist', p);
-  return join(PUB, p);
+  return under(PUB, p);
 }
 
 // Warn when dist/cg-app.mjs is older than one of its inputs. `node serve.mjs`
@@ -95,6 +100,7 @@ function withCdn(html) {
 createServer(async (req, res) => {
   try {
     const f = resolve(req.url);
+    if (!f) throw new Error('path out of its root');
     let body = await readFile(f);
     if (f.endsWith('index.html')) {
       body = withCdn(body.toString());
@@ -110,4 +116,4 @@ createServer(async (req, res) => {
   } catch {
     res.writeHead(404); res.end('not found: ' + req.url);
   }
-}).listen(port, () => console.log(`cg-app dev server: http://localhost:${port}/`));
+}).listen(port, '127.0.0.1', () => console.log(`cg-app dev server: http://localhost:${port}/`));

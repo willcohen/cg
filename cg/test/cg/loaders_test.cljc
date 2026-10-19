@@ -64,14 +64,16 @@
 (defn- geoservices-body
   "The text of the fixture file `nm` for a request to `uri`. Under /nan/, page
    1 has a NaN value. JSON.parse rejects that page, and the json-c parser of
-   GDAL reads it."
+   GDAL reads it. Under /b/, each NAME starts with b-."
   [nm uri]
   (let [text #?(:clj (slurp (jio/file geoservices-dir nm))
                 :cljs (fs/readFileSync (node-path/join geoservices-dir nm) "utf8"))]
-    (if (and (str/includes? uri "/nan/") (= "page1.json" nm))
+    (cond
+      (and (str/includes? uri "/nan/") (= "page1.json" nm))
       (str/replace text "\"exceededTransferLimit\": true,"
                    "\"exceededTransferLimit\": true, \"maxScale\": NaN,")
-      text)))
+      (str/includes? uri "/b/") (str/replace text "\"NAME\": \"" "\"NAME\": \"b-")
+      :else text)))
 
 #?(:clj
    (defn- with-geoservices-server
@@ -88,17 +90,19 @@
      "Serve the GeoServices paging fixtures. Call (f base-layer-url requests),
       and stop the server when the Promise of f settles. requests is an atom
       of {:uri :headers} maps. `fixture-for` gives the fixture file for the
-      URI of a request (default geoservices-fixture-for), or nil for a 404."
+      URI of a request (default geoservices-fixture-for), or nil for a 404,
+      or a Promise of one of them."
      ([f] (with-geoservices-server geoservices-fixture-for f))
      ([fixture-for f]
       (let [requests (atom [])
             server   (http/createServer
                       (fn [req res]
-                        (let [uri (.-url req)
-                              nm  (fixture-for uri)]
+                        (let [uri (.-url req)]
                           (swap! requests conj {:uri uri :headers (.-headers req)})
-                          (.writeHead res (if nm 200 404) #js {"Content-Type" "application/json"})
-                          (.end res (some-> nm (geoservices-body uri))))))]
+                          (.then (js/Promise.resolve (fixture-for uri))
+                                 (fn [nm]
+                                   (.writeHead res (if nm 200 404) #js {"Content-Type" "application/json"})
+                                   (.end res (some-> nm (geoservices-body uri))))))))]
         (-> (js/Promise. (fn [listening] (.listen server 0 "127.0.0.1" listening)))
             (.then (fn [_]
                      (f (str "http://127.0.0.1:" (.-port (.address server)) "/FeatureServer/0")
@@ -280,6 +284,35 @@
          (after (error-message #(ds/load-gdal! layer-url nil))
                 (fn [msg]
                   (is (str/starts-with? (str msg) "cg.io/load-gdal-source: HTTP 404 "))))))))
+
+#?(:cljs
+   (defn- held-first-pages
+     "geoservices-fixture-for, with no answer to a first page until `n` first
+      pages are asked."
+     [n]
+     (let [held (atom [])]
+       (fn [uri]
+         (let [nm (geoservices-fixture-for uri)]
+           (if (= "page1.json" nm)
+             (js/Promise. (fn [resolve]
+                            (swap! held conj #(resolve nm))
+                            (when (= n (count @held))
+                              (doseq [answer @held] (answer)))))
+             nm))))))
+
+;; GDAL reads the first page of a layer from a file that the load stages.
+;; The two first pages arrive at once, so both loads stage before either reads.
+#?(:cljs
+   (deftest two-loads-at-once-read-their-own-pages
+     (with-geoservices-server
+       (held-first-pages 2)
+       (fn [layer-url _]
+         (after (js/Promise.all
+                 #js [(ds/load-gdal! layer-url nil)
+                      (ds/load-gdal! (str/replace layer-url "/FeatureServer/0" "/b/FeatureServer/0") nil)])
+                (fn [[a b]]
+                  (is (= ["A" "B" "C"] (sorted-names a "NAME")))
+                  (is (= ["b-A" "b-B" "b-C"] (sorted-names b "NAME")))))))))
 
 #?(:cljs
    (deftest ensure-dataset-keeps-a-dataset-unless-keep-is-false
