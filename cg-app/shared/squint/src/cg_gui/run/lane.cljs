@@ -8,16 +8,12 @@
   "Pure backend decisions: the runtime choice, a refused web Run and the
    route of a map run. It has no host code, because node tests load it.")
 
-(defn resolve-runtime
-  "An explicit choice passes through. auto follows backend reachability."
-  [choice jvm-reachable?]
+(defn resolve-runtime [choice jvm-reachable?]
   (if (= choice "auto")
     (if jvm-reachable? "jvm" "js")
     choice))
 
-(defn chip-text
-  "The status text of a runtime choice and its resolution, in both hosts."
-  [choice resolved]
+(defn chip-text [choice resolved]
   (cond
     (= choice "jvm") "CG: jvm"
     (= choice "js") "CG: js"

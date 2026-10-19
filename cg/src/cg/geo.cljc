@@ -383,9 +383,7 @@
                         jts-coords)
           :count n}))
 
-     (defn read-coord-array
-       "Read coordinates back from a PROJ coord array after transformation."
-       [coord-array n]
+     (defn read-coord-array [coord-array n]
        (mapv (fn [i]
                [(get-in coord-array [i 0])
                 (get-in coord-array [i 1])
@@ -393,9 +391,7 @@
                 (get-in coord-array [i 3])])
              (range n)))
 
-     (defn- apply-coord-item!
-       "Apply one transformed coordinate to a CoordinateSequence item."
-       [^CoordinateSequence cseq ^Integer i coord]
+     (defn- apply-coord-item! [^CoordinateSequence cseq ^Integer i coord]
        (let [[x y z m] coord
              dim (.getDimension cseq)
              has-m (.hasM cseq)]
@@ -406,9 +402,7 @@
          (when (and has-m (>= dim 4))
            (.setOrdinate cseq i 3 (double (or m 0.0))))))
 
-     (defn- apply-coords-filter
-       "A CoordinateSequenceFilter that writes transformed coordinates back."
-       ^CoordinateSequenceFilter [transformed-coords idx-atom]
+     (defn- apply-coords-filter ^CoordinateSequenceFilter [transformed-coords idx-atom]
        (reify CoordinateSequenceFilter
          (filter [_ cseq i]
            (apply-coord-item! cseq i (nth transformed-coords @idx-atom))

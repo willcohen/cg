@@ -5,13 +5,10 @@
 ;; SPDX-License-Identifier: Apache-2.0 WITH LLVM-exception
 
 (ns cg.parcel-debug-layers-test
-  "Shape + content assertions for parcel/debug-layers. parcel.cg is a .cg
-   module: it loads into CG's SCI context, not the JVM namespace registry, so
-   debug-layers is exercised through eval-cg — the same context the backend
-   session runs it in — and we assert on the host datasets it returns (SCI
-   shares host data structures, so the crossing is transparent). A synthetic
-   fixture parcel with known categorization makes a regression fail an
-   assertion, not just the eye."
+  "parcel/debug-layers on both runtimes. parcel.cg is a .cg module, so the
+   tests call debug-layers through eval-cg, in the context that the backend
+   session uses. A made-up parcel with known edge types makes a regression
+   fail a check."
   #?(:clj (:require [clojure.test :refer [deftest is testing use-fixtures]]
                     [cg.run :as run]
                     [cg.dataset :as ds])

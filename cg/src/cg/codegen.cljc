@@ -4,8 +4,8 @@
 ;; See LICENSE for license information.
 ;; SPDX-License-Identifier: Apache-2.0 WITH LLVM-exception
 
-;; Flow Graph -> .cg code (threading macro calls). The visual editor changes
-;; a Flow Graph, and this namespace writes the code for it.
+;; Flow Graph -> .cg code (threading macro calls) for the generate and validate
+;; commands of the CLI. The visual editors splice each edit into its source span.
 
 (ns cg.codegen
   (:require [cg.feature :as feature]

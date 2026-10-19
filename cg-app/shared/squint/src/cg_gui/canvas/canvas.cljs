@@ -110,14 +110,11 @@
                        (or (and flow (aget flow "bindings")) #js [])))
         (host/post! #js {:type "cg/select-model" :model m})))))
 
-(defn on-node-context-menu
-  "Stops the default webview menu on right-click."
-  [^js e _node]
+(defn on-node-context-menu [^js e _node]
   (.preventDefault e))
 
 (defn on-node-double-click
-  "Double-click calls the :on-dive callback of the node. apply-collapse gives
-   that callback only to a divable node."
+  "apply-collapse gives :on-dive only to a divable node."
   [_e ^js node]
   (let [d (.-data node)
         f (when d (aget d "on-dive"))]
@@ -181,8 +178,7 @@
         (select-only prev id)))))
 
 (defn on-node-drag-stop
-  "Posts a cg/edit DragNode message with the new position of the dragged node.
-   The host writes the position into the ^:cgproj overlay of the .cg file."
+  "The host writes the position into the ^:cgproj overlay of the .cg file."
   [_e ^js node]
   (let [d          (.-data node)
         id         (.-id node)
@@ -352,10 +348,7 @@
         (.sort (.filter nodes (fn [^js n] (and (not (.-hidden n)) (.includes (node-title n) lq))))
                (fn [a b] (- (rank a) (rank b))))))))
 
-(defn- NodeSearch
-  "A Carbon Search that centers the canvas on the first card with the typed
-   name. Enter goes to the next one."
-  [^js props]
+(defn- NodeSearch [^js props]
   (let [[q set-q] (useState "")
         [i set-i] (useState 0)
         nodes (.-nodes props)
@@ -386,9 +379,7 @@
                                      :color "var(--cds-text-secondary, var(--cg-ink-muted, #888))"}}
                   (if (pos? n) (str (inc (mod i n)) "/" n) "none")])]))
 
-(defn- minimap-color
-  "The minimap fill of a node, by its run state."
-  [^js node]
+(defn- minimap-color [^js node]
   (case (when (.-data node) (aget (.-data node) "state"))
     "running"  "var(--cg-run, #0066cc)"
     "complete" "var(--cg-complete, #137a3d)"
@@ -505,9 +496,7 @@
       (set! (.-current last) id)
       true)))
 
-(defn- runnable?
-  "True when the flow has a binding to run."
-  [^js flow]
+(defn- runnable? [^js flow]
   (boolean (and flow (pos? (.-length (or (aget flow "bindings") #js []))))))
 
 (defn- run-end-status

@@ -39,9 +39,7 @@
   ([] (create-collection! "cg"))
   ([name] (.createDiagnosticCollection vscode/languages name)))
 
-(defn set-diagnostic-data!
-  "Replaces the diagnostics for `uri` with those built from diagnostic maps."
-  [^js collection uri diagnostic-data]
+(defn set-diagnostic-data! [^js collection uri diagnostic-data]
   (.set collection uri (into-array (map data->vscode diagnostic-data))))
 
 (defn set-diagnostics!
@@ -49,7 +47,5 @@
   [^js collection uri cg-flow]
   (.set collection uri (cg-flow->vscode-diagnostics cg-flow)))
 
-(defn clear-diagnostics!
-  "Drop any diagnostics for `uri` (use on document close)."
-  [^js collection uri]
+(defn clear-diagnostics! [^js collection uri]
   (.delete collection uri))

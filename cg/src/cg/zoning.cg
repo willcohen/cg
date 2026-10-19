@@ -501,8 +501,9 @@
      :required?  true writes required-<rule id>, the limit of each rule.
      :margins?   true writes <rule id>-margin for each rule.
 
-   A measure spec is {:id :quantity :form ...}. :quantity is a label, and
-   the checker does not read it. :form is one of:
+   A measure spec is {:id :quantity :form ...}. :quantity is a label.
+   rule-popup reads it to find the unit of a measure, and the checker does
+   not read it. :form is one of:
      :row         :key is a key of the row.
      :metric      :key is a key of the :metrics of the row.
      :schema-col  :key is a key of the parcel schema, which names a column
@@ -532,7 +533,9 @@
      {:form :row :key k}   a column of the row.
      {:form :lookup :table t :by [row keys] :at [keys]}   a nested table.
                     The values of the :by keys, then the :at keys, are the
-                    path. A leaf is a limit.
+                    path. A leaf is a limit. A key must have the type of
+                    its row value, because only JS finds a number key by
+                    its string.
      {:form :brackets :by m :steps [{:up-to n :limit l} ... {:limit l}]}
                     the first step whose :up-to is at or above the measure
                     m. A step with no :up-to takes each value.
@@ -730,8 +733,8 @@
                 rule (first (filter (fn [r] (some #(= et %) (:types r)))
                                     (:rules per-edge)))]
             {:edge-length             (:length e)
-             :abuts-right-of-way?              (= :street (:abutting e))
-             :right-of-way-width               (or (:right-of-way-width e) 0)
+             :abuts-right-of-way?     (= :street (:abutting e))
+             :right-of-way-width      (or (:right-of-way-width e) 0)
              :edge-type               et
              :setback-to-bldg         (:setback e)
              :edge-setback-conformity (if rule

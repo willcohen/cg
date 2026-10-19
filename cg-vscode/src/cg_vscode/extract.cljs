@@ -15,8 +15,8 @@
 (defonce ^:private !grammar-wasm (atom nil))
 
 (defn- grammar-wasm-path
-  "The path of the tree-sitter-clojure grammar wasm. createRequire needs
-   import.meta.url, which esbuild shims to a file URL in the CJS bundle."
+  "createRequire needs import.meta.url, which esbuild shims to a file URL in
+   the CJS bundle."
   []
   ;; Deref after reset!, because squint reset! returns undefined.
   (when (nil? @!grammar-wasm)

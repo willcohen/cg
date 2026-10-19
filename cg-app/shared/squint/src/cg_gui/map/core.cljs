@@ -16,9 +16,7 @@
 
 (defonce ^:private cached-base-style (atom nil))
 
-(defn- ^:async fetch-base-style
-  "Fetch and cache the maptiler-basic style JSON."
-  []
+(defn- ^:async fetch-base-style []
   (when (nil? @cached-base-style)
     (let [resp (await (js/fetch style-url))]
       (when-not (.-ok resp)
@@ -65,9 +63,7 @@
   [var-name]
   (aget @!layer-info var-name))
 
-(defn- cgdata-layer-ids
-  "The ids of the data layers (cgdata-*) on the map."
-  [m]
+(defn- cgdata-layer-ids [m]
   (.filter (.getLayersOrder m) (fn [id] (.startsWith id "cgdata-"))))
 
 (defn- hide-identify! [panel]
@@ -128,10 +124,7 @@
     (.appendChild container panel)
     #js {:panel panel :body body}))
 
-(defn- feature-card
-  "The card of one clicked feature, from the :popup of its layer spec and the
-   colors of its layer style."
-  [var-name props]
+(defn- feature-card [var-name props]
   (let [info (layer-info var-name)]
     (popup/card-element
      (popup/card-model var-name props
@@ -647,16 +640,12 @@
 ;; The fill paint goes under the basemap buildings, because a blend mode does
 ;; not exist in MapLibre and a footprint must show through a parcel color.
 ;; Its outline and highlight stay above them.
-(defn- fill-insert-before
-  "The id of the layer under which the paint of a fill goes."
-  [m]
+(defn- fill-insert-before [m]
   (first-layer-id m (fn [layer] (or (building-layer? layer)
                                     (line-var-layer? m layer)
                                     (symbol-layer? layer)))))
 
-(defn- add-var-layers!
-  "Adds the layers of a var for its style, in draw order."
-  [m var-name style geojson]
+(defn- add-var-layers! [m var-name style geojson]
   (let [source-id (str "cgsrc-" var-name)
         id        (fn [prefix] (str prefix var-name))
         kind      (aget style "layer-type")
@@ -698,9 +687,7 @@
     (aset @!layer-info var-name #js {:spec (aget l "spec") :style style :signature signature})
     (apply-min-zoom! m var-name (truncated-layer? l))))
 
-(defn- remove-var!
-  "Removes the layers, the source and the record of a var."
-  [m var-name]
+(defn- remove-var! [m var-name]
   (remove-var-layers! m var-name)
   (when (.getSource m (str "cgsrc-" var-name))
     (.removeSource m (str "cgsrc-" var-name)))

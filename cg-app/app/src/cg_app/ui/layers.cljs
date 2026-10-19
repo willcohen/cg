@@ -5,8 +5,7 @@
 ;; SPDX-License-Identifier: Apache-2.0 WITH LLVM-exception
 
 (ns cg-app.ui.layers
-  "Pure session-vars -> sidebar/map-layer mapping. JS-native
-   grouping/formatting.")
+  "Pure session-vars -> sidebar/map-layer mapping.")
 
 (def color-palette
   #js ["#4589ff" "#ff832b" "#6fdc8c" "#d12771"

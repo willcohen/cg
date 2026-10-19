@@ -57,8 +57,8 @@
   (reset! !choice (if (js-only?)
                     "js"
                     (or (some-> (storage) (.getItem runtime-storage-key)) (default-choice))))
-  ;; The url that the native shell injects wins over a stored url, because
-  ;; the stored port can be stale.
+  ;; The url that the native shell or the dev server injects wins over a
+  ;; stored url, because the stored port can be stale.
   (reset! !backend-url (or (.-__CG_BACKEND_URL__ js/globalThis)
                            (some-> (storage) (.getItem backend-url-storage-key))
                            default-backend-url))

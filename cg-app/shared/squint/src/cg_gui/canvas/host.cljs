@@ -12,9 +12,7 @@
   (when (exists? js/acquireVsCodeApi)
     (js/acquireVsCodeApi)))
 
-(defn post!
-  "Send a JS-object message to the extension host."
-  [msg]
+(defn post! [msg]
   (if vscode
     (.postMessage vscode msg)
     (.postMessage (.-parent js/window) msg "*")))
@@ -27,8 +25,8 @@
     (.getState vscode)))
 
 (defn merge-ui-state!
-  "Merges UI keys (console width, hidden state) into the webview state. Does
-   nothing where the host has no state."
+  "Merges UI keys (the console width and open state) into the webview
+   state. Does nothing where the host has no state."
   [kvs]
   (when (and vscode (fn? (.-setState vscode)))
     (.setState vscode (js/Object.assign #js {} (ui-state) kvs))))

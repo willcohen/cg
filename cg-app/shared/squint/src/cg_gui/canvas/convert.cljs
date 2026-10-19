@@ -80,9 +80,7 @@
   (let [parts (.split (str qn) "/")]
     (aget parts (dec (.-length parts)))))
 
-(defn- strip-colon
-  "Drops a leading colon."
-  [s]
+(defn- strip-colon [s]
   (if (.startsWith s ":") (.slice s 1) s))
 
 (defn- op-icon
@@ -149,8 +147,8 @@
                            :fn (g op "qualified-name")
                            :args (g op "args")
                            :location (g op "location")
-                           ;; :emits-level is dataset, groups or map.
                            :component (g op "component")
+                           ;; :emits-level is dataset, groups or map.
                            :emits-level (g op "emits-level")
                            :visual (g op "visual")}))]
     #js {:name bname :nodes nodes

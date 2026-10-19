@@ -5,8 +5,8 @@
 ;; SPDX-License-Identifier: Apache-2.0 WITH LLVM-exception
 
 (ns cg-app.ui.splitter-test
-  "The width math and the memory of the panel borders. The drag needs the DOM
-   and runs in the demo check."
+  "The width math and the memory of the panel borders. The drag needs the DOM,
+   and no check drives it."
   (:require [cljs.test :as t :refer [deftest is]]
             ["../../../src/cg_app/ui/splitter.mjs" :as sp]))
 

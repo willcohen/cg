@@ -14,9 +14,7 @@
 #?(:clj (set! *warn-on-reflection* true))
 
 #?(:clj
-   (defn count
-     "Row count of a sub-dataset."
-     [sub-ds]
+   (defn count [sub-ds]
      (ds/row-count sub-ds)))
 
 #?(:clj

@@ -48,6 +48,8 @@
   (or
    (get @namespace-aliases ns-sym)
    #?(:clj
+      ;; *ns* does not hold the aliases of .cg code, because SCI keeps them. On the
+      ;; JVM, a rung head can use only an alias from the require of cg.dsl.
       (let [current-ns *ns*]
         (when (instance? clojure.lang.Namespace current-ns)
           (when-let [aliased-ns (get (ns-aliases current-ns) ns-sym)]
@@ -294,9 +296,7 @@
        :params op-params})
     {:config {} :params params}))
 
-(defn build-source-node
-  "Build a source node for a data reference."
-  [data-ref]
+(defn build-source-node [data-ref]
   {:type :source
    :id (util/as-kw (str (util/unq-name data-ref) "-src"))
    ;; On :cljs run-model matches data-ref against string binding keys. On
@@ -336,7 +336,8 @@
    :type :group node with its expansion."
   [operation mode node-id]
   (let [{:keys [config params]} (extract-config-overrides (:params operation))
-        ;; :fn is a string, to prevent symbol resolution in the macro expansion.
+        ;; The :fn of a node is fn-str, a string: the JVM expansion evaluates
+        ;; the model map, and a symbol there would resolve.
         fn-ref (:fn operation)
         fn-sym #?(:clj (if (symbol? fn-ref) fn-ref (symbol fn-ref))
                   :cljs (str fn-ref))
@@ -372,24 +373,18 @@
           map-op? (assoc :component (str (:value params)))
           (:component operation) (assoc :component (:component operation)))))))
 
-(defn build-sink-node
-  "Build a sink node for result output."
-  [output-binding]
+(defn build-sink-node [output-binding]
   {:type :sink
    :id :result
    :output-binding output-binding})
 
-(defn build-edges
-  "Build edges connecting node IDs in sequence."
-  [node-ids]
+(defn build-edges [node-ids]
   (mapv (fn [from to]
           {:from from :to to :type :data-flow})
         (butlast node-ids)
         (rest node-ids)))
 
-(defn detect-platform
-  "Detect current platform for model configuration."
-  []
+(defn detect-platform []
   #?(:clj :jvm
      :cljs :javascript))
 

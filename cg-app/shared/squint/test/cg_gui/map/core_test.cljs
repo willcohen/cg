@@ -5,8 +5,7 @@
 ;; SPDX-License-Identifier: Apache-2.0 WITH LLVM-exception
 
 (ns cg-gui.map.core-test
-  "The viewport fns of the shared map core, which drive the refetch of a JVM
-   session. They run under node with a fake map."
+  "The viewport fns of the shared map core, which drive the refetch of a JVM session."
   (:require [cljs.test :as t :refer [deftest is]]
             ["../../../src/cg_gui/map/core.mjs" :as mc]))
 

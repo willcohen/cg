@@ -27,9 +27,9 @@
 ;; to the canvas of the first one.
 (defonce ^:private !run-docs (atom []))
 (defonce ^:private !map-session (atom nil))
-;; The generation counter lets a newer refetch supersede one in flight.
 (defonce ^:private !jvm-port (atom nil))
 (defonce ^:private !last-vars (atom nil))
+;; A newer viewport refetch supersedes one in flight.
 (defonce ^:private !refetch-gen (atom 0))
 
 (defn- resolve-dirs
@@ -41,10 +41,7 @@
      :wasmts-dir (path/join repo "cg" "node_modules" "@wcohen" "wasmts" "dist")
      :grammar-dir (path/join repo "cg" "node_modules" "@yogthos" "tree-sitter-clojure")}))
 
-(defn- post-pending!
-  "Posts the stashed message (cg/run or cg/layers) to the webview, if there is
-   one."
-  [^js panel]
+(defn- post-pending! [^js panel]
   (when-let [^js m @!last-run]
     (.. panel -webview (postMessage m))))
 
@@ -52,9 +49,7 @@
   (when (identical? panel @!panel)
     (.. panel -webview (postMessage #js {:type "cg/status" :text text}))))
 
-(defn- stash-and-post!
-  "Stashes `msg` for replay and posts it when the webview is ready."
-  [^js panel ^js msg]
+(defn- stash-and-post! [^js panel ^js msg]
   (when (identical? panel @!panel)
     (reset! !last-run msg)
     (when @!ready (post-pending! panel))))
@@ -108,8 +103,7 @@
             (when channel (.appendLine channel "CG map (JVM): run ok — no geometry dataset vars. This file defines functions only; open a file that defs dataset layers.")))))))
 
 (defn- remember-fetched-vars!
-  "Records the geometry var names that a full run rendered. A viewport refetch
-   fetches those vars again."
+  "A viewport refetch fetches these vars again."
   [result]
   (let [layers (:layers result)]
     (when (and layers (pos? (.-length layers)))
@@ -164,10 +158,7 @@
             (when channel
               (.appendLine channel (str "CG map (JVM) viewport refetch failed: " (.-message e))))))))))
 
-(defn- post-js-run!
-  "Posts cg/run for the document `cg-uri` to the tab, with the model that its
-   canvas picked, and records the document for the run messages."
-  [!state ^js panel ^js cg-uri text flow]
+(defn- post-js-run! [!state ^js panel ^js cg-uri text flow]
   (let [uri-str (str cg-uri)
         file (.-fsPath cg-uri)]
     ;; The stash keeps only the last message for a page that is not ready.
@@ -243,8 +234,7 @@
         (answer #js {:error (str "load-module " p ": " (.-message e))})))))
 
 (defn- relay!
-  "Posts the canvas messages of the map message `msg` to the canvas of the
-   document of the run. `end?` closes the run."
+  "`end?` closes the run."
   [!state ^js msg end?]
   (when-let [{:keys [uri file]} (first @!run-docs)]
     (doseq [m (relay/canvas-messages msg file)]

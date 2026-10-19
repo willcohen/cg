@@ -20,9 +20,7 @@
                                  {:exclude [cg.model cg.io cg.feature cg.geo cg.run
                                             cg.dataset clojure.core.async.flow
                                             cg.math cg.util]}}}}
-  ;; Every require is :clj-only. Under :cljs squint detects a cycle via
-  ;; cg.macros -> cg.introspect -> cg.dsl -> cg.macros, and all uses in this
-  ;; ns are inside :clj reader conditionals.
+  ;; Every require is :clj-only, because the JS runtime has no SCI.
   #?(:clj (:require [cg.model :as model]
                     [cg.macros :as macros]
                     [sci.core :as sci]
@@ -42,6 +40,9 @@
 ;; not put cg.dsl in the cg.run ns form.
 
 #?(:clj
+   ;; copy-ns selects the public vars when cg.dsl compiles. In a REPL, .cg code
+   ;; can see a new public var of a copied namespace only after you reload
+   ;; cg.dsl and call run/reset-context!.
    (def cg-namespaces
      "The namespaces that a .cg file can require. SCI copies each one into
   the context. From cg.macros the context copies only item->, coll-> and
@@ -57,8 +58,6 @@
       'clojure.core.async.flow (sci/copy-ns clojure.core.async.flow (sci/create-ns 'clojure.core.async.flow))
       'cg.dataset (sci/copy-ns cg.dataset (sci/create-ns 'cg.dataset))
       'cg.math (sci/copy-ns cg.math (sci/create-ns 'cg.math))
-      ;; cg.util gives .cg code the clock wrappers (current-time-ms,
-      ;; elapsed-ms) that replace the host interop that the sandbox blocks.
       'cg.util (sci/copy-ns cg.util (sci/create-ns 'cg.util))}))
 
 #?(:clj

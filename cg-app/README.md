@@ -2,6 +2,10 @@
 
 cg-app is the web app for cg. It shows a `.cg` file in five panels: Flow (the canvas), Code, Status, Map and Results. The browser runs the file in JavaScript. With the JVM backend, the app can also run the file on the JVM.
 
+The code is the only record of the file. The Flow canvas shows the code. Each edit on the canvas, for example a drag or a changed value, writes into the code.
+
+The browser must have WasmGC and the exnref form of WebAssembly exception handling, because the geometry library wasmts uses them. In a test on Android, the WebView of Chrome 133 did not compile wasmts, and the WebView of Chrome 149 compiled it.
+
 Desktop and mobile apps are planned.
 
 Run each command in this folder, in the development shell of the root README.

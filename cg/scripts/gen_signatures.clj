@@ -6,10 +6,7 @@
    The single source of truth is the enriched `register-operation!` call
    beside each op's defn. The parser cannot execute heavy-ns code
    (tech.ml.dataset / JTS / wasmts), so this snapshot is how the op
-   contract reaches the squint-compiled parser. Run via `bb gen:signatures`.
-
-   Mirrors the `bb ts:sync` pattern (auto-gen header + quoted data literal
-   in a generated ns)."
+   contract reaches the squint-compiled parser. Run via `bb gen:signatures`."
   (:require [clojure.string :as str]
             [clojure.pprint :as pp]))
 
@@ -26,11 +23,11 @@
   "Project one operation-registry entry into zero or more
    [dsl-spelling signature-map] pairs — one per :dsl-name plus each
    :dsl-aliases entry. Returns nil when the entry carries no :dsl-name
-   (i.e. it is not parser-facing; internal step-factories fall out here).
+   (the entry is not parser-facing; internal step-factories fall out here).
 
    The signature-map matches cg.dsl.signatures' built-ins shape exactly
-   (the keys produced by sig/input/output), so the generated map is a
-   drop-in for the hand-written one."
+   (the keys produced by sig/input/output), so `built-ins` of
+   cg.dsl.signatures can merge it on top of built-ins-manual."
   [entry]
   (when-let [dsl-name (:dsl-name entry)]
     (let [base {:inputs (mapv (fn [i] {:name (:name i)
@@ -55,7 +52,7 @@
    signature} map, key-sorted for stable diffs. Pure data, no fn calls.
 
    Both registries are scanned: operations (register-operation!) and groups
-   (register-group!, e.g. transform-crs). A group is parser-facing the same
+   (register-group!, for example transform-crs). A group is parser-facing the same
    way an operation is — by carrying a :dsl-name parser slice; its
    :expansion-fn is ignored by project-entry."
   []

@@ -41,9 +41,7 @@
             (api/list-node
              (list (api/vector-node (mapv api/token-node args))))))))
 
-(defn define-all-ts-fns
-  "Expand the macro call into a `do` of one defn per minted name."
-  [_]
+(defn define-all-ts-fns [_]
   {:node (api/list-node
           (cons (api/token-node 'do)
                 (for [[fn-name arities] names/minted]

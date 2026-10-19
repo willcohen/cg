@@ -146,7 +146,8 @@
 ;; that changes the result. With no :crs, the first geometry gives it, and a
 ;; result with no CRS is stored as EPSG:4326.
 ;; A miss reads the file back, because a hit and a miss must give the same
-;; rows. The JS runtime has no run-component: the checkpoint runs on the JVM.
+;; rows. The GeoPackage write is JVM only. In a browser, the checkpoint
+;; computes the result and stores nothing.
 (defn ^:op checkpoint
   {:outputs {:result {:type :dataset :role :table}}}
   [^:table ^{:type :dataset} rows

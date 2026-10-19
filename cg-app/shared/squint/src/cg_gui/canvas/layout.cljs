@@ -201,7 +201,8 @@
 
 (defn ^:async layout!
   "Positions the canvas nodes with ELK. Returns a Promise of the nodes, with a new
-   :position on each unpinned top-level node, or of the input nodes on an error."
+   :position on each unpinned top-level node. On an ELK error, the nodes have
+   their stacked threads and no new top-level :position."
   [in-nodes edges direction]
   (let [nodes    (stack-threads (.map in-nodes with-collapsed-width))
         parents  (let [m #js {}]

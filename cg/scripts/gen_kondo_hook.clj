@@ -12,10 +12,7 @@
    needs: one defn node per name, one arity per argument vector.
 
    Run via `bb ts:kondo`. `bb ts:sync` runs it too, because the snapshot and
-   the registry must agree.
-
-   Mirrors the `bb gen:signatures` pattern (auto-gen header + quoted data
-   literal in a generated ns)."
+   the registry must agree."
   (:require [clojure.pprint :as pp]
             [clojure.string :as str]))
 
@@ -39,7 +36,7 @@
 
 (defn placeholder-args
   "Rename one argument vector to positional placeholders. The hook gives every
-   generated defn a nil body, so a name that reads as a binding makes
+   generated defn an empty body, so a name that reads as a binding makes
    :unused-binding fire at each call site. The leading underscore stops that.
    A variadic tail keeps its position."
   [args]
@@ -56,7 +53,7 @@
 
    A name the expansion emits more than once keeps the LAST set of arities.
    That is what the expanded `do` produces at run time, where the last defn
-   wins, so modelling it any other way would let clj-kondo accept a call the
+   wins, so modeling it any other way would let clj-kondo accept a call the
    run time rejects. 76 of the 1527 emitted defns collide this way today, 27 of
    them with a different arity set."
   []

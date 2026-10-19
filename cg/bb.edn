@@ -404,7 +404,7 @@ refresh the imported copies:
             "(load-file \"scripts/gen_signatures.clj\") (gen-signatures/-main)")}
 
   show-model
-  {:doc "Extract and display Flow Graph from .cg file (usage: bb show-model <file.cg>)"
+  {:doc "Print a summary of each model of a .cg file (usage: bb show-model <file.cg>)"
    :task
    (let [file (or (first *command-line-args*)
                   (do (println "Usage: bb show-model <file.cg>")

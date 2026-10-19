@@ -5,12 +5,7 @@
 ;; SPDX-License-Identifier: Apache-2.0 WITH LLVM-exception
 
 (ns cg.export-test
-  "cg.export/column-order: the order of the export columns, from a spec.
-
-   :ordered holds lists of names, and each list is a group in its own
-   order. :groups holds rules in output order: a column goes to the first
-   group whose rule it matches, and a group sorts by name. A column that
-   matches no rule goes last, by name. :geometry is the last column."
+  "cg.export/column-order: the order of the export columns, from a spec."
   (:require [clojure.test :refer [deftest is testing use-fixtures]]
             [cg.run :as run]))
 

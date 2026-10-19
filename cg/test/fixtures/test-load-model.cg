@@ -1,5 +1,4 @@
-;; Test CG file for loading into visual editor
-;; Simple buffer + simplify model
+;; A model with a ^:cgproj overlay, for the overlay test of the parser.
 
 (require '[cg.macros :refer [item->]])
 (require '[cg.geo :as geo])
@@ -9,9 +8,9 @@
     (geo/buffer 100)
     (geo/simplify 10)))
 
-;; Visual metadata. Keys are the canvas node ids the converter generates:
-;; `<model>__<unq-fn>-<global-op-index+1>`. The model is the def name
-;; `simple-buffer-model`; ops geo/buffer (idx 0) and geo/simplify (idx 1).
+;; Visual metadata. Keys are the canvas node ids, <model>__<unq-fn>-<n>,
+;; where n counts the steps of the thread of the model from 1. Here
+;; geo/buffer is step 1 and geo/simplify is step 2.
 ^:cgproj
 {:nodes {"simple-buffer-model__buffer-1"   {:pos [100 100]}
          "simple-buffer-model__simplify-2" {:pos [400 100]}}

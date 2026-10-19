@@ -13,6 +13,10 @@
             [cg.run :as run]
             [cg.util :as util]))
 
+;; Limits of the lot classifier: it finds no cul-de-sac, and rectangular? is its
+;; only shape test. A corner curve that is only partly street gives :mid-block,
+;; and the gap to the next parcel is too small for a street drawn to its center.
+
 (run/load-module "src/cg/layer.cg")
 (clojure.core/require '[cg.layer :as layer])
 

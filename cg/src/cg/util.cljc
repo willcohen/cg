@@ -220,11 +220,10 @@
              v2))
          maps))
 
-;; Under squint a keyword and a symbol are plain strings. squint-cljs/core
-;; does not export `keyword` or `symbol`, and its `name` accepts only strings.
-;; These shims use the real constructors on the JVM and strings on CLJS. They
-;; are here because cg.macros (generate-node-id) and cg.parser.extract
-;; (body-graph node ids) must share one contract.
+;; Under squint a keyword and a symbol are plain strings. The squint `name`
+;; accepts only strings. These shims use the real constructors on the JVM and
+;; strings on CLJS. They are here because cg.macros (generate-node-id) and
+;; cg.parser.extract (body-graph node ids) must share one contract.
 
 (defn unq-name
   "Return the unqualified name of x, a symbol, keyword or string: the text

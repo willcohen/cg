@@ -25,8 +25,7 @@
 (def ^:private debounce-ms 250)
 
 (defn- read-brand-text
-  "Reads a text asset (for example icons.svg) from dist/webview/cg-brand/ of
-   the extension. Returns nil when the file is missing."
+  "Returns nil when the file is missing."
   [extension-uri filename]
   (let [^js uri (vscode/Uri.joinPath extension-uri "dist" "webview" "cg-brand" filename)
         path (.-fsPath uri)]
@@ -65,8 +64,7 @@
       pick)))
 
 (defn- post-run-model!
-  "Tells the canvas which model Run runs. Forgets a pick that the flow does not
-   define."
+  "Forgets a pick that the flow does not define."
   [!state ^js panel uri-str cg-flow]
   (let [pick (run-model-for !state uri-str cg-flow)]
     (when-not pick
@@ -89,8 +87,7 @@
     (post-run-model! !state panel uri-str cg-flow)))
 
 (defn- extract-and-fan-out!
-  "Parses `document` and its modules, then sets the diagnostics and posts the
-   flow to `panel`. A second check clears the unresolved marks on module ops."
+  "A second check clears the unresolved marks on module ops."
   ([!state document] (extract-and-fan-out! !state nil document))
   ([!state ^js panel ^js document]
    (let [text (.getText document)
@@ -250,8 +247,7 @@
                        (vscode/workspace.applyEdit edit)))))))))
 
 (defn- apply-literal-edit!
-  "Replaces the span of one literal with its new source text. Returns false
-   when the span no longer holds the old literal."
+  "Returns false when the span no longer holds the old literal."
   [^js document ^js payload]
   (let [loc (.-location payload)
         r (vscode/Range.
@@ -409,8 +405,8 @@
                         #js {:supportsMultipleEditorsPerDocument true})))
 
 (defn- register-document-listeners!
-  "Workspace open and close listeners. They set and clear the diagnostics of
-   each .cg document, also when the custom flow editor is not open."
+  "Sets and clears the diagnostics of each .cg document, also when the custom
+   flow editor is not open."
   [!state]
   (lc/push-disposable! !state
                        (.onDidOpenTextDocument vscode/workspace
@@ -452,10 +448,7 @@
                                                      (fn [^js text-editor]
                                                        (auto-split! !state text-editor)))))
 
-(defn- register-theme-listener!
-  "Posts cg/theme-kind to each open flow-editor panel when the VS Code color
-   theme changes."
-  [!state]
+(defn- register-theme-listener! [!state]
   (lc/push-disposable! !state
                        (.onDidChangeActiveColorTheme vscode/window
                                                      (fn [^js color-theme]
@@ -482,8 +475,8 @@
                                 :line (inc (.. editor -selection -active -line))}))))))))
 
 (defn- reveal-in-canvas!
-  "The `CG: Reveal in Canvas` command. A hidden panel is revealed first and the
-   message waits 300 ms, because the webview builds again on reveal."
+  "A hidden panel is revealed first and the message waits 300 ms, because the
+   webview builds again on reveal."
   [!state]
   (when-let [^js editor (.-activeTextEditor vscode/window)]
     (let [uri-str (.toString (.. editor -document -uri))

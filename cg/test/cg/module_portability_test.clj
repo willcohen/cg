@@ -36,8 +36,8 @@
              (some class-segment? (str/split nm #"\."))))))
 
 (defn- host-forms
-  "Every class reference and catch form in the forms, as strings with
-   their line."
+  "Every class reference and catch form in the forms, as strings. A catch
+   form also gives its line."
   [forms]
   (let [found (atom [])]
     (letfn [(walk [x]

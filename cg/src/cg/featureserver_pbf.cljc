@@ -216,8 +216,7 @@
            (.createMultiPolygon gf (into-array Polygon polys)))))
 
      (defn- parts->geometry
-       "Build the JTS geometry for the geometryType of the layer from `lengths` and `coords`.
-        A Point arrives as one part of one vertex."
+       "A Point arrives as one part of one vertex."
        [geom-type parts]
        (case (int geom-type)
          0 (.createPoint gf ^Coordinate (aget ^objects (first parts) 0))

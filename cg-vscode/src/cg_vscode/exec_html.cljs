@@ -13,9 +13,7 @@
 
 ;; The importmap of the npm packages, the same as in the web app and the
 ;; demo. `bb importmap:write` in cg-app writes it from cg-app/importmap.mjs.
-(defn- read-importmap
-  "The parsed shared/ui/public/importmap.json of cg-app: imports and hosts."
-  [public-dir]
+(defn- read-importmap [public-dir]
   (js/JSON.parse (fs/readFileSync (path/join public-dir "importmap.json") "utf8")))
 
 (defn- importmap-json

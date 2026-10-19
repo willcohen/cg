@@ -1,5 +1,4 @@
-;; A module whose ns name carries metadata (load_module_test).
 (ns ^:module test.mod-marked
-  "A marked module: its defns are legal and draw as cards.")
+  "Fixture for load_module_test: the ns name carries metadata.")
 
 (defn twice [x] (* 2 x))

@@ -140,8 +140,8 @@
 "))
 
 (defn build-html
-  "The page of the canvas webview. `asset-uri` maps a path under dist/webview
-   to a URL, and `sprite` is the text of icons.svg or nil."
+  "`asset-uri` maps a path under dist/webview to a URL, and `sprite` is the
+   text of icons.svg or nil."
   [{:keys [asset-uri csp-source nonce mode sprite]}]
   (let [;; ?v=nonce changes the URL on each load, because the webview service
         ;; worker caches resources by URL and serves a stale cg-canvas.mjs.

@@ -41,8 +41,7 @@
     (catch :default _ false)))
 
 (defn ^:async probe-now!
-  "One probe; feed the result to runtime re-resolution and the store.
-   Returns the boolean."
+  "Resolves to the result of check-backend!."
   []
   (let [ok (await (check-backend!))]
     (rt/re-resolve! ok)
@@ -67,8 +66,8 @@
   @!loop-id)
 
 (defn ^:async set-runtime!
-  "Sets the runtime choice. `auto` probes immediately. An explicit choice
-   resolves against the last known availability."
+  "`auto` probes immediately. An explicit choice resolves against the last
+   known availability."
   [choice]
   (if (= choice "auto")
     (let [ok (await (check-backend!))]

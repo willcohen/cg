@@ -33,9 +33,7 @@
           :cleanup (.-cleanup result)}))
   (state/end-crs-switch! crs nil))
 
-(defn- fail-projection!
-  "Logs the failed switch to `crs` and records it for the panel."
-  [crs e]
+(defn- fail-projection! [crs e]
   (js/console.error "[map] reprojection failed:" e)
   (state/end-crs-switch! crs (str (or (and e (.-message e)) e))))
 
@@ -101,9 +99,7 @@
           [:span {:className "cg-map-legend-label"} (aget row "label")]
           [:span {:className "cg-map-legend-count"} (count-text (aget row "count"))]]))
 
-(defn- LayerToggle
-  "The name of a layer with a checkbox that shows or hides it."
-  [^js props]
+(defn- LayerToggle [^js props]
   (let [var-name (.-var props)
         shown (true? (.-shown props))]
     #jsx [:label {:className "cg-map-legend-name"}
@@ -112,10 +108,7 @@
                    :onChange (fn [_] (state/set-layer-visible! var-name (not shown)))}]
           var-name]))
 
-(defn- LayerLegend
-  "The legend of one layer: its name with a hide checkbox, the column that
-   gives the colors of a color-by layer, and one row for each value."
-  [^js props]
+(defn- LayerLegend [^js props]
   (let [legend (.-legend props)
         title (aget legend "title")]
     #jsx [:section {:className "cg-map-legend-layer" :data-layer (aget legend "var")}

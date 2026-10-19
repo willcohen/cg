@@ -51,8 +51,8 @@
                      {} (introspect/extract-model-names-from-code code)))))
 
 (defn show-model
-  "Print the Flow Graphs that the .cg file `file` builds, or only the model
-  :binding in `opts`. Gives the exit code."
+  "Print a summary of each model that the .cg file `file` builds, or the full
+  model :binding in `opts`. Gives the exit code."
   [file & [opts]]
   (require-file! file)
   (println "=== Extracting Models from" file "===")

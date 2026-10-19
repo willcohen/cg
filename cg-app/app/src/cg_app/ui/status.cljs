@@ -128,7 +128,5 @@
           (keep-turns!)
           (publish-soon! m))))))
 
-(defn listen!
-  "Folds the messages of the window bus into run-state."
-  []
+(defn listen! []
   (.addEventListener js/window "message" on-bus-message))
