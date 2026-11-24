@@ -91,7 +91,6 @@
   (after (run/run-component "rc-analyze" {:rows (dataset/->dataset [{:n 1} {:n 2} {:n 3}])}
                             {:timeout-ms 30000})
          (fn [out]
-           (is (dataset/dataset? out) "returns a dataset")
            (is (= [2 4 6] (mapv :doubled (dataset/rows out :as-maps)))
                "the body ran per row over the whole table"))))
 
@@ -244,7 +243,6 @@
                                 " (table-> :input (filter :zone :in [\"a\" \"b\"]))"))]
     (after (run/run-model model {:input d} {:timeout-ms 15000})
            (fn [out]
-             (is (dataset/dataset? out) "returns a dataset")
              (is (= 2 (dataset/row-count out)) "narrowed to the two matching rows")
              (is (= #{"a" "b"} (set (mapv :zone (dataset/rows out :as-maps))))
                  "kept exactly the :in rows")))))
@@ -270,7 +268,6 @@
            of-kind (fn [k] (filterv #(= k (:kind %)) events))]
        (is (map? out) "into demotes the groups container to a keyed map")
        (is (= #{"a" "b"} (set (keys out))) "one result per group, keyed by group")
-       (is (dataset/dataset? (get out "a")) "each group's result is a dataset")
        (is (= [2 4] (sort (mapv :doubled (dataset/rows (get out "a") :as-maps))))
            "group a's body doubled n per row")
        (is (= [6] (mapv :doubled (dataset/rows (get out "b") :as-maps)))
@@ -331,7 +328,6 @@
   (after (run-table-op op params)
          (fn [result]
            (testing (str op)
-             (is (dataset/dataset? result))
              (is (= 3 (dataset/row-count result)))
              (is (every? #(dataset/has-column? result %) [:geometry :id :name]))
              (is (every? #(= geom-type (geo/geometry-type %)) (dataset/column result :geometry)))

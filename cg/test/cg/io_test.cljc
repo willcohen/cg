@@ -33,8 +33,7 @@
        (is (= 3 (count rows))
            "bytes-form yields the same 3 rows as the disk-form")
        (is (= #{"a" "b" "c"} (set (map #(get % "name") rows))))
-       (doseq [r rows]
-         (is (instance? Polygon (:geometry r)))))
+       (is (every? #(instance? Polygon (:geometry %)) rows)))
      (is (thrown? clojure.lang.ExceptionInfo
                   (io/load-source-from-bytes {"a.gpkg" (byte-array 0)}
                                               "missing.gpkg")))))
@@ -141,9 +140,9 @@
        (fn [layer-url requests]
          (io/load-gdal-source layer-url :auth {:token "sekrit"})
          (is (= 2 (count @requests)))
-         (doseq [{:keys [headers uri]} @requests]
-           (is (= "Bearer sekrit" (get headers "x-esri-authorization"))
-               (str "auth header present on " uri)))))))
+         (is (every? #(= "Bearer sekrit" (get (:headers %) "x-esri-authorization"))
+                     @requests)
+             "the auth header is on each request")))))
 
 #?(:clj
    (deftest pbf-falls-back-to-the-driver-on-a-json-error-body

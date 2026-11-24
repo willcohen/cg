@@ -31,7 +31,6 @@
 (deftest collection-is-an-array-with-nothing-to-draw
   (is (= "collection" (rc/result-shape #js [#js {:id 1 :name "a"}])))
   (is (= "collection" (rc/result-shape #js [1 2 3])))
-  (is (= "collection" (rc/result-shape #js [#js {:id 1}])))
   (is (= "collection" (rc/result-shape #js [#js [1 2]]))))
 
 (deftest a-fold-arrives-as-its-sink-s-collected-vector

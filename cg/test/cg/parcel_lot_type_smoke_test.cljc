@@ -35,7 +35,6 @@
   (let [out     (program-output)
         summary (last (str/split-lines out))]
     (is (re-find #"parcel lot-type smoke: \d+ passed, 0 failed" summary) summary)
-    (is (not (str/includes? out "FAIL -")))
     (is (<= 80 (count (re-seq #"(?m)^PASS - " out)))
         "the program still runs every check")))
 

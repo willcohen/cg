@@ -181,6 +181,5 @@
                         :when (and (string? v) (re-matches #"\d{4}/\d{2}/\d{2} .*" v))]
                     k)]
     (is (seq date-keys) "the fixture carries at least one date column")
-    (doseq [k date-keys]
-      (is (number? (get (first (:rows raw)) k))
-          (str k " is epoch milliseconds when :raw-dates? is set")))))
+    (is (every? #(number? (get (first (:rows raw)) %)) date-keys)
+        "each date column is epoch milliseconds when :raw-dates? is set")))

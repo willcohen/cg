@@ -36,6 +36,12 @@
 
 (defn- started [] (rs/run-reducer rs/idle-run #js {:type "cg/run-started"} 1000))
 
+(defn- shown
+  "What the status bar shows: [title bar-value bar-total detail marker]."
+  [run]
+  (let [v (rs/run-view run nil 20000)]
+    [(.-title v) (.-n v) (.-total v) (.-detail v) (.-position v)]))
+
 (deftest step-label-drops-the-model-and-the-number
   (is (= "analyze-parcel" (rs/step-label "analyze-parcels-body__analyze-parcel-3")))
   (is (= "transform-batch" (rs/step-label "anon__transform-batch-12")))
@@ -62,9 +68,8 @@
         v (rs/run-view run {:status "running"} 9000)]
     (is (= "Start worker pool" (.-title (rs/run-view early {:status "running"} 3000))))
     (is (= "0:02" (.-clock (rs/run-view early {:status "running"} 3000))))
-    (is (= 1000 (:started run)) "cg/run-started keeps the clock of the early stage")
     (is (= "Fetch parcels" (.-title v)))
-    (is (= "0:08" (.-clock v)))))
+    (is (= "0:08" (.-clock v)) "cg/run-started keeps the clock of the early stage")))
 
 (deftest a-late-stage-end-starts-no-run
   (let [done (rs/run-reducer (started) #js {:type "cg/run-ended" :outcome "success" :count 1} 2000)
@@ -73,12 +78,8 @@
 
 (deftest a-stage-shows-its-label-and-its-count
   (let [run (fold (started) 1000 #js [(stage "fetch FY26_Parcels_Detailed" "start")
-                                      (stage "fetch FY26_Parcels_Detailed" "progress" 2000 6334)])
-        v (rs/run-view run nil 4000)]
-    (is (= "Fetch FY26_Parcels_Detailed" (.-title v)))
-    (is (= 2000 (.-n v)))
-    (is (= 6334 (.-total v)))
-    (is (= "2,000 of 6,334" (.-detail v)))))
+                                      (stage "fetch FY26_Parcels_Detailed" "progress" 2000 6334)])]
+    (is (= ["Fetch FY26_Parcels_Detailed" 2000 6334 "2,000 of 6,334" nil] (shown run)))))
 
 (deftest overlapping-stages-take-turns-in-the-order-of-their-starts
   (let [run (fold (started) 1000 #js [(stage "fetch parcels" "start")
@@ -128,19 +129,10 @@
                   #js [(stage "analyze 6334 parcels" "progress" 2 7)
                        (trace #js {:kind "flow-start" :flow "analyze-parcels-body" :pids chain-pids})
                        (proc "proc-start" (aget chain-pids 6))
-                       (trace #js {:kind "rows-progress" :pid (aget chain-pids 6) :done 250 :total 1000})])
-        v (rs/run-view run nil 9000)
-        v2 (rs/run-view (rs/show-next run) nil 9000)]
-    (is (= "Analyze 6334 parcels" (.-title v)))
-    (is (= "2 of 7" (.-detail v)))
-    (is (= 2 (.-n v)))
-    (is (= 7 (.-total v)))
-    (is (= "(1/2)" (.-position v)))
-    (is (= "Step 7 of 7: analyze-parcel-impervious" (.-title v2)))
-    (is (= "250 of 1,000 rows" (.-detail v2)))
-    (is (= 250 (.-n v2)))
-    (is (= 1000 (.-total v2)))
-    (is (= "(2/2)" (.-position v2)))))
+                       (trace #js {:kind "rows-progress" :pid (aget chain-pids 6) :done 250 :total 1000})])]
+    (is (= ["Analyze 6334 parcels" 2 7 "2 of 7" "(1/2)"] (shown run)))
+    (is (= ["Step 7 of 7: analyze-parcel-impervious" 250 1000 "250 of 1,000 rows" "(2/2)"]
+           (shown (rs/show-next run))))))
 
 (deftest a-step-with-no-rows-shows-only-when-nothing-else-runs
   (let [run (fold (started) 1000
@@ -164,12 +156,6 @@
              (proc "proc-start" (aget chain-pids 0))
              (trace #js {:kind "rows-progress" :pid (aget chain-pids 0) :done 250 :total 1000})
              (stage "reproject to EPSG:2249" "progress" 9000 20026)]))
-
-(defn- shown
-  "What the status bar shows: [title bar-value bar-total detail marker]."
-  [run]
-  (let [v (rs/run-view run nil 20000)]
-    [(.-title v) (.-n v) (.-total v) (.-detail v) (.-position v)]))
 
 (defn- turns
   "`run` and the runs after each of `n` turns."
@@ -228,12 +214,8 @@
 (deftest rows-give-the-bar-when-no-stage-has-a-count
   (let [run (fold (started) 1000
                   #js [(proc "proc-start" "m__buffer-1")
-                       (trace #js {:kind "rows-progress" :pid "m__buffer-1" :done 30 :total 120})])
-        v (rs/run-view run nil 3000)]
-    (is (= "Step 1 of 1: buffer" (.-title v)))
-    (is (= "30 of 120 rows" (.-detail v)))
-    (is (= 30 (.-n v)))
-    (is (= 120 (.-total v)))))
+                       (trace #js {:kind "rows-progress" :pid "m__buffer-1" :done 30 :total 120})])]
+    (is (= ["Step 1 of 1: buffer" 30 120 "30 of 120 rows" nil] (shown run)))))
 
 (deftest a-flow-end-clears-its-step
   (let [run (fold (started) 1000
@@ -243,13 +225,6 @@
     (is (zero? (.-length (rs/run-items run))))
     (is (= 1 (.-length (:history run))))
     (is (= "Running" (.-title (rs/run-view run nil 5000))))))
-
-(deftest a-stage-count-with-no-total-reads-so-far
-  (let [run (fold (started) 1000 #js [(trace #js {:kind "stage" :label "fetch Boston_Buildings"
-                                                  :state "progress" :n 4000})])
-        v (rs/run-view run nil 3000)]
-    (is (= "4,000 so far" (.-detail v)))
-    (is (nil? (.-total v)))))
 
 (defn- chain-run
   "A run in the second batch of the row chain, at step 4."
@@ -274,25 +249,14 @@
 
 (deftest the-steps-of-the-running-flow-have-one-row-each
   (let [rows (rs/step-rows (chain-run) 105000)
-        r1 (aget rows 0)
-        r4 (aget rows 3)
-        r7 (aget rows 6)]
+        row (fn [r] [(.-label r) (.-state r) (.-count r) (.-time r)
+                     (.-rows r) (.-done r) (.-total r) (.-queued r)])]
     (is (= 7 (.-length rows)) "the source of the snapshot is no step")
-    (is (= "prepare-parcel" (.-label r1)))
-    (is (= "done" (.-state r1)))
-    (is (= "batch 2" (.-count r1)))
-    (is (= "4.0 s" (.-time r1)))
-    (is (= "analyze-parcel" (.-label r4)))
-    (is (= "running" (.-state r4)))
-    (is (= "batch 2" (.-count r4)))
-    (is (= "250 of 1,000 rows" (.-rows r4)))
-    (is (= 250 (.-done r4)))
-    (is (= 1000 (.-total r4)))
-    (is (= "2 queued" (.-queued r4)))
-    (is (= "7.0 s" (.-time r4)) "2 s of batch 1, and 5 s since the event stamp of batch 2")
-    (is (= "done" (.-state r7)))
-    (is (nil? (.-count r7)))
-    (is (nil? (.-queued r7)))
+    (is (= ["prepare-parcel" "done" "batch 2" "4.0 s" nil nil nil nil] (row (aget rows 0))))
+    (is (= ["analyze-parcel" "running" "batch 2" "7.0 s" "250 of 1,000 rows" 250 1000 "2 queued"]
+           (row (aget rows 3)))
+        "2 s of batch 1, and 5 s since the event stamp of batch 2")
+    (is (= ["analyze-parcel-impervious" "done" nil "2.0 s" nil nil nil nil] (row (aget rows 6))))
     (is (= "analyze-parcels-body" (rs/current-flow-label (chain-run))))))
 
 (deftest steps-with-one-op-name-share-a-row
@@ -321,13 +285,9 @@
 (deftest a-finished-flow-goes-to-the-history
   (let [run (fold (chain-run) 200000
                   #js [(trace #js {:kind "flow-complete" :flow "analyze-parcels-body" :ms 441000})
-                       (trace #js {:kind "flow-start" :flow "anon" :pids #js ["anon__transform-batch-1"]})])
-        rows (rs/flow-rows run)]
-    (is (= 1 (.-length rows)))
-    (is (= "analyze-parcels-body" (.-label (aget rows 0))))
-    (is (= "done" (.-state (aget rows 0))))
-    (is (= "7 steps · 11 runs" (.-detail (aget rows 0))))
-    (is (= "7:21" (.-time (aget rows 0))))
+                       (trace #js {:kind "flow-start" :flow "anon" :pids #js ["anon__transform-batch-1"]})])]
+    (is (= [{:label "analyze-parcels-body" :state "done" :detail "7 steps · 11 runs" :time "7:21"}]
+           (rs/flow-rows run)))
     (is (= 1 (.-length (rs/step-rows run 0))) "the steps are those of the next flow")))
 
 (deftest a-run-error-closes-the-open-flow-as-failed
@@ -350,23 +310,12 @@
                              "anon__transform-batch-3")
                        (busy "worker-busy-end" "2" "wasmts" "reproject 1000 features to EPSG:2249" "c"
                              "anon__transform-batch-3")])
-        cells (rs/worker-cells run)
-        main (aget cells 0)
-        w0 (aget cells 1)
-        w2 (aget cells 2)]
-    (is (= 3 (.-length cells)))
-    (is (= "Main thread" (.-name main)))
-    (is (= "busy" (.-state main)))
-    (is (= "analyze-parcel: 1000 rows" (.-label main)))
-    (is (= "analyze-parcel" (.-step main)))
-    (is (= "Worker 0" (.-name w0)))
-    (is (= "gdal" (.-handler w0)))
-    (is (= "busy" (.-state w0)))
-    (is (nil? (.-step w0)))
-    (is (= "Worker 2" (.-name w2)))
-    (is (= "idle" (.-state w2)))
-    (is (= "wasmts" (.-handler w2)))
-    (is (= 1 (.-jobs w2)))))
+        cells (rs/worker-cells run)]
+    (is (= [["Main thread" "busy" "main" "analyze-parcel" 0]
+            ["Worker 0" "busy" "gdal" nil 0]
+            ["Worker 2" "idle" "wasmts" nil 1]]
+           (mapv (fn [c] [(.-name c) (.-state c) (.-handler c) (.-step c) (.-jobs c)]) cells)))
+    (is (= "analyze-parcel: 1000 rows" (.-label (aget cells 0))))))
 
 (deftest a-late-end-does-not-idle-a-worker-with-new-work
   (let [run (fold (started) 1000
@@ -383,19 +332,18 @@
                        #js {:type "cg/run-ended" :outcome "success" :count 1}])]
     (is (= "idle" (.-state (aget (rs/worker-cells run) 0))))))
 
+(defn- said [v] [(.-kind v) (.-title v) (.-detail v)])
+
 (deftest a-run-ends-with-its-time-and-its-count
   (let [run (rs/run-reducer (started) #js {:type "cg/run-ended" :outcome "success" :count 3} 1400)
         v (rs/run-view run {:status "ok" :runtime "js"} 99999)]
     (is (= "ok" (:phase run)))
-    (is (= "ok" (.-kind v)))
-    (is (= "Finished in 0.4 s" (.-title v)))
-    (is (= "3 results · ran in this browser (js)" (.-detail v)))))
+    (is (= ["ok" "Finished in 0.4 s" "3 results · ran in this browser (js)"] (said v)))))
 
 (deftest a-long-run-ends-with-a-clock-time
   (let [run (rs/run-reducer (started) #js {:type "cg/run-ended" :outcome "success" :count 1} 392000)
         v (rs/run-view run {:status "ok" :runtime "js"} 0)]
-    (is (= "Finished in 6:31" (.-title v)))
-    (is (= "1 result · ran in this browser (js)" (.-detail v)))))
+    (is (= ["ok" "Finished in 6:31" "1 result · ran in this browser (js)"] (said v)))))
 
 (deftest a-failed-run-names-the-step-and-the-message
   (let [run (fold (started) 1000
@@ -406,26 +354,19 @@
                        #js {:type "cg/run-error" :message "bad geometry in row 4"}])
         v (rs/run-view run {:status "error" :runtime "js"} 0)]
     (is (= "error" (:phase run)))
-    (is (= "error" (.-kind v)))
-    (is (= "Run failed after 5.0 s, in step buffer" (.-title v)))
-    (is (= "bad geometry in row 4" (.-detail v)))))
+    (is (= ["error" "Run failed after 5.0 s, in step buffer" "bad geometry in row 4"] (said v)))))
 
 (deftest the-exec-state-covers-what-the-bus-does-not-carry
   (let [refused (rs/run-view rs/idle-run {:status "refused" :message "backend unreachable"} 0)
         early (rs/run-view rs/idle-run {:status "running" :runtime "js"} 0)
         failed (rs/run-view rs/idle-run {:status "error" :message "cg module not loaded yet"} 0)]
-    (is (= "refused" (.-kind refused)))
-    (is (= "backend unreachable" (.-detail refused)))
-    (is (= "running" (.-kind early)))
-    (is (= "Starting the engine" (.-title early)))
-    (is (= "error" (.-kind failed)))
-    (is (= "cg module not loaded yet" (.-detail failed)))))
+    (is (= ["refused" "Run refused" "backend unreachable"] (said refused)))
+    (is (= ["running" "Starting the engine" "The first run loads the geometry engine."] (said early)))
+    (is (= ["error" "Run failed" "cg module not loaded yet"] (said failed)))))
 
 (deftest the-exec-end-state-wins-over-a-late-bus-message
   (let [v (rs/run-view (started) {:status "ok" :runtime "js" :message "3 result(s)"} 1400)]
-    (is (= "ok" (.-kind v)))
-    (is (= "Finished in 0.4 s" (.-title v)))
-    (is (= "3 result(s) · ran in this browser (js)" (.-detail v)))))
+    (is (= ["ok" "Finished in 0.4 s" "3 result(s) · ran in this browser (js)"] (said v)))))
 
 (deftest a-new-run-drops-the-state-of-the-run-before
   (let [done (rs/run-reducer (started) #js {:type "cg/run-error" :message "x"} 2000)

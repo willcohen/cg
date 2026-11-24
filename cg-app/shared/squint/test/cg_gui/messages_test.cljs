@@ -18,8 +18,7 @@
    role, receiver role and fields. Channels: canvas (the canvas and its host),
    map (the cg-vscode map webview and its host), native (the web shell and a
    React Native shell). A field that ends in ? is optional. :unhandled says why
-   an entry has no receiver case; :unhandled-by names each host of an edit type
-   that has no case for it."
+   an entry has no receiver case."
   [{:type "cg/ready" :channel "canvas" :from "view" :to "host"}
    {:type "cg/edit" :channel "canvas" :from "view" :to "host"
     :fields ["editType" "model" "payload"]
@@ -211,7 +210,6 @@
         (is (= [] (vec (remove listed? received))) (:name p))
         (is (= [] (vec (remove (fn [k]
                                  (or (get (get (edit-types) k) "unhandled")
-                                     (get (get (get (edit-types) k) "unhandled-by") (:name p))
                                      (some (fn [r] (= r k)) received)))
                                listed)))
             (:name p))))))

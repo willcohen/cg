@@ -5,8 +5,7 @@
 ;; SPDX-License-Identifier: Apache-2.0 WITH LLVM-exception
 
 (ns cg-vscode.dev-shell-test
-  "The spawn of a command in the dev shell.
-   Runs standalone: node test/cg_vscode/dev_shell_test.mjs."
+  "The spawn of a command in the dev shell."
   (:require [cljs.test :as t :refer [deftest is]]
             ["child_process" :as cp]
             ["../../src/cg_vscode/dev_shell.mjs" :as dev-shell]))
@@ -33,8 +32,4 @@
                         #js {:encoding "utf8"})]
     (is (= "a b|it's|$HOME|" (.-stdout r)) (.-stderr r))))
 
-(.then (js/Promise.resolve (t/run-tests))
-       (fn [results]
-         (let [fail (or (get results "fail") 0)
-               err (or (get results "error") 0)]
-           (js/process.exit (if (pos? (+ fail err)) 1 0)))))
+(.then (js/Promise.resolve (t/run-tests)) #(js/process.exit (if (t/successful? %) 0 1)))

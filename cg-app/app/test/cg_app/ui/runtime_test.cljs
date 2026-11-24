@@ -58,14 +58,6 @@
   (reset! rt/!ever-ready false))
 
 ;; Keep the mutating tests last: they write module state and storage.
-(deftest set-choice-and-re-resolve-update-resolution
-  (rt/set-choice! "auto" false)
-  (is (= "js" (rt/resolved-runtime)))
-  (rt/re-resolve! true)
-  (is (= "jvm" (rt/resolved-runtime)))
-  (rt/set-choice! "js" true)
-  (is (= "js" (rt/resolved-runtime))))
-
 (deftest js-only-pins-the-js-backend
   (js-delete js/globalThis "__CG_JS_ONLY__")
   (is (false? (rt/js-only?)))

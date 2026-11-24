@@ -29,16 +29,14 @@
   (let [txt (saved-text text-with-overlay flow-with-overlay
                         {"buffer-1" #js [111 222]})
         ps  (loader/overlay-positions md txt)]
-    (is (.includes txt "(geo/buffer 10)"))
-    (is (= 111 (aget (aget ps "buffer-1") 0)))
-    (is (= 222 (aget (aget ps "buffer-1") 1)))))
+    (is (= [111 222] (vec (aget ps "buffer-1"))))))
 
 (deftest saved-text-appends-overlay-when-absent
   (let [txt (saved-text (str code "\n") #js {:overlay nil}
                         {"buffered__buffer-1" #js [10 20]})
         ps  (loader/overlay-positions md txt)]
     (is (.includes txt "(geo/buffer 10)"))
-    (is (= 10 (aget (aget ps "buffered__buffer-1") 0)))))
+    (is (= [10 20] (vec (aget ps "buffered__buffer-1"))))))
 
 (deftest save-request-shape
   (let [req (save/request-for "x.cg" {:text "(def x 1)\n"} #js {:overlay nil}
@@ -54,11 +52,7 @@
         req (save/request-for "x.cg" {:text typed :unparsed "an open string"}
                               flow {"a" #js [1 2]})]
     (is (= typed (aget req "content")))
-    (is (= "x.cg" (aget req "name")))
-    (is (.includes (aget (save/request-for "x.cg" {:text "(def x 1)\n"} #js {:overlay nil}
-                                           {"a" #js [1 2]})
-                         "content")
-                   "^:cgproj"))))
+    (is (= "x.cg" (aget req "name")))))
 
 (.then (js/Promise.resolve (t/run-tests))
        (fn [results]

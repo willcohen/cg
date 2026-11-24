@@ -251,9 +251,9 @@
                  (is (str/includes? q "resultType=standard") "extra params thread through"))
                ;; The JVM sends the token as a header. The JS runtime adds it to
                ;; the query string. Each runtime asserts on its own form.
-               #?(:clj (doseq [r @requests]
-                         (is (= "Bearer sekrit" (get (:headers r) "x-esri-authorization"))
-                             (str "the auth header is on " (:uri r))))
+               #?(:clj (is (every? #(= "Bearer sekrit" (get (:headers %) "x-esri-authorization"))
+                                   @requests)
+                           "the auth header is on each request")
                   :cljs (is (str/includes? (query-uri requests) "token=sekrit")
                             "the auth token rides the query string on the JS runtime")))))))
 

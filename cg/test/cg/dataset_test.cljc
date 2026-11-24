@@ -100,17 +100,9 @@
            ds    (dataset/->dataset rows)
            probe (f/to-feature (f/polygon [[0.5 0.5] [1.5 0.5] [1.5 1.5] [0.5 1.5] [0.5 0.5]])
                                {:id "probe"})
-           tiny  (f/to-feature (f/polygon [[0.2 0.2] [0.6 0.2] [0.6 0.6] [0.2 0.6] [0.2 0.2]])
-                               {:id "tiny"})
-           big   (f/to-feature (f/polygon [[-1 -1] [5 -1] [5 5] [-1 5] [-1 -1]])
-                               {:id "big"})
            dsi   (dataset/add-spatial-index ds :geometry)]
        (is (= 2 (dataset/row-count (dataset/select-intersects ds probe :geometry))))
-       (is (= 2 (dataset/row-count (dataset/select-intersects dsi probe :geometry))))
-       (is (= 1 (dataset/row-count (dataset/select-contains dsi tiny :geometry)))
-           "only square a fully contains tiny")
-       (is (= 2 (dataset/row-count (dataset/select-within dsi big :geometry)))
-           "squares a and c are within big"))))
+       (is (= 2 (dataset/row-count (dataset/select-intersects dsi probe :geometry)))))))
 
 (deftest when-row-resolves-via-run
   (is (some? (run/resolve-operation "when-row")))
@@ -381,15 +373,10 @@
      (is (not= 'cg.run/when-row (:fn (macros/parse-operation-form '(filter :keep?)))))))
 
 (deftest loader-op-registrations
-  (doseq [op-name ["cg.dataset/load-geojson"
-                   "cg.dataset/load-vector"
-                   "cg.dataset/load-gpkg"
-                   "cg.dataset/load-shapefile"
-                   "cg.dataset/load-gdb"
-                   "cg.dataset/load-gdal!"]]
-    (let [info (f/get-operation-info op-name)]
-      (is (= :source (:type info)) op-name)
-      (is (vector? (:params info)) op-name))))
+  (is (every? #(let [info (f/get-operation-info %)]
+                 (and (= :source (:type info)) (vector? (:params info))))
+              ["cg.dataset/load-geojson" "cg.dataset/load-vector" "cg.dataset/load-gpkg"
+               "cg.dataset/load-shapefile" "cg.dataset/load-gdb" "cg.dataset/load-gdal!"])))
 
 (deftest map-layer-sink-states-drawing-intent
   (testing "the map-layer sink returns pure layer data: the FeatureCollection

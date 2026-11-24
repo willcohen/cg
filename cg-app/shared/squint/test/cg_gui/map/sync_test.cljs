@@ -24,23 +24,15 @@
                            #js [#js {:var "keep" :visible? true :color "#111" :geojson fc-a}
                                 #js {:var "new" :visible? true :color "#222" :geojson fc-b}
                                 #js {:var "gone" :visible? false :geojson nil}])]
-    (is (= 1 (.-length (aget plan "remove"))))
-    (is (= "cgdata-old" (aget (aget plan "remove") 0)))
-    (is (= 2 (.-length (aget plan "upsert"))))
-    (is (= "keep" (aget (aget (aget plan "upsert") 0) "var")))))
+    (is (= ["cgdata-old"] (aget plan "remove")))
+    (is (= ["keep" "new"] (mapv (fn [l] (aget l "var")) (aget plan "upsert"))))))
 
 (deftest plan-sync-removes-invisible-existing
-  (let [plan (ms/plan-sync #js ["cgdata-gone"]
-                           #js [#js {:var "gone" :visible? false :geojson nil}])]
-    (is (= 1 (.-length (aget plan "remove"))))
-    (is (= 0 (.-length (aget plan "upsert"))))))
+  (is (= {"remove" ["cgdata-gone"] "upsert" []}
+         (ms/plan-sync #js ["cgdata-gone"] #js [#js {:var "gone" :visible? false :geojson nil}]))))
 
 (deftest bounds-of-geojsons
-  (let [b (ms/bounds-of #js [fc-a fc-b])]
-    (is (= -71 (aget (aget b 0) 0)))
-    (is (= 20 (aget (aget b 0) 1)))
-    (is (= 10 (aget (aget b 1) 0)))
-    (is (= 43 (aget (aget b 1) 1)))))
+  (is (= [[-71 20] [10 43]] (ms/bounds-of #js [fc-a fc-b]))))
 
 (deftest bounds-nil-on-empty-or-invalid
   (is (nil? (ms/bounds-of #js [])))

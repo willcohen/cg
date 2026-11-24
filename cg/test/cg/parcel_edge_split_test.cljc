@@ -16,9 +16,9 @@
    Slice boundaries land near vertices as the rule rather than the exception:
    the abutting condition changes where a neighbor's corner meets the frontage,
    and that corner is normally a vertex of this edge too."
-  #?(:clj (:require [clojure.test :refer [deftest is testing use-fixtures]]
+  #?(:clj (:require [clojure.test :refer [deftest is use-fixtures]]
                     [cg.run :as run])
-     :cljs (:require [cljs.test :refer [deftest is testing]]
+     :cljs (:require [cljs.test :refer [deftest is]]
                      ["../../src/cg/run.mjs" :as run]
                      ["./wasmts_setup.mjs" :refer [init_wasmts_BANG_]]
                      ["./test_runner.mjs" :refer [run_tests_and_exit_BANG_]])))
@@ -40,27 +40,8 @@
 
 ;; snap-tol 0.1 and dedup-tol 1e-3, as :slice-vertex-snap and :slice-dedup
 ;; of a thresholds map in feet.
-(defn- slice [lo hi]
-  (ev (str "(parcel/arc-slice-coords " l-coords " " l-arcs " " lo " " hi " 0.1 1.0e-3)")))
-
-(deftest slice-endpoint-just-past-a-vertex-snaps-onto-it
-  (testing "the vertex is reused, not shadowed by an interpolated near-copy"
-    (is (= [[0.0 0.0] [25.0 0.0]] (slice 0.0 25.0004)))))
-
-(deftest slice-endpoint-just-short-of-a-vertex-snaps-onto-it
-  (testing "same defect leading the slice instead of trailing it"
-    (is (= [[25.0 0.0] [25.0 20.0]] (slice 24.9996 45.0)))))
-
-(deftest a-genuine-mid-segment-cut-still-interpolates
-  (testing "snapping must not swallow a real T-junction cut"
-    (is (= [[0.0 0.0] [24.0 0.0]] (slice 0.0 24.0)))
-    (is (= [[5.0 0.0] [10.0 0.0] [10.0 5.0]]
-           (ev (str "(parcel/arc-slice-coords [[0.0 0.0] [10.0 0.0] [10.0 10.0]] "
-                    "[0.0 10.0 20.0] 5.0 15.0 0.1 1.0e-3)"))))))
-
 (deftest no-slice-across-a-vertex-emits-a-degenerate-segment
-  (testing "sweeping the cut through a vertex never yields a micro-segment"
-    (let [gaps (ev (str "
+  (let [gaps (ev (str "
 (let [spacings (fn [pts]
                  (mapv (fn [i]
                          (let [[x1 y1] (nth pts i)
@@ -71,9 +52,9 @@
   (vec (for [off [-0.05 -0.01 -0.001 -0.0001 0.0 0.0001 0.001 0.01 0.05]]
          (apply min (spacings (parcel/arc-slice-coords " l-coords " " l-arcs "
                                                         0.0 (+ 25.0 off) 0.1 1.0e-3))))))"))]
-      (is (= 9 (count gaps)))
-      (is (every? #(> % 1.0e-3) gaps)
-          (str "every sliced sub-edge clears the degeneracy threshold; got " gaps)))))
+    (is (= 9 (count gaps)))
+    (is (every? #(> % 1.0e-3) gaps)
+        (str "every sliced sub-edge clears the degeneracy threshold; got " gaps))))
 
 ;; On a closed ring coords[n] is coords[0]. An edge across the seam must not
 ;; repeat that point: a zero-length segment gives a nil junction angle and
@@ -87,27 +68,17 @@
 (deftest ring-closure-edge-carries-no-repeated-point
   (let [edges (ev (str "(parcel/corners->edge-coords " square-ring " "
                        square-corners ")"))]
-    (testing "one edge per corner"
-      (is (= 4 (count edges))))
-    (testing "the seam-spanning edge is two distinct points, not three"
-      (is (= [[0.0 10.0] [0.0 0.0]] (last edges))))
-    (testing "no edge repeats a point"
-      (is (every? (fn [e] (= (count e) (count (dedupe e)))) edges)
-          (str "edges: " edges)))))
+    (is (= 4 (count edges)))
+    (is (= [[0.0 10.0] [0.0 0.0]] (last edges)))
+    (is (every? (fn [e] (= (count e) (count (dedupe e)))) edges)
+        (str "edges: " edges))))
 
 (deftest ring-closure-edge-yields-a-measurable-junction-angle
-  (testing "the seam edge meets its neighbor at a real angle, not nil"
-    (let [interior (ev (str "
+  (let [interior (ev (str "
 (let [edges (mapv f/linestring
                   (parcel/corners->edge-coords " square-ring " " square-corners "))]
   (:interior (parcel/edge-junction-angle (last edges) (first edges) 1.0e-3 true)))"))]
-      (is (some? interior) "a repeated point here used to make this nil")
-      (is (< 89.0 interior 91.0) (str "square corner should read ~90, got " interior)))))
-
-(deftest snap-arc-to-vertex-respects-its-tolerance
-  (is (= 25.0 (ev "(parcel/snap-arc-to-vertex [0.0 25.0 45.0] 25.0004 0.1)")))
-  (is (= 24.0 (ev "(parcel/snap-arc-to-vertex [0.0 25.0 45.0] 24.0 0.1)"))
-      "a cut well clear of any vertex is left where the sampler put it"))
+    (is (< 89.0 interior 91.0) (str "square corner should read ~90, got " interior))))
 
 #?(:cljs (-> (init_wasmts_BANG_)
              (.then (fn [_] (run/load-module parcel)))

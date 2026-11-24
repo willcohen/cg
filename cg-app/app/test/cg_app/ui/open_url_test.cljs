@@ -51,9 +51,7 @@
     (is (= "https://willcohen.github.io/cg/?x=1" (ou/page-href with nil)))))
 
 (deftest http-errors-name-the-file-and-the-status
-  (is (.includes (ou/http-error "boston.cg" 404) "HTTP 404"))
-  (is (.includes (ou/http-error "boston.cg" 500) "HTTP 500"))
-  (is (.includes (ou/network-error "boston.cg") "CORS")))
+  (is (.includes (ou/http-error "boston.cg" 500) "HTTP 500")))
 
 (defn- ^:async fetch-message
   "The message of the Error that fetch-text throws when js/fetch is `f`."

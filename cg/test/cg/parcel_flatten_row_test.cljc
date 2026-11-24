@@ -9,7 +9,7 @@
    cache and an export store.
 
    analyze-parcel puts the lot measurements under :metrics. The flat row
-   gives seven of them their own columns, because the reports read
+   gives eight of them their own columns, because the reports read
    :lot-area at the top level. It keeps the scalar values,
    gives a keyword as its name, and drops the nested values."
   #?(:clj (:require [clojure.test :refer [deftest is testing use-fixtures]]
@@ -44,7 +44,7 @@
 
 (deftest flatten-row-gives-one-flat-row
   (let [flat (flatten-row analyzed-row)]
-    (testing "six metrics get their own columns"
+    (testing "six of the eight metrics get their own columns"
       (is (= {:lot-area 4900.0 :street-frontage 70.0
               :envelope-ratio 0.5 :building-coverage-ratio 0.25
               :building-coverage-area 1225.0 :envelope-area 2450.0}

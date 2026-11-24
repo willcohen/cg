@@ -65,12 +65,11 @@
         "each proc-start has a proc-complete")))
 
 (defn- check-wire-shape! [events]
-  (doseq [e events]
-    (is (= 1 (:v e)) "the wire version is 1")
-    (is (number? (:seq e)) "seq is a number")
-    (is (number? (:ts e)) "ts is a number")
-    (is (string? (:kind e)) "kind is a string")
-    (is (string? (:worker-id e)) "worker-id is a string"))
+  (is (every? #(= 1 (:v %)) events))
+  (is (every? #(number? (:seq %)) events))
+  (is (every? #(number? (:ts %)) events))
+  (is (every? #(string? (:kind %)) events))
+  (is (every? #(string? (:worker-id %)) events))
   (let [seqs (mapv :seq events)]
     (is (every? (fn [i] (or (= 0 i) (> (nth seqs i) (nth seqs (dec i)))))
                 (range (count seqs)))

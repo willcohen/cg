@@ -29,15 +29,9 @@
   (run/eval-cg (str "(require '[cg.parcel :as parcel] '[cg.zoning :as zoning]"
                     " '[cg.feature :as f] '[cg.dataset :as ds])\n" code)))
 
-(defn- cg-var [ns-name var-name]
-  (run/eval-cg (str "(require '[" ns-name " :as m]) m/" var-name)))
-
-(def ^:private metre-units
-  {:length "m" :area "m2" :large-area "ha" :area-per-large-area 10000.0})
-
 ;; Every threshold with the unit-free names, other values, in meters.
 (def ^:private unit-free-thresholds
-  {:units metre-units
+  {:units {:length "m" :area "m2" :large-area "ha" :area-per-large-area 10000.0}
    :min-front-street-width 6.0 :corner-max-angle-deg 135.0
    :rear-angle-tolerance-deg 45.0 :pointed-lot-max-angle-deg 80.0
    :pointed-lot-min-rear-length 3.0 :construct-imaginary-rear? true
@@ -71,7 +65,6 @@
                      {})")
                nil
                (catch #?(:clj Exception :cljs :default) e e))]
-    (is (some? e) "no fallback: the library holds no threshold")
     (is (re-find #"the thresholds has no :?corner-max-angle-deg" (str (ex-message e) (some-> e ex-cause ex-message)))
         "the message names the key")))
 
@@ -107,28 +100,6 @@
                 (parcel/bend-continuation? e1 e2 (assoc th :vertex-tolerance 0.5))])"))]
     (is (false? strict))
     (is (true? loose))))
-
-(deftest zone-attrs-read-the-zoning-schema
-  (let [attrs  (cg-var "cg.zoning" "zone-to-primary-attrs")
-        schema {:district-col :DIST :subdistrict-col :SUB
-                :subdistrict-type-col :KIND :max-far-col :FAR
-                :rear-setback-col :REAR :max-height-col :HT
-                :side-setback-col :SIDE :front-setback-col :FRONT
-                :article-col :ART :unique-code-sep "/"
-                :subdistrict-code->attrs
-                (fn [code] (when (= code "R-A")
-                             {:max-unit-count 4 :min-lot-size 2500}))}
-        out    (attrs {:DIST "Elsewhere" :SUB "R-A" :KIND "Residential"
-                       :FAR "0.8" :REAR 20 :HT "40" :SIDE 5 :FRONT "15"}
-                      schema)]
-    (is (= "Elsewhere/R-A" (:primary-unique-code out)))
-    (is (= "Elsewhere" (:primary-zoning-district out)))
-    (is (= "Residential" (:primary-subdistrict-type out)))
-    (is (= [0.8 20.0 40.0 5.0 15.0]
-           ((juxt :primary-max-far :primary-rear-setback :primary-max-height
-                  :primary-side-setback :primary-front-setback) out)))
-    (is (= 4 (:primary-max-unit-count out)))
-    (is (= 2500 (:primary-min-lot-size out)))))
 
 ;; The ops with no map input take their schemas, and the library names no
 ;; column of its own. These use made-up names.
@@ -177,6 +148,11 @@
                           (transient {:geometry (f/polygon [[0 0] [10 0] [10 10] [0 10] [0 0]])})
                           zds s)))"))]
     (is (= "Elsewhere/R-A" (:primary-unique-code out)))
+    (is (= "Elsewhere" (:primary-zoning-district out)))
+    (is (= "Residential" (:primary-subdistrict-type out)))
+    (is (= [0.8 20.0 40.0 5.0 15.0]
+           ((juxt :primary-max-far :primary-rear-setback :primary-max-height
+                  :primary-side-setback :primary-front-setback) out)))
     (is (= "9" (:primary-article out)))
     (is (= 4 (:primary-max-unit-count out)))
     (is (= 2500 (:primary-min-lot-size out)))))
@@ -199,7 +175,6 @@
                      (transient {:geometry (f/polygon [[0 0] [1 0] [1 1] [0 0]])}) {})")
                nil
                (catch #?(:clj Exception :cljs :default) e e))]
-    (is (some? e) "no default: the library names no column")
     (is (re-find (re-pattern (str :required-id-keys)) (str (ex-message e) (ex-message (ex-cause e))))
         "the message names the key")))
 

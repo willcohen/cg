@@ -42,11 +42,7 @@
 
 (deftest debug-layers-shapes
   (let [layers (emit)]
-    (testing "returns the three named geometry dataset vars"
-      (is (contains? layers :debug-edges))
-      (is (contains? layers :debug-envelope))
-      (is (contains? layers :debug-boundary)))
-    (testing "each is a materialized dataset (EmittedVarsAreMaterializedDatasets)"
+    (testing "each is a materialized dataset"
       (is (ds/dataset? (:debug-edges layers)))
       (is (ds/dataset? (:debug-envelope layers)))
       (is (ds/dataset? (:debug-boundary layers)))
@@ -57,7 +53,6 @@
       (is (= "EPSG:2249" (:crs (meta (:debug-boundary layers)))))
       (is (= "EPSG:2249" (:crs (meta (:debug-setbacks layers))))))))
 
-;; String column names, because the map styler keys on "category".
 #?(:clj
    (deftest debug-layers-have-no-default-crs
      (testing "the caller names the CRS of its rows: no 1-arity form"
@@ -78,19 +73,18 @@
            labels (vec (ds/column (:debug-setbacks layers) "label"))]
        (is (= ["30.0 m"] labels) "the label takes the length unit of the caller"))))
 
+;; String column names, because the map styler keys on "category".
 (deftest debug-edges-carries-category-and-identity
   (let [layers (emit)
         edges  (:debug-edges layers)
         cats   (vec (ds/column edges "category"))]
-    (testing "one feature per categorized edge"
-      (is (= 4 (ds/row-count edges))))
-    (testing "category rides as a scalar column (CategoryRidesAsScalarColumn)"
+    (is (= 4 (ds/row-count edges)))
+    (testing "category rides as a scalar column"
       (is (= #{"front" "side" "rear"} (set cats)))
       (is (= 2 (count (filter #{"side"} cats)))))
-    (testing "each edge carries stable parcel identity (CarriesStableFeatureIdentity)"
-      (is (every? some? (ds/column edges "parcel-id")))
+    (testing "each edge carries stable parcel identity"
       (is (= #{"TEST-1"} (set (ds/column edges "parcel-id")))))
-    (testing "setback rides alongside for future distance-arrow work"
+    (testing "the setback rides along as a column"
       (is (= #{15.0 8.0 25.0} (set (ds/column edges "setback")))))))
 
 ;; Each edge scalar and parcel field becomes a string-keyed column, with nil
@@ -110,17 +104,14 @@
 (deftest debug-edges-surface-diagnostic-scalars
   (let [edges (:debug-edges (run/eval-cg diagnostic-emit))
         cols  (set (map name (ds/column-names edges)))]
-    (testing "edge decision scalars ride as columns (surface-everything)"
-      (is (contains? cols "abutting"))
+    (testing "edge decision scalars ride as columns"
       (is (contains? cols "angle"))
       (is (contains? cols "length"))
       (is (= [:street :lot] (mapv keyword (ds/column edges "abutting")))))
     (testing "parcel-level context rides prefixed parcel.*"
-      (is (contains? cols "parcel.lot-type"))
       (is (contains? cols "parcel.edge-method"))
       (is (= #{"corner"} (set (ds/column edges "parcel.lot-type")))))
     (testing "sparse keys nil-fill so the dataset stays rectangular"
-      (is (contains? cols "right-of-way-width"))
       (is (= [40 nil] (vec (ds/column edges "right-of-way-width")))))
     (testing "category + identity still ride for the styler + selection"
       (is (= ["primary-front" "side"] (vec (ds/column edges "category"))))
@@ -147,23 +138,19 @@
       (is (= 2 (ds/row-count sb))))
     (testing "carries the distance, a formatted label, category, and identity"
       (is (contains? cols "setback"))
-      (is (contains? cols "label"))
-      (is (contains? cols "category"))
       (is (contains? cols "parcel-id"))
+      (is (contains? cols "label"))
       ;; JS prints 30.0 as "30".
       #?(:clj (is (= #{"30.0 ft" "40.0 ft"} (set (ds/column sb "label")))))
       (is (= #{"front" "side"} (set (ds/column sb "category")))))
-    (testing "each row has a materialized indicator geometry"
-      (is (every? some? (ds/column sb :geometry))))))
+    (is (every? some? (ds/column sb :geometry)))))
 
 (deftest debug-polygon-layers-are-per-parcel
   (let [layers (emit)]
-    (testing "envelope + boundary are one feature per parcel"
-      (is (= 1 (ds/row-count (:debug-envelope layers))))
-      (is (= 1 (ds/row-count (:debug-boundary layers)))))
-    (testing "and carry the parcel identity"
-      (is (= #{"TEST-1"} (set (ds/column (:debug-envelope layers) "parcel-id"))))
-      (is (= #{"TEST-1"} (set (ds/column (:debug-boundary layers) "parcel-id")))))))
+    (is (= 1 (ds/row-count (:debug-envelope layers))))
+    (is (= 1 (ds/row-count (:debug-boundary layers))))
+    (is (= #{"TEST-1"} (set (ds/column (:debug-envelope layers) "parcel-id"))))
+    (is (= #{"TEST-1"} (set (ds/column (:debug-boundary layers) "parcel-id"))))))
 
 #?(:cljs (-> (init_wasmts_BANG_)
              (.then (fn [_] (ds/init-arquero!)))

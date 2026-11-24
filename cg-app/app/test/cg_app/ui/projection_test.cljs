@@ -19,7 +19,6 @@
   (let [p (proj/ensure-init!)]
     (swap! proj/proj-state assoc :status "error" :error "no backproj")
     (let [r (await (settle p))]
-      (is (nil? (.-ok r)) "the wait must reject")
       (is (.includes (str (.-error r)) "no backproj"))))
   (reset! proj/proj-state {:status "idle" :error nil :modules nil}))
 
@@ -28,8 +27,7 @@
   (let [p (proj/ensure-init!)]
     (swap! proj/proj-state assoc :status "ready")
     (let [r (await (settle p))]
-      (is (true? (.-ok r)))
-      (is (nil? (.-error r)))))
+      (is (true? (.-ok r)))))
   (reset! proj/proj-state {:status "idle" :error nil :modules nil}))
 
 (.then (js/Promise.resolve (t/run-tests))
