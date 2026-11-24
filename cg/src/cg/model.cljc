@@ -6,8 +6,7 @@
 
 ;; A model is a map {:nodes [...] :edges [...] :config {...}}: the graph of a
 ;; computation, between the threading macros and the run. A node has :type
-;; :source, :operation or :sink. An edge has :type :data-flow (the default) or
-;; :materialization.
+;; :source, :operation, :group or :sink. An edge has :type :data-flow.
 
 (ns cg.model)
 

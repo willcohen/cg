@@ -19,15 +19,11 @@ const buildConfig = {
     // WasmTS must be external - it's not an ES6 module
     '@wcohen/wasmts',
     'squint-cljs',
-    // cljc-flow: core.async.flow dialect for squint
     'cljc-flow',
     // Arquero is dynamically imported for dataset operations
     'arquero',
-    // PROJ coordinate transformation library (clj-proj WASM)
     'proj-wasm',
-    // GDAL / OGR vector + raster I/O (clj-gdal WASM)
     'gdal-wasm',
-    // web-tree-sitter: tree-sitter WASM runtime for the .cg parser
     'web-tree-sitter',
     // ffi-wasm (npm name for clj-native): worker pool + handler runtime for
     // the joint pool (proj + wasmts + gdal handlers co-resident per worker)
@@ -37,8 +33,6 @@ const buildConfig = {
     // those paths actually fire under Node, and stay inert in the browser.
     'node:fs', 'node:url', 'node:path', 'node:worker_threads'
   ],
-  // No banner - Node.js-specific setup should be done in a wrapper script
-  // Browser will load WasmTS directly via CDN if needed
   loader: {
     '.js': 'js',
     '.mjs': 'js',

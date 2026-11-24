@@ -127,9 +127,7 @@
            (.replaceAll "\n" "\\n"))
        "\""))
 
-(defn print-inline
-  "Single-line EDN rendering of a parsed-overlay value."
-  [v]
+(defn print-inline [v]
   (cond
     (nil? v) "nil"
     (true? v) "true"

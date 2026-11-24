@@ -20,8 +20,9 @@ importmap? Reports the node bundle specifiers too, as information only."
   ;; app, the demo and the cg-vscode map page each use all of it.
   ["shared/ui/public/importmap.json"])
 
-;; The bundle is minified, and a loose scan also matches string content. The
-;; lookbehind stops `fromArrow` and `.import` as heads. The charset allows no
+;; Static, side-effect and dynamic imports, with either quote and with or without
+;; a space. The bundle is minified, and a loose scan also matches string content.
+;; The lookbehind stops `fromArrow` and `.import` as heads. The charset allows no
 ;; spaces, commas, parens or colons, and excludes relative paths and node:*.
 (def ^:private specifier-re
   #"(?<![\w$.])(?:from|import)\s*\(?\s*[\"']([@\w][@\w./-]*)[\"']")

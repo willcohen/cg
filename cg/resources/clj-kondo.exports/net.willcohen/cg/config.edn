@@ -24,8 +24,9 @@
   {cg.ts-macros/define-all-ts-fns hooks.cg.ts-macros/define-all-ts-fns
    ts-macros/define-all-ts-fns hooks.cg.ts-macros/define-all-ts-fns
 
-   ;; cg's pseudo-threading macros (item->, coll->, table->, layers->)
-   ;; carry DSL bodies, not function calls. `(geo/buffer 100)` inside
+   ;; cg's pseudo-threading macros (item->, coll->, table->, and layers->,
+   ;; which the parser admits and cg.macros does not define) carry DSL
+   ;; bodies, not function calls. `(geo/buffer 100)` inside
    ;; them is parsed by parse-operation-form, never invoked as a call.
    ;; The hook rewrites op-forms to (do args...) so clj-kondo stops
    ;; emitting :invalid-arity on op heads while still linting arg values.

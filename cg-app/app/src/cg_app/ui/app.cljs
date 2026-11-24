@@ -67,8 +67,7 @@
 (defonce ^:private !canvas-mounted (atom false))
 
 (defn ^:async mount-canvas-once!
-  "Imports the shared canvas and mounts it into #root, one time. Call it after
-   the Shell commits, because the Shell renders #root."
+  "Call it after the Shell commits, because the Shell renders #root."
   []
   (when-not @!canvas-mounted
     (reset! !canvas-mounted true)
@@ -93,9 +92,7 @@
       (post! #js {:type "cg/run-model"
                   :model (or run-model (run-js/model-binding-name flow))}))))
 
-(defn- select-model!
-  "Makes `model-name` the model that Run runs."
-  [model-name]
+(defn- select-model! [model-name]
   (state/set-run-model! model-name)
   (post! #js {:type "cg/run-model" :model model-name}))
 
@@ -255,9 +252,7 @@
           (finally
             (state/set-opening! nil)))))))
 
-(defn- UrlBar
-  "The text box for the URL of a .cg file."
-  [^js props]
+(defn- UrlBar [^js props]
   (let [bar (.-bar props)
         opening (.-opening props)
         [typed set-typed] (useState (or (:url bar) ""))]
@@ -290,9 +285,7 @@
             [:option {:value "" :disabled true} "Examples"]
             (.map names (fn [n] #jsx [:option {:key n :value n} n]))])))
 
-(defn- EmptyCanvas
-  "The first step on an empty canvas: an example, else a .cg file."
-  [^js props]
+(defn- EmptyCanvas [^js props]
   (let [example (state/starter-example (.-examples props))]
     (if-let [opening (.-opening props)]
       #jsx [:div {:className "cg-empty" :data-testid "empty-canvas"}
@@ -320,23 +313,17 @@
               (process-text! (.-name file) (.. e -target -result))))
       (.readAsText reader file))))
 
-(defn- apply-theme-attrs!
-  "Sets data-carbon-theme and data-theme together."
-  [theme]
+(defn- apply-theme-attrs! [theme]
   (let [root (.-documentElement js/document)]
     (.setAttribute root "data-carbon-theme" theme)
     (.setAttribute root "data-theme" (state/theme-mode theme))))
 
-(defn- toggle-or-select!
-  "Toggles panel `k`. On a phone, shows only panel `k`."
-  [bp k]
+(defn- toggle-or-select! [bp k]
   (if (viewport/phone? bp)
     (state/select-panel! k)
     (state/toggle-panel! k)))
 
-(defn- show-panel!
-  "Shows panel `k`. On a phone, shows only panel `k`."
-  [bp k]
+(defn- show-panel! [bp k]
   (cond
     (viewport/phone? bp) (state/select-panel! k)
     (not (true? (aget (state/panels) k))) (state/toggle-panel! k)))
@@ -355,8 +342,7 @@
 (def ^:private status-panel-delay-ms 800)
 
 (defn- show-status-of-long-run!
-  "Opens the Status panel when the run still runs after status-panel-delay-ms.
-   A short run keeps the room for its result."
+  "A short run keeps the room for its result."
   [bp]
   (js/setTimeout
    (fn []
@@ -365,8 +351,7 @@
    status-panel-delay-ms))
 
 (defn- reveal-outputs!
-  "Opens each hidden panel that holds output of the run that ended. A phone
-   shows one panel, and there the reader picks it in the status bar."
+  "A phone shows one panel, and there the reader picks it in the status bar."
   [bp]
   (when-not (viewport/phone? bp)
     (let [outs (hidden-outputs @state/app-state)]
@@ -389,10 +374,7 @@
   #js [#js ["flow" "Flow"] #js ["code" "Code"] #js ["status" "Status"]
        #js ["map" "Map"] #js ["results" "Results"]])
 
-(defn- PanelToggles
-  "The panel toggles: a group in the header, or the tab bar at the bottom of a
-   phone."
-  [^js props]
+(defn- PanelToggles [^js props]
   #jsx [:nav {:className (.-className props) :aria-label "Panels"
               :data-testid (.-testid props)}
         (.map panel-defs
@@ -422,10 +404,7 @@
                                :rightLabel (panel-label right)
                                :onChange (.-onChange props)}])))
 
-(defn- one-panel!
-  "Leaves one panel visible: Flow when it is visible, else the first visible
-   one."
-  []
+(defn- one-panel! []
   (let [shown (shown-keys (state/panels))]
     (when (not= 1 (.-length shown))
       (state/select-panel! (if (or (zero? (.-length shown)) (.includes shown "flow"))
@@ -633,9 +612,7 @@
       (= t "cg/open-defop") (js/console.log "cg/open-defop: the app shell has no editor to open an op in")
       :else nil)))
 
-(defn- inject-icon-sprite!
-  "Fetches the icon sprite into the page. Ignores a failure."
-  []
+(defn- inject-icon-sprite! []
   (when-not (.getElementById js/document "cg-icon-sprite")
     (-> (js/fetch "css/cg-brand/icons.svg")
         (.then (fn [^js r] (when (.-ok r) (.text r))))

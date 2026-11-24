@@ -5,7 +5,9 @@
 // SPDX-License-Identifier: Apache-2.0 WITH LLVM-exception
 
 // Write a self-contained static directory (app/dist-static/). The same
-// index.html serves it over https (web PWA) and file:// (native WKWebView).
+// index.html serves it over https (web PWA) and in the native WebViews through
+// app:// (iOS, macOS) or https://appassets.androidplatform.net (Android),
+// because a WebView does not let fetch load a file:// URL.
 // Each file that serve.mjs routes is copied to a relative path, and each
 // root-absolute URL in index.html becomes ./... . Keep the copies in sync
 // with resolve() in serve.mjs.

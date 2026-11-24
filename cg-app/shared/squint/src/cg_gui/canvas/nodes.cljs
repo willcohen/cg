@@ -5,8 +5,9 @@
 ;; SPDX-License-Identifier: Apache-2.0 WITH LLVM-exception
 
 (ns cg-gui.canvas.nodes
-  "The custom React Flow node and edge. CnNode always renders the body Handles,
-   because React Flow drops an edge to a missing handle. Read :data with aget."
+  "The custom React Flow node and edge. CnNode always renders its top and
+   bottom Handles, because React Flow drops an edge to a missing handle. Read
+   :data with aget."
   (:require ["react" :refer [Fragment useState]]
             ["@xyflow/react" :refer [Handle Position BaseEdge EdgeLabelRenderer
                                      getBezierPath getSmoothStepPath useInternalNode]]

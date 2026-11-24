@@ -26,5 +26,5 @@
                                :unresolved-namespace {:level :off}}}
 
  ;; cg.dataset registers transform-crs as a flow operation, not as a var. It
- ;; is an operation group that expands to three steps.
+ ;; is an operation group, and the run expands it into flow steps.
  :linters {:unresolved-var {:exclude [cg.dataset/transform-crs]}}}

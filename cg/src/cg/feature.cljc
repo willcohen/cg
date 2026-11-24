@@ -18,9 +18,7 @@
 (defonce ^:private operation-registry (atom {}))
 
 ;; Registry keys are qualified-name strings ("cg.geo/buffer"), not symbols.
-;; squint-cljs/core does not export `symbol`, and a symbol-keyed registry
-;; does not work in squint. (str op-sym) makes one string key from a string
-;; or a symbol.
+;; (str op-sym) makes one string key from a string or a symbol.
 (defn register-operation!
   "Register the metadata map `info` for the operation `op-sym`, a qualified
   name as a string or a symbol. :type is required. The options are
@@ -274,9 +272,7 @@
         (seqable? row)
         (filter is-geometry? row)))
 
-(defn get-geometry-field-meta
-  "Get the :geometry-field metadata from a collection"
-  [f]
+(defn get-geometry-field-meta [f]
   (:geometry-field (meta f)))
 
 (defn set-geometry-field-meta
@@ -310,9 +306,7 @@
       :else
       :unknown)))
 
-(defn get-geometry-from-map
-  "Extract geometry from a map based on its structure"
-  [m]
+(defn get-geometry-from-map [m]
   (case (get-map-structure m)
     :normalized
     (:geometry m)
@@ -323,9 +317,7 @@
     :meta-geometry-value-utilized-and-required
     (get m (get-geometry-field-meta m))))
 
-(defn get-geometry-field-name-from-map
-  "Get the name of the geometry field from a map"
-  [m]
+(defn get-geometry-field-name-from-map [m]
   (case (get-map-structure m)
     :normalized
     :geometry
@@ -336,9 +328,7 @@
     :meta-geometry-value-utilized-and-required
     (get-geometry-field-meta m)))
 
-(defn get-properties-from-map
-  "Extract properties from a map based on its structure"
-  [m]
+(defn get-properties-from-map [m]
   (case (get-map-structure m)
     :normalized
     (:properties m)
@@ -351,38 +341,16 @@
 
 #?(:clj
    (defprotocol SimpleFeaturelike
-     "Protocol for objects that can be treated as geographic features.
-     Works with JTS geometries (CLJ) and maps containing geometries and properties.
-     
-     Note: This protocol is JVM-only. ClojureScript uses regular functions with
-     conditional logic instead, since JavaScript is dynamically typed."
-
-     (-to-jts [this] [this srid] [this c1 c2] [this c1 c2 geometry-factory]
-       "Convert to a JTS Geometry. Optionally reproject.
-       - srid: target SRID (reproject to this)
-       - c1 c2: source and target CRS (reproject from c1 to c2)
-       - geometry-factory: treated as transform object")
-
-     (-to-feature [this] [this properties]
-       "Convert to a feature map with :geometry and :properties keys")
-
-     (-geometry [this]
-       "Get the geometry from this featurelike")
-
-     (-properties [this]
-       "Get the properties from this featurelike")
-
-     (-assoc-geometry [this s]
-       "Associate this featurelike with a new geometry")
-
-     (-update-geometry [this f]
-       "Update the geometry by applying function f")
-
-     (-assoc-properties [this p]
-       "Associate this featurelike with new properties")
-
-     (-update-properties [this f]
-       "Update the properties by applying function f")))
+     "The JVM dispatch of the feature fns. On JS, each fn tests the type of its
+     argument."
+     (-to-jts [this] [this srid] [this c1 c2] [this c1 c2 geometry-factory])
+     (-to-feature [this] [this properties])
+     (-geometry [this])
+     (-properties [this])
+     (-assoc-geometry [this s])
+     (-update-geometry [this f])
+     (-assoc-properties [this p])
+     (-update-properties [this f])))
 
 #?(:clj
    (extend-protocol SimpleFeaturelike
@@ -541,7 +509,8 @@
       :cljs (throw (js/Error. "WasmTS reprojection not yet implemented")))))
 
 (defn to-feature
-  "Convert anything to a SimpleFeaturelike (feature map)."
+  "A geometry `g` gives {:geometry g :properties {}}. A feature map gives itself.
+  With `properties`, the result holds them under :properties."
   ([this]
    #?(:clj (-to-feature this)
       :cljs (if (is-geometry? this)
@@ -554,9 +523,7 @@
               {(get-geometry-field-name-from-map this) (get-geometry-from-map this)
                :properties properties}))))
 
-(defn geometry
-  "Get the geometry from a SimpleFeaturelike."
-  [this]
+(defn geometry [this]
   #?(:clj (-geometry this)
      :cljs (cond
              (is-geometry? this)
@@ -592,9 +559,7 @@
              :else
              (get-properties-from-map this))))
 
-(defn assoc-geometry
-  "Associate SimpleFeaturelike with new geometry s."
-  [this s]
+(defn assoc-geometry [this s]
   #?(:clj (-assoc-geometry this s)
      :cljs (if (is-geometry? this)
              s
@@ -611,9 +576,7 @@
    #?(:clj (apply -update-geometry this f args)
       :cljs (update-geometry this (fn [x] (apply f (cons x args)))))))
 
-(defn assoc-properties
-  "Associate SimpleFeaturelike with new properties p."
-  [this p]
+(defn assoc-properties [this p]
   #?(:clj (-assoc-properties this p)
      :cljs (if (is-geometry? this)
              {:geometry this :properties p}
@@ -894,37 +857,23 @@
                  (geometry geom))]
          (.getNumPoints g)))))
 
-(defn point?
-  "Check if geometry is a Point."
-  [geom]
+(defn point? [geom]
   (= "Point" (.getGeometryType ^Geometry (geometry geom))))
 
-(defn linestring?
-  "Check if geometry is a LineString."
-  [geom]
+(defn linestring? [geom]
   (= "LineString" (.getGeometryType ^Geometry (geometry geom))))
 
-(defn polygon?
-  "Check if geometry is a Polygon."
-  [geom]
+(defn polygon? [geom]
   (= "Polygon" (.getGeometryType ^Geometry (geometry geom))))
 
-(defn multi-point?
-  "Check if geometry is a MultiPoint."
-  [geom]
+(defn multi-point? [geom]
   (= "MultiPoint" (.getGeometryType ^Geometry (geometry geom))))
 
-(defn multi-linestring?
-  "Check if geometry is a MultiLineString."
-  [geom]
+(defn multi-linestring? [geom]
   (= "MultiLineString" (.getGeometryType ^Geometry (geometry geom))))
 
-(defn multi-polygon?
-  "Check if geometry is a MultiPolygon."
-  [geom]
+(defn multi-polygon? [geom]
   (= "MultiPolygon" (.getGeometryType ^Geometry (geometry geom))))
 
-(defn geometry-collection?
-  "Check if geometry is a GeometryCollection."
-  [geom]
+(defn geometry-collection? [geom]
   (= "GeometryCollection" (.getGeometryType ^Geometry (geometry geom))))

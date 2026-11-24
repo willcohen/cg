@@ -95,6 +95,12 @@ The task compiles cg with squint. Then it runs the file in Node.js.
 (cd cg-app && bb test)
 ```
 
+In a new clone, copy the clj-kondo hooks of the dependencies before `bb lint`:
+
+```bash
+(cd cg && clj-kondo --lint "$(clojure -Spath)" --copy-configs --skip-lint)
+```
+
 In `cg/`, `bb test` uses the JVM, `bb test:cljs` uses squint and Node.js, and `bb lint` uses clj-kondo. In `cg-app/`, `bb test` runs the backend tests and the app tests. The app tests import the cg modules that `bb test:cljs` compiles.
 
 ### Start the web app

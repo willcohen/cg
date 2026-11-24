@@ -11,8 +11,7 @@ import * as fs from 'fs';
 import { fileURLToPath, pathToFileURL } from 'url';
 
 
-// Set up fs module globally BEFORE importing cg.mjs
-// This allows util.cljc to use fs operations in ESM mode
+// util.cljc takes its fs from globalThis.nodeFs when cg.mjs loads.
 globalThis.nodeFs = fs;
 
 const args = process.argv.slice(2);
@@ -89,10 +88,7 @@ async function main() {
     process.exit(args.length === 0 ? 1 : 0);
   }
 
-  // Initialize WasmTS BEFORE importing CG module
   const wasmts = await initWasmTS();
-
-  // Dynamic import AFTER WasmTS and nodeFs are set up
   const cg = await import('../dist/cg.mjs');
 
   async function initializeCG(filePath) {

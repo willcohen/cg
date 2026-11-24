@@ -13,7 +13,7 @@
 
 (defn bb-root-for-document
   "The nearest directory with a bb.edn above the document, else the workspace
-   folder. `bb run` starts there, and module paths resolve against it."
+   folder. Module paths resolve against it."
   [^js document]
   (let [start-path (.-fsPath (.-uri document))
         node-path (js/require "path")]
@@ -39,8 +39,8 @@
     (when (.existsSync fs candidate) candidate)))
 
 (defn read-text-safe!
-  "Reads `path` as UTF-8 text. Returns nil on failure, because a module that
-   cannot be read must not stop the render of the main flow."
+  "Returns nil on failure, because a module that cannot be read must not stop
+   the render of the main flow."
   [path]
   (try (.toString (.readFileSync fs path) "utf8")
        (catch :default _ nil)))

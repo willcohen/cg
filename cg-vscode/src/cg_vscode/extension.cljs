@@ -24,7 +24,7 @@
          :editor/panels           {}}))
 
 (defn- create-run-status-bar!
-  "The status bar item of the run status. It stays hidden until a run starts."
+  "The item stays hidden until a run starts."
   [!state]
   (let [^js bar (vscode/window.createStatusBarItem vscode/StatusBarAlignment.Left 50)]
     (set! (.-name bar) "CG Run")
@@ -32,9 +32,7 @@
     (lc/push-disposable! !state bar)
     (swap! !state assoc :run-status/bar bar)))
 
-(defn- show-run-status!
-  "Opens the CG Run Status tab beside the active editor."
-  [!state]
+(defn- show-run-status! [!state]
   (if-let [^js panel (:run-status/panel @!state)]
     (.reveal panel js/undefined true)
     (let [^js panel (vscode/window.createWebviewPanel

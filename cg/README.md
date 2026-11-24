@@ -41,6 +41,7 @@ This code is from `examples/simple.cg`, without its comments.
 
 - A dataset has one column for each property, with one value for each row.
 - A threading macro (`item->`, `coll->` or `table->`) makes a model. `table->` applies each step to the dataset, one row at a time.
+- Use `table->` for a dataset. On the JVM, `item->` gives each step one column of a dataset, as a map entry of the column name and the column.
 - `:shapes` names the binding that the model reads.
 - A run executes the last threading-macro binding of the file. Here, that binding is `buffered`.
 - A cg operation, or op, is a `defn` whose name has the metadata `^:op`. A model can use it as a step. For an example, see `prepare-parcel` in `src/cg/parcel.cg`.

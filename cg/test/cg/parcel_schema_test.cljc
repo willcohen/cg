@@ -35,7 +35,7 @@
 (def ^:private metre-units
   {:length "m" :area "m2" :large-area "ha" :area-per-large-area 10000.0})
 
-;; Every threshold with the unit-free names, other values, in metres.
+;; Every threshold with the unit-free names, other values, in meters.
 (def ^:private unit-free-thresholds
   {:units metre-units
    :min-front-street-width 6.0 :corner-max-angle-deg 135.0

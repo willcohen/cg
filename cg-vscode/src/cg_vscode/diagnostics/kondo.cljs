@@ -14,7 +14,8 @@
 
 (defn argv
   "The clj-kondo arguments for the .cg buffer `path`. The cache is off, because
-   all .cg vars go in `user` and a shared cache mixes the programs."
+   a shared cache mixes the programs: a .cg program with no ns form puts its
+   vars in `user`."
   [path]
   ["--lint" "-"
    "--filename" path

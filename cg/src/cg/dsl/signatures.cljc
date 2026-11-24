@@ -24,9 +24,7 @@
   #{:feature :collection :dataset :groups :map})
 
 (def ^:private type-str->kw
-  "A static string -> keyword lookup for the type names of an OperationDecl.
-   It replaces a runtime (keyword <string>), which squint-cljs/core does not
-   have."
+  "A static string -> keyword lookup for the type names of an OperationDecl."
   {"feature" :feature
    "dataset" :dataset
    "number"  :number

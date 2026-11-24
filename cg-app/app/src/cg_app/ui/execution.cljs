@@ -18,8 +18,8 @@
   m)
 
 (defn- bus-post!
-  "Posts `msg` on the window bus of the canvas. Reads window from globalThis,
-   because a bare js/window throws ReferenceError in the node test runner."
+  "Reads window from globalThis, because a bare js/window throws
+   ReferenceError in the node test runner."
   [msg]
   (when-let [w (aget js/globalThis "window")]
     (.postMessage w msg "*")))

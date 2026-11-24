@@ -111,16 +111,13 @@
 #?(:cljs
    (do
      (defn ->FlowDataset
-       "Returns a FlowDataset wrapper: a plain JS object."
        ([dataset] (->FlowDataset dataset {}))
        ([dataset metadata-map]
         #js {:__flow_dataset true
              :dataset dataset
              :metadata (or metadata-map {})}))
 
-     (defn wrapped-dataset?
-       "True when `x` is a FlowDataset wrapper."
-       [x]
+     (defn wrapped-dataset? [x]
        (and (some? x)
             (true? (.-__flow_dataset x))))
 
@@ -153,28 +150,22 @@
                     (some? @aq-module)
                     (instance? (.-Table (ensure-arquero!)) x)))))
 
-(defn row-count
-  "Returns the number of rows in a dataset."
-  [dataset]
+(defn row-count [dataset]
   #?(:clj (ds/row-count dataset)
      :cljs (.numRows (unwrap-dataset dataset))))
 
-(defn column-names
-  "Returns the column names of a dataset."
-  [dataset]
+(defn column-names [dataset]
   #?(:clj (ds/column-names dataset)
      :cljs (vec (.columnNames (unwrap-dataset dataset)))))
 
-(defn has-column?
-  "True when the dataset has the column `col-name`."
-  [dataset col-name]
+(defn has-column? [dataset col-name]
   #?(:clj (contains? (set (ds/column-names dataset)) col-name)
      :cljs (let [raw-ds (unwrap-dataset dataset)
                  col-str (str col-name)]
              (.some (.columnNames raw-ds) (fn [c] (= c col-str))))))
 
 (defn rows
-  "Returns the rows of a dataset. `fmt` is :as-maps (default) or :as-seqs."
+  "`fmt` is :as-maps (default) or :as-seqs."
   ([dataset]
    (rows dataset :as-maps))
   ([dataset fmt]
@@ -262,8 +253,7 @@
   filter)
 
 (defn filter-ds
-  "Filters dataset rows. `pred` receives a map of column name to value for
-   each row."
+  "`pred` receives a map of column name to value for each row."
   [dataset pred]
   #?(:clj (ds/filter dataset pred)
      :cljs (let [raw-ds (unwrap-dataset dataset)
@@ -367,19 +357,14 @@
 ;; GDAL selects the driver from the path or the content. The format-named
 ;; loaders exist for discovery and for DSL op registration.
 
-(defn ^:async load-vector
-  "Alias of vector-source->dataset."
-  [path]
+(defn ^:async load-vector [path]
   (vector-source->dataset path))
 
-(defn ^:async load-gpkg
-  "Loads a GeoPackage (.gpkg) file as a dataset."
-  [path]
+(defn ^:async load-gpkg [path]
   (load-vector path))
 
 (defn ^:async load-shapefile
-  "Loads a Shapefile as a dataset. Pass the .shp path; GDAL finds the sibling
-   .shx, .dbf and .prj files."
+  "Pass the .shp path. GDAL finds the sibling .shx, .dbf and .prj files."
   [path]
   (load-vector path))
 
@@ -657,9 +642,7 @@
                  arr (.array raw-ds col-str)]
              (vec arr))))
 
-(defn select-columns
-  "Returns the dataset with only the columns `col-names`."
-  [dataset col-names]
+(defn select-columns [dataset col-names]
   #?(:clj (ds/select-columns dataset col-names)
      :cljs (let [raw-ds (unwrap-dataset dataset)
                  col-strs (mapv str col-names)]
@@ -700,9 +683,7 @@
                new-col-table
                (.assign (.select raw-ds others) new-col-table)))))
 
-(defn add-or-update-column
-  "Adds the column, or replaces it when it exists."
-  [dataset col-name values]
+(defn add-or-update-column [dataset col-name values]
   #?(:clj (ds/add-or-update-column dataset col-name values)
      :cljs (if (has-column? dataset col-name)
              (update-column dataset col-name (constantly values))
@@ -756,7 +737,6 @@
                 (.orderby raw-ds col-str))))))
 
 (defn head
-  "Returns the first `n` rows (default 5)."
   ([dataset] (head dataset 5))
   ([dataset n]
    #?(:clj (ds/head dataset n)
@@ -924,9 +904,7 @@
          (.-dataset ^FlowDataset wrapped)
          wrapped))
 
-     (defn wrapped-dataset?
-       "True when `x` is a FlowDataset wrapper."
-       [x]
+     (defn wrapped-dataset? [x]
        (instance? FlowDataset x))))
 
 (defn fd-meta
@@ -966,9 +944,7 @@
      (->FlowBundle m)))
 
 #?(:clj
-   (defn unwrap-bundle
-     "Returns the map inside a FlowBundle."
-     [^FlowBundle fb]
+   (defn unwrap-bundle [^FlowBundle fb]
      (.-data fb)))
 
 ;; The context of each dataset in a flow, by context id:
@@ -987,14 +963,10 @@
   []
   (reset! dataset-context-store {}))
 
-(defn get-dataset-context
-  "Returns the registered dataset context for `ctx-id`."
-  [ctx-id]
+(defn get-dataset-context [ctx-id]
   (get @dataset-context-store ctx-id))
 
-(defn unregister-dataset-context!
-  "Removes a dataset context from the store."
-  [ctx-id]
+(defn unregister-dataset-context! [ctx-id]
   (swap! dataset-context-store dissoc ctx-id))
 
 #?(:cljs
@@ -1102,16 +1074,12 @@
                                {:max-batch-size max-batch-size
                                 :min-n 1}))))))
 
-     (defn batches->dataset
-       "Concatenates batches into one dataset."
-       [batches]
+     (defn batches->dataset [batches]
        (if (= 1 (count batches))
          (first batches)
          (apply ds/concat-copying batches)))
 
-     (defn get-spatial-indices
-       "Returns the :spatial entries of the dataset metadata."
-       [ds]
+     (defn get-spatial-indices [ds]
        (:spatial (meta ds)))
 
      (defn get-spatial-index
@@ -1624,8 +1592,6 @@
           (->FlowDataset ds-with-ids spatial-meta))))
 
      (defn has-spatial-index?
-       "True when the dataset has a spatial index on `geom-column` (default
-        :geometry)."
        ([ds]
         (has-spatial-index? ds :geometry))
        ([ds geom-column]
@@ -1716,9 +1682,7 @@
                   end (min (+ start batch-size) total-rows)]
               (select-rows ds (range start end)))))))
 
-     (defn batches->dataset
-       "Concatenates batches into one dataset."
-       [batches]
+     (defn batches->dataset [batches]
        (if (empty? batches)
          (->dataset {})
          (concat-datasets batches)))
@@ -1950,9 +1914,7 @@
          out))
 
      ;; A top-level defn, because squint drops :async on (fn ^:async ...).
-     (defn- ^:async run-transform-batch
-       "Reprojects one batch. Returns a promise."
-       [batch source-crs target-crs]
+     (defn- ^:async run-transform-batch [batch source-crs target-crs]
        (check-geometry-column! batch "geometry")
        (let [pid (trace/current-step-pid)
              all-geoms (column batch "geometry")
@@ -2059,9 +2021,7 @@
 ;; needs resolve-operation and cg.run already requires cg.dataset. The
 ;; standard reducers are in cg.dataset.agg.
 
-(defn coalesce
-  "Returns `value` when it is not nil, else `default`."
-  [value default]
+(defn coalesce [value default]
   (if (nil? value) default value))
 
 (defn write-geojson
@@ -2078,10 +2038,7 @@
                              :geom-col geom-col})))
    :ok))
 
-(defn- geoparquet-off!
-  "Throws the error of every GeoParquet call, because this build has no
-   GeoParquet support."
-  [fn-name path]
+(defn- geoparquet-off! [fn-name path]
   (throw (ex-info (str fn-name ": GeoParquet is not available in this build.")
                   {:fn fn-name :path path :unsupported :geoparquet})))
 
@@ -2637,8 +2594,6 @@
                                          {:name :predicate :required true :type :keyword}
                                          {:name :value :required true :type :any}]}))
 
-;; This registration holds the parser contract of `filter` and has no runtime
-;; :params. At run time `filter` resolves to cg.dataset/filter above.
 (feature/register-operation! "cg.dataset/filter-column"
                              {:type :transformer
                               :dsl-name "filter"

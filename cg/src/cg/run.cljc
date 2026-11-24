@@ -157,7 +157,7 @@
 
 #?(:clj
    (defn terminate-cg-workers!
-     "Shut the JVM workload pool down. Gives :terminated or :no-pool."
+     "Gives :terminated or :no-pool."
      []
      (if-let [handle (cg-pool-reg/current-jvm-pool)]
        (do (wp/shutdown-pool! (:registry handle))
@@ -232,6 +232,9 @@
   "The fn `f` of the row op `op-name`, with a check that each result is a
    value and not a Model."
   [op-name f]
+  ;; A row op cannot return a Model, because a Model for each row is slow. On
+  ;; the JVM, 200 rows used 30.9 s with a Model body and 0.16 s with a value
+  ;; body.
   (fn [& args]
     (let [r (apply f args)]
       ;; model? reads only :nodes and :edges, and a row can have :edges.
@@ -395,8 +398,7 @@
 ;; predicate applies to the whole input dataset, not to each row.
 
 (defn- evaluate-when-row-predicate
-  "Evaluate the when-row `predicate` against `dset`. Only \"has-column?\" is
-   implemented; any other kind throws."
+  "Only \"has-column?\" is implemented; any other kind throws."
   ;; The param is `dset`, not `dataset`. Under squint a param named `dataset`
   ;; shadows the cg.dataset alias: (dataset/has-column? ...) then reads a
   ;; property of the dataset object, which is undefined, and the flow step
@@ -413,9 +415,7 @@
                       {:predicate predicate
                        :predicate-kinds-implemented #{"has-column?"}})))))
 
-(defn- op-schema
-  "The registered :params schema of the op that `node` names."
-  [node]
+(defn- op-schema [node]
   (:params (feature/get-operation-info (fusion/node->op-key node))))
 
 (defn- param-values
@@ -908,8 +908,7 @@
 
 #?(:cljs
    (defn- assemble-batches
-     "Unwrap the batches into one dataset, and rebuild the spatial index when a
-      batch wrapper is marked `:cg.dataset/needs-reindex`."
+     "As the JVM assemble-batches. The mark is on the batch wrapper."
      [wrapped-batches]
      (let [needs-reindex? (some #(:cg.dataset/needs-reindex (dataset/fd-meta %))
                                 wrapped-batches)
@@ -1688,10 +1687,7 @@
                    :params params})))
 
 ;; cg.dsl loads on first use, because a require of it here makes a cycle.
-#?(:clj
-   (def ^:private cg-context-atom
-     "The CG context, made on first use (see ensure-cg-context!)."
-     (atom nil)))
+#?(:clj (def ^:private cg-context-atom (atom nil)))
 
 #?(:clj
    (def ^:private loaded-module-hashes
@@ -1878,6 +1874,9 @@
      #"\^:op\b"))
 
 #?(:cljs
+   ;; The op data comes from the parser, because squint does not keep the ^:op
+   ;; flag or the attr-map of a defn. The JVM lane reads the SCI var
+   ;; (var-op-decl).
    (defn- register-ops-of!
      "Register in `ns-name` each op that the .cg source `text` declares, before
       squint compiles `text`. Each registered fn finds its defn at call time."
@@ -1926,8 +1925,7 @@
   nil)
 
 (defn session-file
-  "The session-entry filename bound by the backend during a session/load
-  eval, or nil outside one. See *session-file*."
+  "See *session-file*."
   []
   *session-file*)
 
@@ -1937,8 +1935,7 @@
   nil)
 
 (defn script-file
-  "The filename that cg.cli/run-model-file binds while it runs a .cg file,
-  or nil outside one. See *script-file*."
+  "See *script-file*."
   []
   *script-file*)
 
@@ -2015,9 +2012,7 @@
         :flags (vec (keep (fn [[k x]] (when (true? x) (name k))) m))})))
 
 #?(:clj
-   (defn- register-op-var!
-     "Register the op of `v` when `v` is the var of a defn with ^:op."
-     [v]
+   (defn- register-op-var! [v]
      (when (and (instance? sci.lang.Var v) (:op (meta v)))
        (when-not (seq (:arglists (meta v)))
          (throw (ex-info (str "op '" (:name (meta v)) "' must be a defn") {:var v})))
@@ -2050,8 +2045,8 @@
      :cljs (eval-cg-cljs code-str)))
 
 (defn eval-cg-file
-  "Evaluate the CG file at `path` in the default context and give the value of
-  its last form (the value of the Var for a def)."
+  "Evaluate the CG file at `path` as eval-cg does, and give the value of its
+  last form (the value of the Var for a def)."
   [path]
   (let [content (util/read-file path)
         result (eval-cg (str "(do " content ")"))]

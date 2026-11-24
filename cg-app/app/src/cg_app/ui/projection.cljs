@@ -111,7 +111,8 @@
 
 (defn ^:async project-geojson
   "Projects a 4326 GeoJSON FeatureCollection into the CRS of a reprojected
-   map. Caches the result for each GeoJSON object and transformer."
+   map. Caches the last result for each GeoJSON object. A call with a
+   different transformer replaces it."
   [geojson transformer]
   (let [hit (.get projected-geojson geojson)]
     (if (and hit (identical? transformer (aget hit "transformer")))

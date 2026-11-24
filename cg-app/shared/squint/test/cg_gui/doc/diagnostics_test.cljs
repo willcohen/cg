@@ -5,8 +5,7 @@
 ;; SPDX-License-Identifier: Apache-2.0 WITH LLVM-exception
 
 (ns cg-gui.doc.diagnostics-test
-  "Pure CgFlow -> diagnostic-data conversion. Imports the
-   compiled data .mjs directly. With no vscode coupling, it runs standalone."
+  "Pure CgFlow -> diagnostic-data conversion."
   (:require [cljs.test :as t :refer [deftest is testing]]
             ["../../../src/cg_gui/doc/diagnostics.mjs" :as data]))
 

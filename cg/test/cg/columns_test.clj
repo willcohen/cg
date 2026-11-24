@@ -8,7 +8,7 @@
   "cg.columns: the value kinds of rows, and the rows that a cache read
    gives back with them.
 
-   A parquet write turns a keyword into a string. A cache write records
+   A GeoPackage write turns a keyword into a string. A cache write records
    the columns that held keywords (value-kinds), and a cache read gives
    those columns their keywords again (rehydrate-rows)."
   (:require [clojure.test :refer [deftest is testing use-fixtures]]

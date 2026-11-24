@@ -7,7 +7,7 @@
 (ns cg.parcel-js-test
   "parcel.cg on both runtimes, for the code that the JS runtime runs another
    way: the zoning chain runs in the browser too. squint cannot call
-   a keyword, and parcel.cg and zoning.cg give max-by-stable the key-fn
+   a keyword, and zoning.cg gives max-by-stable the key-fn
    :intersection-area."
   #?(:clj (:require [clojure.test :refer [deftest is testing]]
                     [cg.run :as run])

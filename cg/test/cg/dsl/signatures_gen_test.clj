@@ -5,10 +5,8 @@
 ;; SPDX-License-Identifier: Apache-2.0 WITH LLVM-exception
 
 (ns cg.dsl.signatures-gen-test
-  "JVM-only staleness guard for the generated parser built-ins. Loads the
-   gen-signatures script, rebuilds the snapshot from the live op registry,
-   and asserts it matches the committed signatures_generated.cljc. Fails
-   when someone edits a register-operation! parser slice without running
+  "JVM-only staleness guard for the generated parser built-ins. Fails when
+   someone edits a register-operation! parser slice without running
    `bb gen:signatures`."
   (:require [clojure.test :refer [deftest is]]
             [cg.dsl.signatures-generated :as gen]))

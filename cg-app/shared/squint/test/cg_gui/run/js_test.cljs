@@ -79,8 +79,8 @@
                                (fn [l] (aget l "var"))))))))
 
 (defn- recording-cg-module
-  "A cg module for execute-js! that records its calls in `calls`. Its
-   load_deps_BANG_ resolves one macrotask late, to expose a run that does not wait."
+  "Its load_deps_BANG_ resolves one macrotask late, to expose a run that does
+   not wait."
   [calls]
   #js {:metadata #js {:split_code_and_metadata (fn [text] #js {:code text})}
        :run #js {:run_file (fn [code opts]

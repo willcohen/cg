@@ -57,12 +57,11 @@
 
 (defn reproject-to
   "Reproject `ds-raw` to `target-crs` on the worker pool of the caller (a
-   Promise on the JS runtime). A
-   dataset that is already in `target-crs` comes back with no change and
-   no index. `opts` merges into the run-model opts: give a :batch-size
-   below the default of 64000 rows for a layer with many coordinates,
-   because one batch must finish in the 60 s limit of
-   transform-coords-step."
+   Promise on the JS runtime). A dataset that is already in `target-crs`
+   comes back with no change and no index. `opts` merges into the run-model
+   opts: give a :batch-size below the default of 64000 rows for a layer with
+   many coordinates, because on the JVM one batch must finish in the 300 s
+   :compute-timeout-ms of transform-coords-step."
   [target-crs ds-raw opts]
   (let [source-crs (or (get-dataset-crs ds-raw) "EPSG:4326")]
     (if (= source-crs target-crs)

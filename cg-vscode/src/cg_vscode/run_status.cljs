@@ -12,9 +12,7 @@
 
 (def ^:private draw-gap-ms 150)
 
-(defn bar-text
-  "The status bar text of a run-view, with a codicon for its kind."
-  [^js view]
+(defn bar-text [^js view]
   (let [title (aget view "title")]
     (case (aget view "kind")
       "running" (str "$(sync~spin) " title " · " (aget view "clock"))
@@ -22,18 +20,12 @@
       "error"   (str "$(error) " title)
       title)))
 
-(defn bar-tooltip
-  "The hover text of a run-view: its detail, and the label of the flow of the
-   run."
-  [run ^js view]
+(defn bar-tooltip [run ^js view]
   (let [parts (.filter #js [(aget view "detail") (rs/current-flow-label run)]
                        (fn [p] (and (some? p) (not= "" p))))]
     (if (pos? (.-length parts)) (.join parts "\n") (aget view "title"))))
 
-(defn draw!
-  "Shows the run status on the status bar item and in the tab, when it is
-   open. Hides the item when there is no run to show."
-  [!state now]
+(defn draw! [!state now]
   (let [st @!state
         run (or (:run-status/run st) rs/idle-run)
         view (rs/run-view run nil now)]
@@ -70,10 +62,7 @@
                             (draw! !state (js/Date.now)))
                           draw-gap-ms))))
 
-(defn note!
-  "Folds the run message `msg` into the run status. A trace event draws soon,
-   and a message that changes nothing does not draw."
-  [!state ^js msg]
+(defn note! [!state ^js msg]
   (let [now (js/Date.now)
         prev (or (:run-status/run @!state) rs/idle-run)
         run (rs/run-reducer prev msg now)]
@@ -99,9 +88,7 @@
   [!state uri-str ^js msg]
   (post-to! !state (get-in @!state [:editor/panels uri-str]) msg))
 
-(defn stop!
-  "Stops the timers of the run status."
-  [!state]
+(defn stop! [!state]
   (stop-clock! !state)
   (when-let [t (:run-status/timer @!state)]
     (js/clearTimeout t)

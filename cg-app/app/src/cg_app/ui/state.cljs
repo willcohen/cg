@@ -117,9 +117,7 @@
                diags)
       diags)))
 
-(defn set-examples!
-  "Stores the names in examples/index.json."
-  [names]
+(defn set-examples! [names]
   (swap! app-state assoc :examples names))
 
 (defn starter-example
@@ -143,9 +141,7 @@
   [name]
   (swap! app-state assoc :opening name))
 
-(defn set-run-model!
-  "Sets the binding that Run runs."
-  [model-name]
+(defn set-run-model! [model-name]
   (swap! app-state assoc :run-model model-name))
 
 (defn clear-loaded!
@@ -158,9 +154,7 @@
                   :flow nil :loaded-file nil :positions #js {}
                   :load-error nil :exec nil :run-model nil))))
 
-(defn clear-exec!
-  "Drops the status of the last run."
-  []
+(defn clear-exec! []
   (swap! app-state assoc :exec nil))
 
 (defn toggle-settings! []
@@ -205,9 +199,7 @@
     (swap! app-state assoc :panels nxt)
     (aget nxt k)))
 
-(defn select-panel!
-  "Show exactly one panel (phone mode)."
-  [k]
+(defn select-panel! [k]
   (let [nxt #js {:flow false :code false :status false :map false :results false}]
     (aset nxt k true)
     (swap! app-state assoc :panels nxt))

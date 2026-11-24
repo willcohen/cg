@@ -319,8 +319,7 @@
   (some #(when (= :running (:status %)) %) (vals m)))
 
 (defn- finish-execution!
-  "Records the outcome, untaps the trace stream, puts the end sentinel and
-   closes the channel. The sleep before the untap lets in-flight events arrive."
+  "The sleep before the untap lets in-flight events arrive."
   [id updates sentinel]
   (let [{:keys [chan]} (get @executions id)]
     (swap! executions update id merge updates {:ended-at (now-ms)})
@@ -543,9 +542,7 @@
        :body {:error (.getMessage e)
               :type (-> e class .getName)}})))
 
-(defn session-vars
-  "GET /api/session/vars - List all user vars in the session."
-  [request]
+(defn session-vars [request]
   (try
     (let [sess (get-session! request)
           vars (user-vars (:sci-ctx sess))]
@@ -556,7 +553,9 @@
        :body {:error (.getMessage e)}})))
 
 (defn data-var
-  "POST /api/data/:var - Get dataset as GeoJSON, filtered by bbox."
+  "POST /api/data/:var: the dataset of the var as GeoJSON in EPSG:4326, at
+   most `limit` rows (5000 when the body has no limit). An optional `bbox` in
+   EPSG:4326 keeps the rows that intersect it."
   [request]
   (try
     (let [sess (get-session! request)

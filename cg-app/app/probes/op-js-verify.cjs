@@ -67,7 +67,6 @@ function waitForServer(timeoutMs) {
       .then(() => true).catch(() => false);
     check('1 page loads', up);
 
-    // Check 2: the canvas draws the op call site, resolved
     await page.setInputFiles('[data-testid=file-input]', FIXTURE);
     const drawn = await page.waitForFunction(
       (id) => Array.from(document.querySelectorAll('.react-flow__node'))
@@ -98,7 +97,6 @@ function waitForServer(timeoutMs) {
     check('3 Run completes ok on the JS backend',
       ran && exec && exec.status === 'ok' && /\(js\)/.test(exec.text), 'exec=' + JSON.stringify(exec));
 
-    // Check 4: the result is the square's area
     // The shell opens the Results panel when a run gives a value, and a
     // click on an open panel closes it.
     if ((await page.getAttribute('[data-testid=panel-toggle-results]', 'aria-pressed')) !== 'true') {
@@ -113,7 +111,6 @@ function waitForServer(timeoutMs) {
       await page.screenshot({ path: path.join(process.env.PROBE_SHOTS, 'op-js.png') });
     }
 
-    // Check 5: no console/page errors
     check('5 no console/page errors', errors.length === 0, JSON.stringify(errors));
   } catch (e) {
     console.log('FAIL probe crashed: ' + (e && e.stack ? e.stack.split('\n')[0] : e));

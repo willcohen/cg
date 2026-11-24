@@ -5,8 +5,9 @@
 ;; SPDX-License-Identifier: Apache-2.0 WITH LLVM-exception
 
 (ns cg-gui.canvas.op-catalog
-  "Static catalog of the built-in cg ops for the toolbar, by source module. User
-   ops come from the :operations of the CgFlow, not from here.")
+  "Static catalog of the built-in cg ops for the toolbar and the palette, by
+   source module. User ops come from the :operations of the CgFlow, not from
+   here.")
 
 (def builtins
   #js [#js {:id "geo" :label "Geo"
