@@ -76,28 +76,28 @@
 (deftest plan-fusion-groups-consecutive-per-row
   (setup-fixture-ops!)
   (testing "two consecutive per-row nodes fuse; whole-dataset breaks the chain"
-    (let [model {:nodes [{:id "n1" :op "test.fusion/a"}
-                         {:id "n2" :op "test.fusion/b"}
-                         {:id "n3" :op "test.fusion/c"}]
+    (let [model {:nodes [{:id "n1" :fn "test.fusion/a"}
+                         {:id "n2" :fn "test.fusion/b"}
+                         {:id "n3" :fn "test.fusion/c"}]
                  :edges [{:from "n1" :to "n2"} {:from "n2" :to "n3"}]}
           plan (fusion/plan-fusion model)]
       (is (= [["n1" "n2"] ["n3"]] (:groups plan)))))
   (testing "per-row → whole-dataset → per-row stays as three separate groups"
-    (let [model {:nodes [{:id "n1" :op "test.fusion/a"}
-                         {:id "n2" :op "test.fusion/c"}
-                         {:id "n3" :op "test.fusion/d"}]
+    (let [model {:nodes [{:id "n1" :fn "test.fusion/a"}
+                         {:id "n2" :fn "test.fusion/c"}
+                         {:id "n3" :fn "test.fusion/d"}]
                  :edges [{:from "n1" :to "n2"} {:from "n2" :to "n3"}]}
           plan (fusion/plan-fusion model)]
       (is (= [["n1"] ["n2"] ["n3"]] (:groups plan)))))
   (testing "single per-row node returns one-element group"
-    (let [model {:nodes [{:id "n1" :op "test.fusion/a"}]
+    (let [model {:nodes [{:id "n1" :fn "test.fusion/a"}]
                  :edges []}
           plan (fusion/plan-fusion model)]
       (is (= [["n1"]] (:groups plan)))))
   (testing "all-per-row chain fuses into one group"
-    (let [model {:nodes [{:id "n1" :op "test.fusion/a"}
-                         {:id "n2" :op "test.fusion/b"}
-                         {:id "n3" :op "test.fusion/d"}]
+    (let [model {:nodes [{:id "n1" :fn "test.fusion/a"}
+                         {:id "n2" :fn "test.fusion/b"}
+                         {:id "n3" :fn "test.fusion/d"}]
                  :edges [{:from "n1" :to "n2"} {:from "n2" :to "n3"}]}
           plan (fusion/plan-fusion model)]
       (is (= [["n1" "n2" "n3"]] (:groups plan))))))

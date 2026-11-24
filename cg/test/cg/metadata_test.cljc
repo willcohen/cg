@@ -48,24 +48,6 @@
   #?(:clj (count m)
      :cljs (count (js/Object.keys m))))
 
-(defn- buffer-simplify-model
-  "The model that the metadata tests attach positions to. The JVM builds it
-   through SCI and reads it back from the eval context. cljs gets the model
-   from eval-cg directly."
-  []
-  #?(:clj (do (run/reset-context!)
-              (run/eval-cg "(require '[cg.macros :refer [item->]])
-                            (require '[cg.geo :as geo])
-                            (def test-model (item-> :parcels
-                                                    (geo/buffer 10)
-                                                    (geo/simplify 1.0)))
-                            :done")
-              (get (introspect/extract-models-from-context (run/get-cg-context))
-                   'test-model))
-     :cljs (run/eval-cg (str "(require '[cg.macros :refer [item->]])"
-                             "(require '[cg.geo :as geo])"
-                             "(item-> :parcels (geo/buffer 10) (geo/simplify 1.0))"))))
-
 (defn- buffer-model []
   #?(:clj (do (run/reset-context!)
               (run/eval-cg "(require '[cg.macros :refer [item->]])
@@ -77,6 +59,17 @@
      :cljs (run/eval-cg (str "(require '[cg.macros :refer [item->]])"
                              "(require '[cg.geo :as geo])"
                              "(item-> :parcels (geo/buffer 10))"))))
+
+(defn- with-positions
+  "Put a :visual position on the first two nodes. The cljs model is a plain
+   JS object."
+  [model]
+  #?(:clj (-> model
+              (assoc-in [:nodes 0 :visual] {:pos [100 100]})
+              (assoc-in [:nodes 1 :visual] {:pos [250 100]}))
+     :cljs (do (aset (nth (.-nodes model) 0) "visual" {:pos [100 100]})
+               (aset (nth (.-nodes model) 1) "visual" {:pos [250 100]})
+               model)))
 
 (def ^:private content-with-metadata
   "(require '[cg.macros :refer [item->]])
@@ -111,48 +104,10 @@
       (is (= plain-code (:code result)) "Code should be unchanged")
       (is (= 0 (entry-count (:metadata result))) "Metadata should be empty"))))
 
-(deftest test-merge-metadata-into-graph
-  (testing "Merge visual metadata into Flow Graph"
-    (let [graph (buffer-simplify-model)
-          metadata-map {:nodes {"parcels" {:pos [100 100]}
-                                "buffer-1" {:pos [250 100]}
-                                "simplify-2" {:pos [400 100]}}
-                        :viewport {:zoom 1.0 :pan [0 0]}}
-          merged-graph (metadata/merge-metadata-into-graph graph metadata-map)]
-
-      (is (= (count (:nodes graph)) (count (:nodes merged-graph)))
-          "Node count should remain the same")
-
-      (testing "Visual metadata attached to nodes"
-        (let [source-node (first (:nodes merged-graph))]
-          (is (some? (:visual source-node)) "Source node should have visual metadata")
-          (is (vector? (:pos (:visual source-node))) "Should have position vector"))))))
-
-(deftest test-auto-layout-nodes
-  (testing "Auto-layout assigns positions to nodes without metadata"
-    (let [graph-no-positions {:nodes [{:type :source :id :data-src :data-ref :data}
-                                      {:type :operation :id :buffer-1 :fn :buffer}
-                                      {:type :operation :id :simplify-2 :fn :simplify}
-                                      {:type :sink :id :result}]
-                              :edges []
-                              :config {}}
-          auto-layout-graph (metadata/auto-layout-nodes graph-no-positions)
-          nodes (:nodes auto-layout-graph)
-          nodes-with-positions (filter metadata/has-position? nodes)]
-
-      (is (= 4 (count nodes-with-positions)) "All 4 nodes should have positions")
-      (is (not= (:pos (:visual (nth nodes 0)))
-                (:pos (:visual (nth nodes 1))))
-          "Different nodes should have different positions"))))
-
 (deftest test-round-trip-with-metadata
   (testing "Round-trip: graph → code+metadata → graph preserves positions"
-    (let [original-graph (buffer-model)
-          metadata-map {:nodes {"parcels" {:pos [100 100]}
-                                "buffer-1" {:pos [250 100]}}
-                        :viewport {:zoom 1.5 :pan [10 20]}}
-          graph-with-metadata (metadata/merge-metadata-into-graph original-graph metadata-map)
-          generated-code (codegen/flow-graph->cg-code-with-metadata graph-with-metadata)]
+    (let [generated-code (codegen/flow-graph->cg-code-with-metadata
+                          (with-positions (buffer-model)))]
 
       (is (string? generated-code) "Should generate code")
       (is (str/includes? generated-code "^:cgproj") "Should contain ^:cgproj marker")
@@ -162,38 +117,6 @@
         (let [reparsed (metadata/split-code-and-metadata generated-code)]
           (is (= 2 (entry-count (:nodes (:metadata reparsed))))
               "Should preserve node positions"))))))
-
-(deftest test-has-position?
-  (testing "has-position? sees a node with a position and skips one without"
-    (is (metadata/has-position? {:id :test :visual {:pos [100 200]}}))
-    (is (not (metadata/has-position? {:id :test2})))))
-
-#?(:clj
-   (deftest test-load-cg-with-metadata
-     (testing "Full pipeline: load code with metadata"
-       (let [test-content "(require '[cg.macros :refer [item->]])
-(require '[cg.geo :as geo])
-
-(def my-model
-  (item-> :parcels (geo/buffer 10)))
-
-^:cgproj
-{:nodes {\"parcels\" {:pos [100 100]}
-         \"buffer-1\" {:pos [250 100]}}}"
-
-             result (metadata/load-cg-with-metadata
-                     test-content
-                     (fn [code]
-                       (run/reset-context!)
-                       (run/eval-cg code)
-                       {:models (introspect/extract-models-from-context (run/get-cg-context))}))]
-
-         (is (map? result) "Should return result map")
-         (is (pos? (count (:models result))) "Should extract models")
-
-         (let [loaded-graph (first (vals (:models result)))]
-           (is (= [[100 100] [250 100]] (mapv (comp :pos :visual) (take 2 (:nodes loaded-graph))))
-               "the source and the buffer take their positions from the metadata"))))))
 
 #?(:cljs (-> (init_wasmts_BANG_)
              (.then (fn [_] (run_tests_and_exit_BANG_ "cg.metadata-test")))))

@@ -143,14 +143,11 @@
 (defn entry-meta-literal
   "Return the meta map of an entry, which the dispatcher reads at run time."
   [k v]
-  {:class       (:class k)
-   :method      (:method k)
-   :params      (:params k)
-   :param-names (effective-param-names k v)
-   :static?     (:static? v)
-   :returns     (:returns v)
-   :js-path     (js-path k (:js-path v))
-   :shape       (:shape v)})
+  {:class   (:class k)
+   :method  (:method k)
+   :params  (:params k)
+   :returns (:returns v)
+   :js-path (js-path k (:js-path v))})
 
 (defn entry-keys
   "Return the kebab keywords of the positional params of an entry, in :params
@@ -658,24 +655,16 @@
     `(do ~@forms)))
 
 (defn check-data
-  "Return a map that describes what `define-all-ts-fns` emits.
-   cg.geo/check-report reads its keys."
+  "Return a map that describes what `define-all-ts-fns` emits, for
+   `bb ts:check`."
   []
-  (let [registry  (load-registry)
-        entries   (in-scope-entries registry)
-        groups    (group-by group-key entries)
-        by-pkg    (group-by (fn [[k _]]
-                              (str "geo." (package-leaf (:class k))
-                                   "." (kebab-class (:class k))))
-                            entries)
-        by-shape  (->> entries
-                       (group-by (fn [[_ v]] (:kind (:shape v))))
-                       (map (fn [[k vs]] [k (count vs)]))
-                       (into (sorted-map)))]
-    {:total-entries  (count registry)
-     :minted         (count groups)
-     :registered     (count groups)
-     :minted-arities (count entries)
-     :by-shape       by-shape
-     :by-package     (into (sorted-map)
-                           (map (fn [[k vs]] [k (count vs)]) by-pkg))}))
+  (let [registry (load-registry)
+        entries  (in-scope-entries registry)
+        groups   (group-by group-key entries)
+        by-pkg   (group-by (fn [[k _]]
+                             (str "geo." (package-leaf (:class k))
+                                  "." (kebab-class (:class k))))
+                           entries)]
+    {:minted        (count groups)
+     :by-package    (into (sorted-map)
+                          (map (fn [[k vs]] [k (count vs)]) by-pkg))}))

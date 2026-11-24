@@ -59,7 +59,7 @@
     (let [ids   ["a" "m" "b" "i" "c"]
           ops   ["test.feature/row-op" "cg.dataset/map" "test.feature/row-op"
                  "cg.dataset/into" "test.feature/row-op"]
-          model {:nodes (mapv (fn [id op] {:id id :op op}) ids ops)
+          model {:nodes (mapv (fn [id op] {:id id :fn op}) ids ops)
                  :edges (mapv (fn [a b] {:from a :to b}) ids (rest ids))}]
       (is (= [["a"] ["m"] ["b"] ["i"] ["c"]]
              (:groups (fusion/plan-fusion model)))))))

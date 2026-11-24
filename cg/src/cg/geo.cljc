@@ -21,8 +21,7 @@
   ;; contains?, empty? and reverse are minted below and shadow clojure.core.
   (:refer-clojure :exclude [contains? empty? reverse])
   (:require [cg.feature :as feature]
-            [cg.ts-macros :refer [define-all-ts-fns check-data
-                                  geometry-subtypes]]
+            [cg.ts-macros :refer [define-all-ts-fns geometry-subtypes]]
             [clojure.string :as str]
             #?(:clj [net.willcohen.proj.proj :as proj])
             #?(:cljs [proj-wasm :as proj]))
@@ -45,7 +44,7 @@
 ;; expansion because it calls the minted buffer-parameters-create.
 (declare buffer-params)
 
-(defn geometry-typed?
+(defn- geometry-typed?
   "Return true when the type string names a class in the Geometry hierarchy."
   [type-str]
   (boolean (and type-str (clojure.core/contains? geometry-subtypes type-str))))
@@ -285,12 +284,7 @@
        "Block until the background PROJ init completes."
        []
        @proj-init-future
-       true)
-
-     (defn proj-ready?
-       "True when PROJ is initialized and ready."
-       []
-       (realized? proj-init-future))))
+       true)))
 
 #?(:cljs
    (do
@@ -309,11 +303,6 @@
                              (.then (fn [_] (reset! proj-initialized? true) true)))]
              (reset! proj-init-promise promise)
              promise))))
-
-     (defn proj-ready?
-       "True when PROJ is initialized and ready."
-       []
-       @proj-initialized?)
 
      (defn shutdown-proj!
        "Shut down the PROJ worker pool that init-proj! started. Returns a Promise
@@ -346,7 +335,7 @@
          (map? crs) ((requiring-resolve 'charred.api/write-json-str) crs)
          :else (str crs)))
 
-     (defn get-or-create-transformer
+     (defn- get-or-create-transformer
        "Return {:ctx <context> :tx <transformer>} for the CRS pair, cached per
         thread, with lon/lat axis order. Blocks until the PROJ init completes."
        [source-crs target-crs]
@@ -454,7 +443,7 @@
 
 #?(:cljs
    (do
-     (defn ^:async get-or-create-transformer
+     (defn- ^:async get-or-create-transformer
        "Return a Promise of {:ctx <context> :tx <transformer>} for the CRS pair."
        [source-crs target-crs]
        (await (init-proj!))
@@ -550,12 +539,3 @@
     :end-cap-style     (get {:round 1 :flat 2 :square 3} (get opts :cap-style :round) 1)
     :join-style        (get {:round 1 :mitre 2 :bevel 3} (get opts :join-style :round) 1)
     :mitre-limit       (get opts :mitre-limit 5.0)}))
-
-(defn check-report
-  "Return a snapshot of what the macro mints, for `bb ts:check`."
-  []
-  (let [{:keys [minted by-package total-entries]} (check-data)]
-    {:minted minted
-     :registered minted
-     :total-entries total-entries
-     :by-package by-package}))

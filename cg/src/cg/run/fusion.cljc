@@ -19,13 +19,12 @@
 
 #?(:clj (set! *warn-on-reflection* true))
 
-;; :op without :fn is the node shape of the fusion unit tests.
 (defn node->op-key
-  "The registry key of `node`, a string on both runtimes, from :fn, else :op. A
-   bare name gets its namespace from bare-op-namespaces, as in
+  "The registry key of `node`, a string on both runtimes, from :fn. A bare
+   name gets its namespace from bare-op-namespaces, as in
    cg.run/operation->step."
   [node]
-  (let [raw (or (:fn node) (:op node))
+  (let [raw (:fn node)
         s (cond
             (nil? raw) nil
             ;; JVM only: squint keyword? is true for each string, and a squint

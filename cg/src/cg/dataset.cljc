@@ -110,12 +110,10 @@
 
 #?(:cljs
    (do
-     (defn ->FlowDataset
-       ([dataset] (->FlowDataset dataset {}))
-       ([dataset metadata-map]
-        #js {:__flow_dataset true
-             :dataset dataset
-             :metadata (or metadata-map {})}))
+     (defn ->FlowDataset [dataset metadata-map]
+       #js {:__flow_dataset true
+            :dataset dataset
+            :metadata (or metadata-map {})})
 
      (defn wrapped-dataset? [x]
        (and (some? x)
@@ -127,18 +125,7 @@
        [wrapped]
        (if (wrapped-dataset? wrapped)
          (.-dataset wrapped)
-         wrapped))
-
-     (defn wrap-bundle
-       "Wraps a map in a plain JS object, because flow iterates over the
-        entries of a bare map."
-       [m]
-       #js {:__flow_bundle true :data m})
-
-     (defn unwrap-bundle
-       "Returns the map inside a FlowBundle."
-       [fb]
-       (.-data fb))))
+         wrapped))))
 
 (defn dataset?
   "True when `x` is a dataset: a tech.ml.dataset on the JVM, an Arquero table
@@ -937,31 +924,23 @@
         :keys (keys data)})))
 
 #?(:clj
-   (defn wrap-bundle
+   (defn- wrap-bundle
      "Wraps a map in a FlowBundle, because flow iterates over the entries of a
       bare map."
      [m]
      (->FlowBundle m)))
 
 #?(:clj
-   (defn unwrap-bundle [^FlowBundle fb]
+   (defn- unwrap-bundle [^FlowBundle fb]
      (.-data fb)))
 
 ;; The context of each dataset in a flow, by context id:
 ;; {:schema [col ...] :geom-column :geometry :row-count n
-;;  :spatial-index <HPRtree or STRtree, optional> :crs "EPSG:4326"
-;;  :source-dataset <dataset>}
-;; spatial-index-store is the same atom: on the JVM, add-spatial-index also
-;; puts each HPRtree here, by index UUID.
+;;  :spatial-index <HPRtree or STRtree, optional>
+;;  :candidates-fn <fn, JS, optional>}
+;; On the JVM, add-spatial-index also puts each HPRtree here, by index UUID.
 
 (def dataset-context-store (atom {}))
-
-(def spatial-index-store dataset-context-store)
-
-(defn reset-dataset-context-store!
-  "Removes all contexts from the dataset context store."
-  []
-  (reset! dataset-context-store {}))
 
 (defn get-dataset-context [ctx-id]
   (get @dataset-context-store ctx-id))
@@ -1000,7 +979,6 @@
                    :cljs (column-names ds))
          row-cnt #?(:clj (ds/row-count ds)
                     :cljs (row-count ds))
-         crs (:crs (fd-meta ds))
 
          spatial-index (when (and build-index?
                                   #?(:clj (ds/has-column? ds geom-col)
@@ -1030,9 +1008,7 @@
          context {:schema schema
                   :geom-column geom-col
                   :row-count row-cnt
-                  :spatial-index spatial-index
-                  :crs crs
-                  :source-dataset ds}]
+                  :spatial-index spatial-index}]
 
      (swap! dataset-context-store assoc ctx-id context)
      ctx-id)))
@@ -1100,7 +1076,7 @@
                   (first (clojure.core/filter #(= (:geometry-column %) geom-column) s)))]
           (when (and (not (nil? (:spatial-index-uuid i)))
                      (= HPRtree
-                        (type (get @spatial-index-store
+                        (type (get @dataset-context-store
                                    (:spatial-index-uuid i)))))
             i))))
 
@@ -1182,7 +1158,7 @@
               spatial-index (generate-spatial-index-fn ds geom-column
                                                        indexed-id-column
                                                        idx-id)]
-          (swap! spatial-index-store merge {idx-id (:index spatial-index)})
+          (swap! dataset-context-store merge {idx-id (:index spatial-index)})
           (stage! index-label "done" n-rows n-rows)
           (when (nil? (:spatial (meta (:dataset spatial-index))))
             (vary-meta (:dataset spatial-index) assoc :spatial []))
@@ -1197,7 +1173,7 @@
      (defn query-spatial-index
        "Returns the index payloads whose envelopes meet `envelope`."
        [dataset envelope geom-column]
-       (let [^HPRtree idx (get @spatial-index-store
+       (let [^HPRtree idx (get @dataset-context-store
                                (:spatial-index-uuid (get-spatial-index dataset geom-column)))]
          (.query idx envelope)))
 
@@ -1227,9 +1203,7 @@
         (let [generate-index? (get opts :generate-index? true)
               warn-on-error? (get opts :warn-on-error? true)]
           (try
-            (let [content (slurp path)]
-              (log/info "Loaded:" path)
-              (geojson->dataset content generate-index?))
+            (geojson->dataset (slurp path) generate-index?)
             (catch Exception e
               (if warn-on-error?
                 (do
@@ -1299,7 +1273,7 @@
        ([dataset] (index-candidates-fn dataset :geometry))
        ([dataset geom-column]
         (if-let [idx (get-spatial-index dataset geom-column)]
-          (let [^HPRtree tree (get @spatial-index-store (:spatial-index-uuid idx))]
+          (let [^HPRtree tree (get @dataset-context-store (:spatial-index-uuid idx))]
             (fn [featurelike]
               (.query tree (.getEnvelopeInternal ^Geometry (feature/to-jts featurelike)))))
           (do (warn-once-no-index! dataset geom-column) nil))))
@@ -1369,18 +1343,13 @@
          ([] {:params {}
               :ins {:in "Dataset batch"}
               :outs {:out "Coord bundle"}})
-         ([_args]
-          (log/info "extract-coords-step: initialized")
-          {})
+         ([_args] {})
          ([state _lifecycle] state)
          ([state _in-name wrapped-batch]
-          (log/info "extract-coords-step: received batch, type=" (type wrapped-batch) "nil?=" (nil? wrapped-batch))
           (let [batch (unwrap-dataset wrapped-batch)
                 _ (check-geometry-column! batch :geometry)
                 geom-col (batch :geometry)
                 geoms (vec geom-col)
-                _ (log/info "extract-coords-step: heap-JTS path, extracting coords from"
-                            (count geoms) "geometries")
                 result (clojure.core/reduce
                         (fn [acc geom]
                           (if (nil? geom)
@@ -1394,8 +1363,6 @@
                                :geoms (conj (:geoms acc) g)})))
                         {:all-coords [] :boundaries [] :geoms []}
                         geoms)]
-            (log/info "extract-coords-step: emitting bundle with"
-                      (count (:all-coords result)) "coords")
             [state {:out [(wrap-bundle (assoc result
                                               :batch batch
                                               :table-rows (:cg.dataset/table-rows (fd-meta wrapped-batch))))]}]))))
@@ -1450,9 +1417,7 @@
          ([] {:params {}
               :ins {:in "Transformed bundle"}
               :outs {:out "Dataset batch"}})
-         ([_args]
-          (log/info "apply-coords-step: initialized")
-          {})
+         ([_args] {})
          ([state _lifecycle] state)
          ([state _in-name wrapped-bundle]
           (let [{:keys [transformed-coords boundaries geoms batch target-crs]} (unwrap-bundle wrapped-bundle)
@@ -1475,8 +1440,6 @@
                 updated-batch (-> (ds/add-or-update-column batch :geometry new-geoms)
                                   (vary-meta dissoc :spatial)
                                   (vary-meta assoc :cg.dataset/needs-reindex true))]
-            (log/info "apply-coords-step: heap-JTS path, emitting batch with"
-                      (count new-geoms) "reprojected geometries")
             [state {:out [(wrap-dataset updated-batch)]}]))))
 
      (feature/register-operation! "cg.dataset/extract-coords-step"

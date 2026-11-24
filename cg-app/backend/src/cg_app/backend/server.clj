@@ -8,8 +8,6 @@
   "JVM HTTP server wrapping the cg library."
   (:require [ring.adapter.jetty :as jetty]
             [ring.middleware.json :refer [wrap-json-response wrap-json-body]]
-            [ring.middleware.params :refer [wrap-params]]
-            [ring.middleware.keyword-params :refer [wrap-keyword-params]]
             [reitit.ring :as ring]
             [cg-app.backend.api :as api]
             [cg-app.backend.middleware :as middleware]
@@ -23,19 +21,15 @@
   [["/api"
     ["/health" {:get api/health}]
     ["/execute-code" {:post api/execute-code}]
-    ["/execute" {:post api/execute-model}]
     ["/execution"
      ["/start" {:post api/execution-start}]
      ["/:id/trace" {:get api/execution-trace}]
      ["/:id/result" {:get api/execution-result}]]
-    ["/transform" {:post api/transform-geometry}]
-    ["/project" {:post api/project-geometry}]
     ["/session"
      ["/create" {:post api/session-create}]
      ["/delete" {:delete api/session-delete}]
      ["/load" {:post api/session-load}]
-     ["/vars" {:get api/session-vars}]
-     ["/source" {:post api/session-source}]]
+     ["/vars" {:get api/session-vars}]]
     ["/data/:var" {:post api/data-var}]]])
 
 (def handler
@@ -49,8 +43,6 @@
 
 (defn create-app []
   (-> handler
-      (wrap-keyword-params)
-      (wrap-params)
       (wrap-json-body {:keywords? true :bigdecimals? true})
       (wrap-json-response)
       (middleware/wrap-cors)

@@ -1857,9 +1857,6 @@
         "ds" js-dataset
         "io" js-io
         "squint_core" cg-squint-core
-        "item__GT_" macros/item->*
-        "coll__GT_" macros/coll->*
-        "table__GT_" macros/table->*
         "register_alias_BANG_" macros/register-alias!})))
 
 #?(:cljs

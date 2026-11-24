@@ -117,7 +117,7 @@
     (ds/write-gdal! (if (identical? rows same) dset (ds/->dataset same))
                     path {:layer "layer" :epsg (epsg-code crs)})))
 
-(defn read-layer
+(defn- read-layer
   "Read the dataset that write-layer! wrote to `path`. A boolean comes
    back as 1 or 0, and the read adds the feature id as :fid."
   [path]

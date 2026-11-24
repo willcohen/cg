@@ -81,17 +81,10 @@
 
 (def !ever-ready (atom false))
 
-(defn ready-gate
-  "The readiness gate: :connecting until the backend first answers, then
-   :ready. After the first answer the gate stays open."
-  [ever-ready? backend-available?]
-  (if (or ever-ready? backend-available?) :ready :connecting))
-
 (defn observe-health!
-  "Records the first ready result and returns :ready or :connecting."
+  "Records the first ready result."
   [backend-available?]
-  (when backend-available? (reset! !ever-ready true))
-  (ready-gate @!ever-ready backend-available?))
+  (when backend-available? (reset! !ever-ready true)))
 
 (defn ready?
   "True once the backend has answered at least once this run."

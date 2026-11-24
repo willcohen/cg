@@ -20,7 +20,7 @@ const fail = (msg) => { throw new Error('importmap: ' + msg); };
 // A package's installed name and version. The npm alias worker-router
 // installs @wcohen/worker-router, and the CDN knows only the real name.
 // `under` finds a copy nested in another package (lru-cache in backproj).
-export function pkg(name, under) {
+function pkg(name, under) {
   const dirs = [];
   for (const root of [cgApp, cg]) {
     if (under) dirs.push(join(root, 'node_modules', under, 'node_modules', name));
@@ -41,7 +41,7 @@ export const jsd = (name, path, under) => {
   return { url: `https://cdn.jsdelivr.net/npm/${p.name}@${p.version}/${path}`, file: join(p.dir, path) };
 };
 // esm.sh converts CommonJS. React stays a bare import: one copy serves all.
-export const esm = (name, sub = '', query = '?external=react,react-dom', under) => {
+const esm = (name, sub = '', query = '?external=react,react-dom', under) => {
   const p = pkg(name, under);
   return { url: `https://esm.sh/${p.name}@${p.version}${sub}${query}` };
 };
@@ -112,6 +112,6 @@ export const hosts = [...new Set(Object.values(imports).map((u) => new URL(u).or
 if (process.argv[1] === fileURLToPath(import.meta.url)) {
   const out = join(cgApp, 'shared', 'ui', 'public', 'importmap.json');
   mkdirSync(dirname(out), { recursive: true });
-  writeFileSync(out, JSON.stringify({ imports, pageUrls, hosts }, null, 2) + '\n');
+  writeFileSync(out, JSON.stringify({ imports, hosts }, null, 2) + '\n');
   console.log(`Wrote ${out}: ${Object.keys(imports).length} entries`);
 }

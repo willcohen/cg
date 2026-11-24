@@ -268,18 +268,15 @@
         ;; canvas.cljs sets this from rows-progress trace events.
         progress  (aget d "progress")
         running?  (= st "running")
-        stat-text (or (aget d "stat")
-                      (when (and progress running?) (progress-text progress))
+        stat-text (or (when (and progress running?) (progress-text progress))
                       (aget default-stat-text st) st)
         ;; :label first: a builder puts the display text in :label and the
         ;; bare symbol in :head.
         head      (or (aget d "label") (aget d "head"))
-        val       (aget d "val")
-        src-line  (aget d "source-line")
         ;; A card that did not run shows no status: "ready" on each card
         ;; says nothing. A body row of a block is source, and a chip is compact.
         footer?   (and (not (or (aget d "block-body?") (aget d "chip?")))
-                       (or (not= st "idle") (some? (aget d "stat"))))
+                       (not= st "idle"))
         ;; The chevron and the body handles key on :has-body?, the same field
         ;; that apply-collapse uses.
         has-body? (aget d "has-body?")
@@ -341,22 +338,17 @@
              (.map side (fn [p i] (side-port-row p i (or (aget d "wire-reach") 0)))))
            (when-let [fields (aget d "fields")]
              #jsx [ParamFields {:name (aget d "head") :fields fields}])
-           (when-let [ports (aget d "ports")]
-             (when-not in-thread? (ports-block ports)))
+           (when-let [ports (aget d "ports")] (ports-block ports))
            (when (aget d "report-spec")
              #jsx [ReportParams {:data d}])
-           (when val  #jsx [:div {:className "cg-val"} val])
            (when footer?
              #jsx [:div {:className "cg-stat"} [:span] stat-text])
            (when (and footer? progress running?)
              #jsx [:div {:className "cg-progress"}
                    [:div {:className "cg-progress-fill"
                           :style #js {:width (progress-pct progress)}}]])
-           (when src-line
-             #jsx [:span {:className "cg-source-link"} (str "L" src-line " →")])
            (when divable?
-             #jsx [:span {:className (str "cg-dive-btn"
-                                          (when has-body? " with-chevron"))
+             #jsx [:span {:className "cg-dive-btn"
                           :data-testid "dive-btn"
                           :title (if many-dives?
                                    (str "Goes " (.-length dive-names) " ways: "

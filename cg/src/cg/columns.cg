@@ -6,13 +6,13 @@
   (:require [cg.dataset :as ds]
             [clojure.string :as str]))
 
-(defn bool3-val
+(defn- bool3-val
   "Restore a stringified three-valued boolean: \"true\"/\"false\"/\"unknown\"
    come back as true/false/:unknown; every other value passes through."
   [v]
   (case v "true" true "false" false "unknown" :unknown v))
 
-(defn bool-val
+(defn- bool-val
   "Restore a boolean that a file stored as a number: 1 gives true and 0
    gives false. Each other value passes through."
   [v]
@@ -21,7 +21,7 @@
     (and (number? v) (== v 0)) false
     :else v))
 
-(defn kwize-val
+(defn- kwize-val
   "Restore a stringified keyword value; blank strings and non-strings pass
    through."
   [v]

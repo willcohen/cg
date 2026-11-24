@@ -19,8 +19,6 @@
 ;; Worker-local state. defonce keeps the geom handles in `*pending` when a
 ;; test harness loads the module again.
 (defonce ^:private *wts (atom nil))
-(defonce ^:private *worker-idx (atom -1))
-(defonce ^:private *profiling? (atom false))
 
 ;; Map of batch-id (string) -> JS array of wasmts Geometry handles, kept from
 ;; extractCoords to applyCoords on the same worker. The handles are in the
@@ -98,16 +96,12 @@
           @*loading)))
 
 (defn init
-  "Keep the load args of wasmts. initArgs: wasmtsJsUrl (required),
-   wasmtsWasmBinary (ArrayBuffer or Uint8Array, required in Node) and
-   workerIdx (the pool-slot index of this worker)."
+  "Keep the load args of wasmts. initArgs: wasmtsJsUrl (required) and
+   wasmtsWasmBinary (ArrayBuffer or Uint8Array, required in Node)."
   [args _ctx]
-  (let [args    (or args #js {})
-        wkr-idx (.-workerIdx args)]
+  (let [args (or args #js {})]
     (when-not (.-wasmtsJsUrl args)
       (throw (js/Error. "cg.wasmts-handler/init: missing initArgs.wasmtsJsUrl")))
-    (when (number? wkr-idx)
-      (reset! *worker-idx wkr-idx))
     (reset! *load-args args)
     nil))
 
@@ -120,16 +114,6 @@
         bin  (.-wasmtsWasmBinary args)
         n    (if bin (.-byteLength bin) 0)]
     (str "js:" url "|wasm:" n)))
-
-(defn set-config!
-  "Set the config of this worker: profilingEnabled (bool) and workerIdx
-   (number), which replaces the slot from init."
-  [args]
-  (when (some? (.-profilingEnabled args))
-    (reset! *profiling? (boolean (.-profilingEnabled args))))
-  (when (number? (.-workerIdx args))
-    (reset! *worker-idx (.-workerIdx args)))
-  nil)
 
 (defn ^:async extract-coords
   "Decode `geomsWkb` and keep the geom handles under `batchId` for applyCoords.
@@ -231,23 +215,20 @@
   #js {})
 
 (def ^:private method-map
-  #js {:setConfig     set-config!
-       :extractCoords extract-coords
+  #js {:extractCoords extract-coords
        :applyCoords   apply-coords
        :cleanup       cleanup})
 
 ;; extractCoords and applyCoords use the WASM heap through wasmts, and the
-;; handler runtime emits BUSY-INC/DEC events for them. setConfig and cleanup
-;; change only JS maps.
+;; handler runtime emits BUSY-INC/DEC events for them. cleanup changes only a
+;; JS map.
 (def ^:private busy-methods #js ["extractCoords" "applyCoords"])
-(def ^:private destroy-methods #js [])
 
 (def create
   (makeHandler
    #js {:init           init
         :methods        method-map
         :busyMethods    busy-methods
-        :destroyMethods destroy-methods
         :fingerprint    fingerprint
         :label          "cg.wasmts"}))
 

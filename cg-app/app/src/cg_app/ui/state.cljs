@@ -64,8 +64,6 @@
     (swap! app-state assoc :theme resolved)
     resolved))
 
-(defn set-theme! [t] (swap! app-state assoc :theme t) t)
-
 (defn- clear-stored-theme! []
   (try (some-> (storage) (.removeItem theme-storage-key)) (catch :default _ nil)))
 
@@ -272,9 +270,6 @@
                       (js/Object.assign #js {} l #js {:visible? (boolean visible?)})
                       l)))]
     (swap! app-state assoc :map-layers nxt)))
-
-(defn visible-layers []
-  (.filter (:map-layers @app-state) (fn [l] (true? (aget l "visible?")))))
 
 (defn- retire-cleanup
   "The retired cleanups of `st` plus its current projection cleanup. The map

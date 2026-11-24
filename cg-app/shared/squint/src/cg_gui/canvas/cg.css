@@ -100,10 +100,6 @@ div.react-flow { background-color: var(--canvas-canvas); }
   color: var(--canvas-ink-muted);
   white-space: nowrap; overflow: hidden; text-overflow: ellipsis;
 }
-.cg-val {
-  font-family: var(--canvas-mono); font-size: 12px; line-height: 16px;
-  color: var(--canvas-ink-muted); margin-top: var(--canvas-sp-01);
-}
 
 /* In the bottom right corner. This keeps one card height before and
    during a run. */
@@ -127,8 +123,6 @@ div.react-flow { background-color: var(--canvas-canvas); }
 }
 .cg-progress-fill { height: 100%; background: var(--canvas-run); transition: width 120ms linear; }
 
-.cg-source-link { display: inline-block; margin-top: var(--canvas-sp-02); font-size: 12px; color: var(--canvas-link); }
-
 .cg-defop-chevron {
   position: absolute; top: var(--canvas-sp-02); right: var(--canvas-sp-03);
   cursor: pointer; color: var(--canvas-link);
@@ -148,7 +142,6 @@ div.react-flow { background-color: var(--canvas-canvas); }
   line-height: 1; z-index: 2;
   user-select: none; opacity: 1;
 }
-.cg-dive-btn.with-chevron { right: 24px; }
 .cg-dive-btn:hover { color: var(--canvas-ink); }
 .cg-dive-btn svg { fill: currentColor; }
 .cg-node.divable { border-style: dashed; }
