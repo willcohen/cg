@@ -146,6 +146,7 @@
      :columns  {:front-setback         :actual-front-setback
                 :rear-setback          :actual-rear-setback
                 :side-setback          :actual-side-setback
+                :cumulative-side-setback :actual-cumulative-side-setback
                 :largest-front-setback :actual-largest-front-setback
                 :largest-rear-setback  :actual-largest-rear-setback
                 :largest-side-setback  :actual-largest-side-setback

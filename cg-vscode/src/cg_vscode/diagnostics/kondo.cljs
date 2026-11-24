@@ -34,12 +34,12 @@
        (keep (fn [f]
                (let [row (:row f)
                      col (:col f)
-                     end-row (or (:end-row f) row)
-                     end-col (or (:end-col f) col)]
+                     end-row (max (or (:end-row f) row) row)
+                     end-col (or (:end-col f) col)
+                     end-col (if (= end-row row) (max end-col col) end-col)]
                  (when (and row col)
                    {:range {:start [(dec row) (dec col)]
-                            :end   [(dec (max end-row row))
-                                    (dec (max end-col col))]}
+                            :end   [(dec end-row) (dec end-col)]}
                     :code (str (:type f))
                     :severity (get level->severity (:level f) :error)
                     :message (str (:message f))

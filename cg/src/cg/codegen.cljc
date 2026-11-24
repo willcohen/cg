@@ -9,6 +9,7 @@
 
 (ns cg.codegen
   (:require [cg.feature :as feature]
+            [cg.dsl.signatures :as sigs]
             [clojure.string :as str]
             #?(:clj [clojure.pprint :as pprint])))
 
@@ -35,11 +36,10 @@
       "item->")))
 
 (defn- operation-node?
-  "True for an operation node. :type can be a keyword or a string."
+  "True for an operation node or an operation group node (transform-crs).
+   :type can be a keyword or a string."
   [node]
-  (let [type (get-prop node :type)]
-    (or (= type :operation)
-        (= type "operation"))))
+  (contains? #{:operation "operation" :group "group"} (get-prop node :type)))
 
 (defn- source-node?
   [node]
@@ -133,8 +133,11 @@
                     raw-fn
                     (when-let [ns-name (feature/get-bare-op-namespace raw-fn)]
                       (str ns-name "/" raw-fn)))
-        info (when qualified (feature/get-operation-info qualified))]
+        info (when qualified (or (feature/get-operation-info qualified)
+                                 (feature/get-group-info qualified)))]
     (seq (mapv :name (:params info)))))
+
+(declare when-row-call)
 
 (defn- node->operation-call
   [node]
@@ -156,6 +159,9 @@
                           (get-prop params :tolerance))]
 
     (cond
+      (= "cg.run/when-row" raw)
+      (when-row-call (first params))
+
       ;; Registered params print in their declared order:
       ;; (buffer 10 {:quad-segs 8}).
       ordered
@@ -166,6 +172,20 @@
 
       :else
       (str "(" fn-str ")"))))
+
+(defn- when-row-call
+  "`(when-row {pred+opts} body)` from the params map of a when-row node. An
+   option at its default value is left out, as in the source."
+  [p]
+  (let [pred (get-prop p :predicate)
+        opts (keep (fn [[k default]]
+                     (let [v (get-prop (get-prop p :options) k)]
+                       (when (and (some? v) (not= default v))
+                         (str " :" k " :" v))))
+                   sigs/option-defaults)]
+    (str "(when-row {:" (get-prop pred :kind) " "
+         (param-value->code (get-prop pred :arg)) (str/join opts) "} "
+         (node->operation-call (get-prop p :body)) ")")))
 
 (defn- find-pipeline
   "The operation nodes that follow `source-id` in a chain. The chain stops at

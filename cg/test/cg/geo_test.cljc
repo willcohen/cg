@@ -294,6 +294,28 @@
       (is (= 3.5 z))
       (is (= 4.5 m)))))
 
+(defn- collection [geoms]
+  #?(:clj (.createGeometryCollection (GeometryFactory.) (into-array Geometry geoms))
+     :cljs (let [gf js/globalThis.wasmts.geom.GeometryFactory]
+             (.createGeometryCollection gf (.create0 gf) (to-array geoms)))))
+
+;; In JTS, LinearRing extends LineString and MultiPolygon extends
+;; GeometryCollection. The predicates read the type name on both runtimes.
+(deftest geometry-type-predicates
+  (let [pt    (feature/point 0 0)
+        line  (feature/linestring [[0 0] [1 1]])
+        sq    (feature/polygon [[0 0] [1 0] [1 1] [0 1] [0 0]])
+        mpoly (feature/multi-polygon [sq])]
+    (is (true? (feature/point? pt)))
+    (is (true? (feature/linestring? line)))
+    (is (true? (feature/polygon? sq)))
+    (is (true? (feature/multi-point? (feature/multi-point [pt]))))
+    (is (true? (feature/multi-linestring? (feature/multi-linestring [line]))))
+    (is (true? (feature/multi-polygon? mpoly)))
+    (is (true? (feature/geometry-collection? (collection [pt sq]))))
+    (is (false? (feature/linestring? (geo/polygon-get-exterior-ring sq))) "a LinearRing")
+    (is (false? (feature/geometry-collection? mpoly)))))
+
 (deftest collection-input-lift
   (let [{:keys [square-a square-b line-diag]} (fx)]
     (testing "coordinates over a vector of features"

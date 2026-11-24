@@ -921,12 +921,17 @@
                (aset out nm (await (gdal/ogr-fld-get-type fd)))
                (recur (inc i)))))))
 
+     ;; Two fetches at the same time must not stage a page under one name.
+     (defonce ^:private staged-pages (atom 0))
+
      (defn- ^:async read-page!
        "Parse one ESRI JSON page with GDAL: #js {:features :types :crs}, the
         last two only for `first?`. nil when a later page has no layer."
        [bytes first?]
-       (let [staged (await (gdal/stage-files! (js-obj "page.json" bytes) "/work/cg-fetch"))
-             path   (aget staged "page.json")
+       (let [n      (swap! staged-pages inc)
+             nm     (str "page-" n ".json")
+             staged (await (gdal/stage-files! (js-obj nm bytes) "/work/cg-fetch"))
+             path   (aget staged nm)
              ds     (await (gdal/gdal-open-ex path gdal-fndefs/GDAL_OF_VECTOR nil nil nil))]
          (if (or (nil? ds) (= ds 0))
            (do (await (gdal/vsi-unlink path))

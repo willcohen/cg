@@ -11,11 +11,14 @@
   #?(:clj (:require [clojure.test :refer [deftest is testing]]
                     [clojure.string :as str]
                     [cg.introspect :as introspect]
-                    [cg.model :as model])
+                    [cg.model :as model]
+                    [cg.dataset :as ds]
+                    [cg.macros :refer [table->]])
      :cljs (:require [cljs.test :refer [deftest is testing]]
                      [clojure.string :as str]
                      ["../../src/cg/introspect.mjs" :as introspect]
                      ["../../src/cg/cli.mjs" :as cli]
+                     ["../../src/cg/run.mjs" :as run]
                      ["../../src/cg/dataset.mjs" :as ds]
                      ["./wasmts_setup.mjs" :refer [init_wasmts_BANG_]]
                      ["./test_runner.mjs" :refer [run_tests_and_exit_BANG_]])))
@@ -92,6 +95,17 @@
          (is (model/model? model) "Should be a valid model")
          (is (nil? (introspect/get-model-by-name result 'nonexistent))
              "Should return nil for non-existent model")))))
+
+;; transform-crs is an operation group: its node has :type :group.
+(defn- transform-crs-model []
+  #?(:clj (table-> :pts (ds/transform-crs "EPSG:4326" "EPSG:3857"))
+     :cljs (run/eval-cg (str "(require '[cg.macros :refer [table->]])"
+                             "(require '[cg.dataset :as ds])"
+                             "(table-> :pts (ds/transform-crs \"EPSG:4326\" \"EPSG:3857\"))"))))
+
+(deftest list-models-names-a-group-op
+  (is (= [:dataset/transform-crs]
+         (:operations (first (introspect/list-models {"m" (transform-crs-model)}))))))
 
 ;; The node CLI gets each model of a file by its name. A command gives 0 or
 ;; true when it found the models and they are valid.

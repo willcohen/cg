@@ -192,7 +192,11 @@
           first-arg (second form)
           ;; On :cljs the head is a compiler Symbol object, not a string. The
           ;; full ns/name string keeps `ds/filter` apart from bare `filter`.
-          head #?(:clj op-fn :cljs (str op-fn))]
+          ;; Each head with the name when-row is the rung: `cg.run/when-row`
+          ;; and an alias of cg.run too.
+          head (if (= "when-row" (util/unq-name op-fn))
+                 (util/as-sym "when-row")
+                 #?(:clj op-fn :cljs (str op-fn)))]
       (if (and #?(:clj (symbol? op-fn) :cljs (string? head))
                (contains? when-row-heads head)
                ;; squint's map? is false for the compiler's cljs.core map.
@@ -517,7 +521,8 @@
        "True for a rung whose arguments are not values: a when-row form,
         and filter with a predicate map (parse-when-row-form reads both)."
        [h items]
-       (or (contains? #{"when-row" "cg.macros/when-row" "when"} h)
+       (or (= "when" h)
+           (= "when-row" (util/unq-name h))
            (and (= "filter" h) (= "map" (form-kind (nth items 1 nil))))))
 
      (defn- lift-rung-args

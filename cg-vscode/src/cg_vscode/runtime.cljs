@@ -15,8 +15,15 @@
 (defn- config-runtime []
   (.. vscode/workspace (getConfiguration "cg") (get "runtime" "auto")))
 
-(defn- set-config-runtime! [value]
-  (.. vscode/workspace (getConfiguration "cg") (update "runtime" value)))
+(defn- set-config-runtime!
+  "Writes the runtime setting, which each run reads: to the workspace when a
+   folder is open, else to the user settings, because a window with no folder
+   has no workspace settings. Gives a Promise."
+  [value]
+  (.. vscode/workspace (getConfiguration "cg")
+      (update "runtime" value (if (seq (.-workspaceFolders vscode/workspace))
+                                vscode/ConfigurationTarget.Workspace
+                                vscode/ConfigurationTarget.Global))))
 
 (defn- backend-port-file
   "The path of the backend port file, cg-app/.cg-backend-port. `bb backend:dev`
@@ -189,13 +196,27 @@
    (to-array ["auto" "jvm" "js"])
    #js {:placeHolder "Select CG runtime"}))
 
+(defn- show-runtime! [!state resolved]
+  (update-status-bar! !state)
+  (.appendLine ^js (:runtime/output-channel @!state) (str "CG: runtime resolved to " resolved)))
+
 (defn init-runtime! [!state]
-  (let [^js channel (:runtime/output-channel @!state)]
-    (create-status-bar-item !state)
-    (-> (select-runtime !state)
-        (.then (fn [resolved]
-                 (update-status-bar! !state)
-                 (.appendLine channel (str "CG: runtime resolved to " resolved)))))))
+  (create-status-bar-item !state)
+  (.then (select-runtime !state) (fn [resolved] (show-runtime! !state resolved))))
+
+(defn ^:async apply-runtime-choice!
+  "The status bar changes only after the save, because a run reads the
+   setting."
+  [!state choice]
+  (try
+    (await (set-config-runtime! choice))
+    (swap! !state assoc :runtime/choice choice)
+    (if (= choice "auto")
+      (show-runtime! !state (await (select-runtime !state)))
+      (do (swap! !state assoc :runtime/resolved choice)
+          (update-status-bar! !state)))
+    (catch :default e
+      (vscode/window.showErrorMessage (str "CG: the runtime setting was not saved: " (.-message e))))))
 
 (defn- active-cg-document
   "Return [doc text filename] for the current .cg editor, or nil if none."
@@ -250,20 +271,8 @@
 (defn register-runtime-commands! [!state]
   (lc/register-command! !state "cg.setRuntime"
                         (fn [state]
-                          (-> (pick-runtime)
-                              (.then (fn [choice]
-                                       (when choice
-                                         (set-config-runtime! choice)
-                                         (swap! state assoc :runtime/choice choice)
-                                         (if (= choice "auto")
-                                           (-> (select-runtime state)
-                                               (.then (fn [resolved]
-                                                        (update-status-bar! state)
-                                                        (let [^js ch (:runtime/output-channel @state)]
-                                                          (.appendLine ch (str "CG: runtime resolved to " resolved))))))
-                                           (do
-                                             (swap! state assoc :runtime/resolved choice)
-                                             (update-status-bar! state)))))))))
+                          (.then (pick-runtime)
+                                 (fn [choice] (when choice (apply-runtime-choice! state choice))))))
 
   (lc/register-command! !state "cg.refreshRuntime"
                         (fn [state]

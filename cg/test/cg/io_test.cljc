@@ -153,10 +153,10 @@
        (fn [layer-url requests]
          (let [result (io/load-gdal-source layer-url)]
            (is (= 3 (count (:rows result))) "the driver path produced the rows")
-           (is (some #(.contains ^String (:uri %) "f=pbf") @requests)
-               "pbf was tried first")
-           (is (some #(.contains ^String (:uri %) "f=json") @requests)
-               "the driver ran after it"))))))
+           (let [first-of (fn [s] (first (keep-indexed #(when (.contains ^String (:uri %2) s) %1)
+                                                         @requests)))]
+             (is (< (first-of "f=pbf") (first-of "f=json"))
+                 "pbf was tried first, and the driver ran after it")))))))
 
 #?(:clj
    (deftest pbf-strict-refuses-to-fall-back

@@ -83,7 +83,10 @@
       (is (= 2 (count geoms)) "both geometries survive")
       ;; EPSG:2249 is in US feet: x and y are in the hundreds of thousands.
       (is (> (abs (geo/x g)) 1000.0) "x is in projected units")
-      (is (> (abs (geo/y g)) 1000.0) "y is in projected units"))))
+      (is (> (abs (geo/y g)) 1000.0) "y is in projected units")
+      ;; layer/get-dataset-crs reads it, so a second reproject-to does not
+      ;; reproject again.
+      (is (every? #(= "EPSG:2249" (feature/get-crs %)) geoms)))))
 
 (deftest geojson-string-builds-a-dataset
   (let [d (ds/geojson->dataset (wgs84-geojson three-points))]
@@ -113,7 +116,12 @@
           (str "edge from " f " points at a real node")))
     (doseq [t tos]
       (is (some? (first (filter (fn [i] (= i t)) ids)))
-          (str "edge to " t " points at a real node")))))
+          (str "edge to " t " points at a real node")))
+    (let [to-set (set tos)
+          next-of (zipmap froms tos)
+          path (take-while some? (iterate #(get next-of %)
+                                          (first (remove #(contains? to-set %) ids))))]
+      (is (= (set ids) (set path)) "the edges make one path through each node"))))
 
 ;; The cljs reprojection runs on the joint pool: the proj handler and the
 ;; wasmts handler are on the same worker, so the coordinates do not cross a
@@ -142,9 +150,11 @@
        "[[-72.0,42.0,12.5],[-72.01,42.01,30.0]]}}]}"))
 
 (defn- check-reprojected-z! [result]
-  (let [coords (feature/coordinates (nth (ds/column (result-dataset result) :geometry) 0))]
+  (let [g (nth (ds/column (result-dataset result) :geometry) 0)
+        coords (feature/coordinates g)]
     (is (> (abs (first (first coords))) 1000.0) "x is in projected units")
-    (is (= [12.5 30.0] (mapv (fn [c] (nth c 2)) coords)) "z passes through")))
+    (is (= [12.5 30.0] (mapv (fn [c] (nth c 2)) coords)) "z passes through")
+    (is (= "EPSG:2249" (feature/get-crs g)))))
 
 (deftest table-flow-reprojects-a-geometry-with-z
   (after (run-flow (ds/geojson->dataset three-d-geojson)) check-reprojected-z!))
@@ -166,15 +176,56 @@
   (after (error-message #(run-flow (misnamed-geometry-dataset))) check-names-the-columns!))
 
 ;; A layer from a city server can hold a row with no geometry.
-#?(:clj
-   (deftest transform-crs-passes-a-nil-geometry-through
-     (let [d    (ds/geojson->dataset (wgs84-geojson two-points))
-           rows (conj (vec (ds/rows d :as-maps)) {:id 3 :geometry nil})
-           out  (result-dataset (run-flow (ds/->dataset rows)))
-           geoms (vec (ds/column out :geometry))]
-       (is (= 3 (count geoms)) "the row with no geometry stays")
-       (is (nil? (nth geoms 2)))
-       (is (> (abs (geo/x (nth geoms 0))) 1000.0) "the other rows are reprojected"))))
+(defn- nil-geometry-dataset []
+  (let [d (ds/geojson->dataset (wgs84-geojson two-points))]
+    (ds/->dataset (conj (vec (ds/rows d :as-maps)) {:id 3 :geometry nil}))))
+
+(defn- check-nil-geometry-stays! [result]
+  (let [geoms (vec (ds/column (result-dataset result) :geometry))]
+    (is (= 3 (count geoms)) "the row with no geometry stays")
+    (is (nil? (nth geoms 2)))
+    (is (> (abs (geo/x (nth geoms 0))) 1000.0) "the other rows are reprojected")))
+
+(deftest transform-crs-passes-a-nil-geometry-through
+  (after (run-flow (nil-geometry-dataset)) check-nil-geometry-stays!))
+
+;; The JS hosts start PROJ with the joint pool of run/init-cg-workers!, not
+;; with geo/init-proj!.
+(deftest geo-reprojects-on-the-joint-pool
+  (-> (after (geo/transform-geom (feature/point -71.06 42.36) "EPSG:4326" "EPSG:2249")
+             (fn [g]
+               (is (> (abs (geo/x g)) 1000.0) "x is in projected units")
+               (geo/crs->projjson "EPSG:2249")))
+      (after (fn [pj] (is (str/starts-with? pj "{"))))))
+
+;; The parser accepts ds/concat and ds/filter-by-column, so each name must
+;; find a fn at run time.
+(def ^:private ds-prelude
+  "(require '[cg.macros :refer [table->]])
+   (require '[cg.dataset :as ds])
+   ")
+
+(defn- ids [d]
+  (mapv (fn [r] (get r :id)) (ds/rows d :as-maps)))
+
+(deftest ds-concat-runs-in-plain-code
+  (is (= [1 2] (ids (run/eval-cg
+                     (str ds-prelude
+                          "(ds/concat (ds/maps->dataset [{:id 1}])"
+                          " (ds/maps->dataset [{:id 2}]))"))))))
+
+(deftest ds-filter-by-column-runs-in-plain-code
+  (is (= [2] (ids (run/eval-cg
+                   (str ds-prelude
+                        "(ds/filter-by-column (ds/maps->dataset [{:id 1 :area 500}"
+                        " {:id 2 :area 2000}]) :area :gt 1000)"))))))
+
+(deftest ds-filter-by-column-runs-as-a-rung
+  (after (run/run-model (run/eval-cg (str ds-prelude
+                                          "(table-> :rows (ds/filter-by-column :area :gt 1000))"))
+                        {:rows (ds/maps->dataset [{:id 1 :area 500} {:id 2 :area 2000}])}
+                        {:timeout-ms 30000})
+         (fn [result] (is (= [2] (ids (result-dataset result)))))))
 
 #?(:cljs (-> (setup!)
              (.then (fn [_] (run_tests_and_exit_BANG_ "cg.dataset-exec-test")))))

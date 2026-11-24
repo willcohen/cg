@@ -16,14 +16,24 @@
                     [cg.run :as run]
                     [cg.geo :as geo]
                     [cg.feature :as feature]
-                    [cg.test-runner :refer [after]])
+                    [cg.util :as util]
+                    [clojure.string :as str]
+                    [cg.test-runner :refer [after error-message]])
      :cljs (:require [cljs.test :refer [deftest is testing]]
                      ["../../src/cg/run.mjs" :as run]
                      ["../../src/cg/geo.mjs" :as geo]
                      ["../../src/cg/feature.mjs" :as feature]
+                     ["../../src/cg/util.mjs" :as util]
                      ["../../src/cg/parser/core.mjs" :as parser]
+                     [clojure.string :as str]
+                     ["node:fs" :as fs]
+                     ["node:os" :as os]
+                     ["node:path" :as node-path]
                      ["./wasmts_setup.mjs" :refer [init_wasmts_BANG_]]
-                     ["./test_runner.mjs" :refer [run_tests_and_exit_BANG_ after]])))
+                     ["./test_runner.mjs" :refer [run_tests_and_exit_BANG_ after error-message]]))
+  #?(:clj (:import (java.io File)
+                   (java.nio.file Files)
+                   (java.nio.file.attribute FileAttribute))))
 
 #?(:clj (set! *warn-on-reflection* true))
 
@@ -69,6 +79,20 @@
            (after (run/run-model (run/eval-cg rung-src) {:squares [(square)]} {})
                   check-rung!))))
 
+;; A module's rung must get the param names of an op of a module that it
+;; loads. On the JS runtime the module compiles before its own load-module
+;; calls run, as boston.cg did under a file that loaded it.
+(def ^:private rung-user "test/fixtures/modules/mod_rung_user.cg")
+
+(def ^:private scale-src
+  "(require '[test.mod-rung-user :as u]) (u/scale-model 3 {:factor 2})")
+
+(deftest a-module-rung-binds-the-params-of-an-op-that-it-loads
+  (after (run/load-module rung-user)
+         (fn [_]
+           (after (run/run-model (run/eval-cg scale-src) {:xs [1 2]} {})
+                  #(is (= [6 12] (vec %)))))))
+
 ;; cg.cache/version-hash runs on the JS runtime too, because a flow file
 ;; computes the key of a checkpoint when it loads. The hash differs between
 ;; the runtimes.
@@ -105,6 +129,49 @@
    (deftest a-path-that-is-not-a-file-loads-from-the-classpath
      (is (= "test.mod-res" (str (:ns-name (run/load-module "fixtures/modules/mod_res.cg")))))
      (is (= "resource" (run/eval-cg "(require '[test.mod-res :as res]) res/origin")))))
+
+(defn- temp-dir
+  "A new folder. Its path has forward slashes, because a test puts it in a
+   CG string, where a backslash of win32 is an escape."
+  []
+  (str/replace #?(:clj (str (Files/createTempDirectory "cg-load-module" (make-array FileAttribute 0)))
+                  :cljs (fs/mkdtempSync (node-path/join (os/tmpdir) "cg-load-module")))
+               "\\" "/"))
+
+(defn- delete-dir! [dir]
+  #?(:clj (doseq [^File f (reverse (file-seq (File. ^String dir)))] (.delete f))
+     :cljs (fs/rmSync dir #js {:recursive true :force true})))
+
+;; A module that fails to load must run again on the next load: when its
+;; dep is missing, and when its text does not compile.
+(deftest a-module-that-fails-on-a-missing-dep-loads-again
+  (let [dir (temp-dir)
+        user (str dir "/user.cg")
+        dep (str dir "/dep.cg")]
+    (util/write-file! user (str "(ns test.mod-late-user (:require [cg.run :as run]))\n"
+                                "(run/load-module \"" dep "\")\n"
+                                "(def ran 1)\n"))
+    (after (error-message #(run/load-module user))
+           (fn [msg]
+             (is (some? msg))
+             (util/write-file! dep "(ns test.mod-late-dep)\n")
+             (after (run/load-module user)
+                    (fn [_]
+                      (is (= 1 (run/eval-cg "(require '[test.mod-late-user :as u]) u/ran")))
+                      (delete-dir! dir)))))))
+
+(deftest a-module-that-does-not-compile-loads-again
+  (let [dir (temp-dir)
+        bad (str dir "/bad.cg")]
+    (util/write-file! bad "(ns test.mod-bad)\n(def fixed 1\n")
+    (after (error-message #(run/load-module bad))
+           (fn [msg]
+             (is (some? msg))
+             (util/write-file! bad "(ns test.mod-bad)\n(def fixed 2)\n")
+             (after (run/load-module bad)
+                    (fn [_]
+                      (is (= 2 (run/eval-cg "(require '[test.mod-bad :as b]) b/fixed")))
+                      (delete-dir! dir)))))))
 
 #?(:cljs (-> (init_wasmts_BANG_)
              (.then (fn [_] (parser/init! nil)))

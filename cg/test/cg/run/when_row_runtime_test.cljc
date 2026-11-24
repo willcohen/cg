@@ -72,5 +72,11 @@
                    "(table-> :input (when-row {:has-column? :nope} (ds/head 1)))"))
          #(is (= 2 (row-count %)) "pass-through -> 2 rows")))
 
+(deftest a-qualified-head-is-a-when-row
+  (after #?(:clj (run-jvm (table-> :input (cg.run/when-row {:has-column? :n} (ds/head 1))))
+            :cljs (when-row-result
+                   "(table-> :input (cg.run/when-row {:has-column? :n} (ds/head 1)))"))
+         #(is (= 1 (row-count %)))))
+
 #?(:cljs (-> (init_wasmts_BANG_)
              (.then (fn [_] (run_tests_and_exit_BANG_ "cg.run.when-row-runtime-test")))))

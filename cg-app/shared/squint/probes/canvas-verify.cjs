@@ -102,6 +102,7 @@ const THREAD = {
       ops: [
         { 'qualified-name': 'geo/buffer',
           args: [{ kind: 'literal', literal: { kind: 'number', raw: '0.5' } }],
+          'emits-level': 'groups',
           location: { line: 5, column: 2 } },
         { 'qualified-name': 'check',
           args: [ref('limits'),
@@ -268,6 +269,26 @@ async function rowsProgress(page, check) {
     (await h.statText(page, IDS.buffer)) === null && (await fill(IDS.buffer)) === null);
 }
 
+// At 700 px the open console puts the flow pane under the minimap width.
+async function consoleHoldsStill(page, check) {
+  await h.sendFlow(page, SIMPLE);
+  await page.evaluate(() => {
+    const state = () => (document.querySelector('[data-testid="console-pane"]') ? 'pane'
+      : document.querySelector('[data-testid="console-show"]') ? 'tab' : 'none');
+    let last = state();
+    window.__consoleFlips = 0;
+    new MutationObserver(() => {
+      const s = state();
+      if (s !== last) { window.__consoleFlips += 1; last = s; }
+    }).observe(document.body, { childList: true, subtree: true });
+  });
+  await h.send(page, { type: 'cg/run-started', file: 'f.cg' });
+  await h.send(page, { type: 'cg/run-output', stream: 'stdout', text: 'hello\n' });
+  await page.waitForTimeout(1000);
+  const flips = await page.evaluate(() => window.__consoleFlips);
+  check('the console holds still at 700 px', flips <= 1, `flips=${flips}`);
+}
+
 // cg/run-ended has one shape for the two hosts: {outcome, count?, exitCode?}.
 // A backend run gives outcome and count; the bb run subprocess gives exitCode.
 async function runEndStatus(page, check) {
@@ -422,6 +443,10 @@ async function threadFrames(page, check) {
   check('the thread line has 3 segments, 4px wide, with the class cg-thread-line mode-table',
     line.every((l) => l && /cg-thread-line/.test(l.cls) && /mode-table/.test(l.cls) && l.width === '4px'),
     JSON.stringify(line));
+  const badges = await page.evaluate(() => document.querySelectorAll('.cg-edge-badge').length);
+  check('the line out of the groups step, and not the line into it, has cg-edge-groups and one ×N badge',
+    !!(line[0] && line[1]) && !/cg-edge-groups/.test(line[0].cls) && /cg-edge-groups/.test(line[1].cls) && badges === 1,
+    JSON.stringify({ line, badges }));
 
   const srcEnd = await edgeEnd(page, 'src__parcels->' + IDS.frame);
   check('the source line ends at the top of the frame, above the source port',
@@ -1235,6 +1260,7 @@ h.run([
   { name: 'model selection', body: modelSelection },
   { name: 'rows progress', body: rowsProgress },
   { name: 'run end status', body: runEndStatus },
+  { name: 'console at a middle width', viewport: { width: 700, height: 800 }, body: consoleHoldsStill },
   { name: 'thread step drag', body: threadStepDrag },
   { name: 'op body drag', body: opBodyDrag },
   { name: 'toolbar tabs and ghosts', body: tabsAndGhosts },

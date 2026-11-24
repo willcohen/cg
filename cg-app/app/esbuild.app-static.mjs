@@ -48,6 +48,16 @@ const cp = (src, dst) => cpSync(src, join(out, dst), { recursive: true });
 cp(join(cgApp, 'shared', 'squint', 'dist'), 'canvas');
 cp(join(cgApp, 'shared', 'ui', 'public', 'vendor'), 'vendor');
 cp(join(cgApp, 'shared', 'ui', 'public', 'css'), 'css');
+// Carbon's @font-face rules name /fonts/IBM-Plex-<Family>/...; the families
+// are on npm as @ibm/plex-<family>. Copy each file that the sheet names.
+const sheet = join(out, 'css', 'styles.css');
+const css = readFileSync(sheet, 'utf8');
+for (const [, fam, file] of css.matchAll(/url\("\/fonts\/IBM-Plex-(\w+)\/([^"]+)"\)/g)) {
+  const dst = join(out, 'fonts', `IBM-Plex-${fam}`, file);
+  mkdirSync(dirname(dst), { recursive: true });
+  copyFileSync(join(cgApp, 'node_modules', '@ibm', `plex-${fam.toLowerCase()}`, file), dst);
+}
+writeFileSync(sheet, css.replaceAll('url("/fonts/', 'url("../fonts/'));
 copyFileSync(join(cgApp, 'shared', 'ui', 'public', 'cg-bundled-browser.mjs'),
              join(out, 'cg-bundled-browser.mjs'));
 copyFileSync(join(cgApp, 'node_modules', '@xyflow', 'react', 'dist', 'style.css'),
@@ -65,6 +75,14 @@ const examples = join(repo, 'cg', 'examples');
 for (const f of readdirSync(examples).filter((n) => n.endsWith('.cg') || n === 'index.json')) {
   copyFileSync(join(examples, f), join(out, 'examples', f));
 }
+// run/load-module reads its files from modules/src/cg/.
+const cgSrc = join(repo, 'cg', 'src', 'cg');
+mkdirSync(join(out, 'modules', 'src', 'cg'), { recursive: true });
+for (const f of readdirSync(cgSrc).filter((n) => n.endsWith('.cg'))) {
+  copyFileSync(join(cgSrc, f), join(out, 'modules', 'src', 'cg', f));
+}
+// cg.run finds the WasmTS worker handler next to the bundle that holds it.
+copyFileSync(join(repo, 'cg', 'dist', 'cg-wasmts-handler.mjs'), join(out, 'cg-wasmts-handler.mjs'));
 // The PWA serves these files from the root.
 for (const f of ['manifest.webmanifest', 'sw.js', 'icon.svg']) {
   copyFileSync(join(here, 'public', f), join(out, f));

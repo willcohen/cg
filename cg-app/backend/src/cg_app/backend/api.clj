@@ -166,6 +166,26 @@
              (sequential? val) "collection"
              :else (.getName (class val)))}))
 
+(defn- dataset-crs-str
+  "The CRS of `dataset` as a string, EPSG:4326 when it has none."
+  [dataset]
+  (let [crs (get-dataset-crs dataset)]
+    (cond
+      (string? crs) crs
+      (map? crs) (or (get-in crs [:properties :name]) (charred/write-json-str crs))
+      :else "EPSG:4326")))
+
+(defn- dataset-in-4326
+  "`dataset` with each geometry in EPSG:4326, from the CRS `crs-str`."
+  [dataset crs-str]
+  (if (crs-4326? crs-str)
+    dataset
+    (ds/->dataset (mapv (fn [row]
+                          (if-let [geom (:geometry row)]
+                            (assoc row :geometry (geo/transform-geom geom crs-str "EPSG:4326"))
+                            row))
+                        (ds/rows dataset :as-maps)))))
+
 (defn- builtin-ns? [ns-str]
   (some #(.startsWith ^String ns-str %) builtin-ns-prefixes))
 
@@ -549,13 +569,8 @@
         (throw (ex-info (str "Var not found: " var-name) {:var var-name})))
       (when-not (ds/dataset? val)
         (throw (ex-info (str "Var is not a dataset: " var-name) {:var var-name})))
-      (let [crs (get-dataset-crs val)
-            crs-str (cond
-                      (string? crs) crs
-                      (map? crs) (get-in crs [:properties :name])
-                      :else "EPSG:4326")
-            is-4326? (crs-4326? crs-str)
-            needs-reproject? (not is-4326?)
+      (let [crs-str (dataset-crs-str val)
+            needs-reproject? (not (crs-4326? crs-str))
             filtered (if (and bbox (= 4 (count bbox)))
                        (let [[x1 y1 x2 y2] bbox
                              bbox-poly-4326 (feature/polygon
@@ -572,19 +587,7 @@
             limited (if (> (ds/row-count filtered) limit)
                       (ds/head filtered limit)
                       filtered)
-            served (if (and needs-reproject? crs-str)
-                     (do
-                       (log/info "Reprojecting" var-name "from" crs-str "to EPSG:4326"
-                                 "(" (ds/row-count limited) "rows)")
-                       (let [rows (ds/rows limited :as-maps)
-                             reprojected (mapv (fn [row]
-                                                 (if-let [geom (:geometry row)]
-                                                   (assoc row :geometry
-                                                          (geo/transform-geom geom crs-str "EPSG:4326"))
-                                                   row))
-                                               rows)]
-                         (ds/->dataset reprojected)))
-                     limited)
+            served (dataset-in-4326 limited crs-str)
             geojson-str (ds/dataset->geojson-string served)
             fc (charred/read-json geojson-str :key-fn keyword)]
         ;; :total-rows is the row count after the bbox filter and before the

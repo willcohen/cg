@@ -17,11 +17,16 @@
 (def !resolved (atom "js"))
 (def !backend-url (atom default-backend-url))
 
+;; With site data blocked, the browser throws SecurityError when the page
+;; reads localStorage. Then the app keeps its choices in memory only.
 (defn storage
-  "localStorage, or nil under node tests. Reads it from globalThis, because a
-   bare js/localStorage throws ReferenceError under node."
+  "localStorage, or nil when the host has none or blocks it."
   []
-  (.-localStorage js/globalThis))
+  (try (.-localStorage js/globalThis) (catch :default _ nil)))
+
+;; setItem throws an error when the storage is full.
+(defn- store! [k v]
+  (try (some-> (storage) (.setItem k v)) (catch :default _ nil)))
 
 (defn direct-edition?
   "True in the macOS Direct build, where window.__CG_NATIVE__ has edition
@@ -49,23 +54,21 @@
 (defn init!
   "Loads the stored choice and backend url. Returns the effective choice."
   []
-  (let [ls (storage)]
-    (reset! !choice (if (js-only?)
-                      "js"
-                      (or (when ls (.getItem ls runtime-storage-key)) (default-choice))))
-    ;; The url that the native shell injects wins over a stored url, because
-    ;; the stored port can be stale.
-    (reset! !backend-url (or (.-__CG_BACKEND_URL__ js/globalThis)
-                             (when ls (.getItem ls backend-url-storage-key))
-                             default-backend-url))
-    @!choice))
+  (reset! !choice (if (js-only?)
+                    "js"
+                    (or (some-> (storage) (.getItem runtime-storage-key)) (default-choice))))
+  ;; The url that the native shell injects wins over a stored url, because
+  ;; the stored port can be stale.
+  (reset! !backend-url (or (.-__CG_BACKEND_URL__ js/globalThis)
+                           (some-> (storage) (.getItem backend-url-storage-key))
+                           default-backend-url))
+  @!choice)
 
 (defn set-choice!
   "Stores the choice, then resolves. Returns the resolved runtime."
   [choice jvm-reachable?]
   (reset! !choice choice)
-  (when-let [ls (storage)]
-    (.setItem ls runtime-storage-key choice))
+  (store! runtime-storage-key choice)
   (reset! !resolved (lane/resolve-runtime choice jvm-reachable?))
   @!resolved)
 
@@ -100,6 +103,5 @@
    adds the probe."
   [url]
   (reset! !backend-url (or url default-backend-url))
-  (when-let [ls (storage)]
-    (.setItem ls backend-url-storage-key @!backend-url))
+  (store! backend-url-storage-key @!backend-url)
   @!backend-url)

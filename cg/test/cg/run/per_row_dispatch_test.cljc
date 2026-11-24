@@ -19,17 +19,25 @@
    twin here, so it runs on cljs only."
   #?(:clj (:require [clojure.test :refer [deftest is]]
                     [cg.run :as run]
+                    [cg.run.fusion :as fusion]
                     cg.feature
                     [cg.macros :refer [table->]]
                     [tech.v3.dataset :as ds])
      :cljs (:require [cljs.test :refer [deftest is]]
                      ["../../../src/cg/run.mjs" :as run]
+                     ["../../../src/cg/run/fusion.mjs" :as fusion]
                      ["../../../src/cg/dataset.mjs" :as dataset]
                      ["../../../src/cg/feature.mjs" :as feature]
                      ["../wasmts_setup.mjs" :refer [init_wasmts_BANG_]]
                      ["../test_runner.mjs" :refer [run_tests_and_exit_BANG_ after]])))
 
 #?(:clj (set! *warn-on-reflection* true))
+
+;; On JS, a symbol or a keyword compiles to a string, and squint keyword? is
+;; true for each string.
+(deftest node->op-key-gives-the-registry-key-of-each-op-ref
+  (doseq [op-ref ['cg.dataset/summarize :cg.dataset/summarize "cg.dataset/summarize" "summarize"]]
+    (is (= "cg.dataset/summarize" (fusion/node->op-key {:fn op-ref})) (pr-str op-ref))))
 
 (defn- check-doubled-rows! [rows]
   (is (= [2 4 6 8] (vec (mapv :doubled rows))))
@@ -51,6 +59,11 @@
        [^:row parcel-row]
        (assoc! parcel-row :doubled (inc (:doubled parcel-row))))
      (register-op! #'tdt-incr-doubled)
+
+     (deftest a-run-over-no-rows-ends-at-once
+       (let [result (run/run-model (table-> :input (tdt-double-n))
+                                   {:input (ds/->>dataset [])} {:timeout-ms 3000})]
+         (is (zero? (ds/row-count result)))))
 
      (deftest per-row-op-runs-in-table-mode
        (let [d (ds/->>dataset [{:n 1} {:n 2} {:n 3} {:n 4}])
@@ -109,6 +122,12 @@
        (after (run/run-model (table-model "cg.probe/double-n")
                              {:input (dataset/->dataset {:n [1 2 3 4]})} {:timeout-ms 10000})
               (comp check-doubled-rows! result-rows)))
+
+     (deftest a-run-over-no-rows-ends-at-once
+       (register-probe-ops!)
+       (after (run/run-model (table-model "cg.probe/double-n")
+                             {:input (dataset/->dataset [])} {:timeout-ms 3000})
+              #(is (zero? (count (result-rows %))))))
 
      (deftest per-geometry-op-maps-over-the-geometry-column
        (register-probe-ops!)

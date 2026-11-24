@@ -14,8 +14,8 @@
                        :rules #js [#js {:actual "width" :min "min-width" :status "width-check"}]}
         by-limit  #js {:highlight "bad" :rules #js [#js {:actual "depth" :max "limit"}]}
         rule (fn [props popup] (aget (aget (pp/card-model "a" props popup nil) "rules") 0))]
-    (is (true? (aget (rule #js {"width" 41 "min-width" 50 "width-check" "bad"} by-status) "failed")))
-    (is (false? (aget (rule #js {"width" 60 "min-width" 50 "width-check" "good"} by-status) "failed")))
+    (is (true? (aget (rule #js {"width" 60 "min-width" 50 "width-check" "bad"} by-status) "failed")))
+    (is (false? (aget (rule #js {"width" 41 "min-width" 50 "width-check" "good"} by-status) "failed")))
     (is (true? (aget (rule #js {"depth" 9 "limit" 8} by-limit) "failed")))
     (is (false? (aget (rule #js {"depth" 7 "limit" 8} by-limit) "failed")))))
 

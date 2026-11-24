@@ -9,18 +9,18 @@
                     [clojure.string :as str]
                     [cg.run.fusion :as fusion]
                     [cg.feature :as f])
-     :cljs (:require [cljs.test :refer [deftest is]]
+     :cljs (:require [cljs.test :refer [deftest is testing]]
                      ["../../../src/cg/run/fusion.mjs" :as fusion]
+                     ["../../../src/cg/feature.mjs" :as f]
                      ["../test_runner.mjs" :refer [run_tests_and_exit_BANG_]])))
 
 #?(:clj (set! *warn-on-reflection* true))
 
-#?(:clj
-   (defn- setup-fixture-ops! []
-     (f/register-operation! "test.fusion/a" {:type :transformer :row-shape :per-row :params []})
-     (f/register-operation! "test.fusion/b" {:type :transformer :row-shape :per-row :params []})
-     (f/register-operation! "test.fusion/c" {:type :transformer :row-shape :whole-dataset :params []})
-     (f/register-operation! "test.fusion/d" {:type :transformer :row-shape :per-row :params []})))
+(defn- setup-fixture-ops! []
+  (f/register-operation! "test.fusion/a" {:type :transformer :row-shape :per-row :params []})
+  (f/register-operation! "test.fusion/b" {:type :transformer :row-shape :per-row :params []})
+  (f/register-operation! "test.fusion/c" {:type :transformer :row-shape :whole-dataset :params []})
+  (f/register-operation! "test.fusion/d" {:type :transformer :row-shape :per-row :params []}))
 
 (deftest fused-chain-applies-row-fns-with-per-row-catch
   (let [row-fns [(fn [r] (assoc! r :a (* (:n r) 2)))
@@ -73,34 +73,33 @@
              (is (= [0 2 4 6 8 10 12 14] out)))
            (finally (.shutdown exec)))))))
 
-#?(:clj
-   (deftest plan-fusion-groups-consecutive-per-row
-     (setup-fixture-ops!)
-     (testing "two consecutive per-row nodes fuse; whole-dataset breaks the chain"
-       (let [model {:nodes [{:id "n1" :op "test.fusion/a"}
-                            {:id "n2" :op "test.fusion/b"}
-                            {:id "n3" :op "test.fusion/c"}]
-                    :edges [{:from "n1" :to "n2"} {:from "n2" :to "n3"}]}
-             plan (fusion/plan-fusion model)]
-         (is (= [["n1" "n2"] ["n3"]] (:groups plan)))))
-     (testing "per-row → whole-dataset → per-row stays as three separate groups"
-       (let [model {:nodes [{:id "n1" :op "test.fusion/a"}
-                            {:id "n2" :op "test.fusion/c"}
-                            {:id "n3" :op "test.fusion/d"}]
-                    :edges [{:from "n1" :to "n2"} {:from "n2" :to "n3"}]}
-             plan (fusion/plan-fusion model)]
-         (is (= [["n1"] ["n2"] ["n3"]] (:groups plan)))))
-     (testing "single per-row node returns one-element group"
-       (let [model {:nodes [{:id "n1" :op "test.fusion/a"}]
-                    :edges []}
-             plan (fusion/plan-fusion model)]
-         (is (= [["n1"]] (:groups plan)))))
-     (testing "all-per-row chain fuses into one group"
-       (let [model {:nodes [{:id "n1" :op "test.fusion/a"}
-                            {:id "n2" :op "test.fusion/b"}
-                            {:id "n3" :op "test.fusion/d"}]
-                    :edges [{:from "n1" :to "n2"} {:from "n2" :to "n3"}]}
-             plan (fusion/plan-fusion model)]
-         (is (= [["n1" "n2" "n3"]] (:groups plan)))))))
+(deftest plan-fusion-groups-consecutive-per-row
+  (setup-fixture-ops!)
+  (testing "two consecutive per-row nodes fuse; whole-dataset breaks the chain"
+    (let [model {:nodes [{:id "n1" :op "test.fusion/a"}
+                         {:id "n2" :op "test.fusion/b"}
+                         {:id "n3" :op "test.fusion/c"}]
+                 :edges [{:from "n1" :to "n2"} {:from "n2" :to "n3"}]}
+          plan (fusion/plan-fusion model)]
+      (is (= [["n1" "n2"] ["n3"]] (:groups plan)))))
+  (testing "per-row → whole-dataset → per-row stays as three separate groups"
+    (let [model {:nodes [{:id "n1" :op "test.fusion/a"}
+                         {:id "n2" :op "test.fusion/c"}
+                         {:id "n3" :op "test.fusion/d"}]
+                 :edges [{:from "n1" :to "n2"} {:from "n2" :to "n3"}]}
+          plan (fusion/plan-fusion model)]
+      (is (= [["n1"] ["n2"] ["n3"]] (:groups plan)))))
+  (testing "single per-row node returns one-element group"
+    (let [model {:nodes [{:id "n1" :op "test.fusion/a"}]
+                 :edges []}
+          plan (fusion/plan-fusion model)]
+      (is (= [["n1"]] (:groups plan)))))
+  (testing "all-per-row chain fuses into one group"
+    (let [model {:nodes [{:id "n1" :op "test.fusion/a"}
+                         {:id "n2" :op "test.fusion/b"}
+                         {:id "n3" :op "test.fusion/d"}]
+                 :edges [{:from "n1" :to "n2"} {:from "n2" :to "n3"}]}
+          plan (fusion/plan-fusion model)]
+      (is (= [["n1" "n2" "n3"]] (:groups plan))))))
 
 #?(:cljs (run_tests_and_exit_BANG_ "cg.run.fusion-test"))

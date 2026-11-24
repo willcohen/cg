@@ -150,7 +150,7 @@
 
   build:app-static
   {:doc "Build the web PWA into app/dist-static, with relative paths only"
-   :depends [squint:app vendor-deps]
+   :depends [css:build build:cg bundle:canvas squint:app vendor-deps]
    :task (shell {:dir "app"} "node" "esbuild.app-static.mjs")}
 
   build:demo

@@ -9,7 +9,7 @@
 ;; Geometry on JavaScript.
 
 (ns cg.dataset
-  (:refer-clojure :exclude [filter group-by partition-by reduce])
+  (:refer-clojure :exclude [concat filter group-by partition-by reduce])
   (:require [cg.feature :as feature]
             [cg.geo :as geo]
             [cg.io :as cio]
@@ -256,6 +256,10 @@
    (filter-ds dataset pred))
   ([dataset column predicate value]
    (filter-ds dataset (serializable-row-pred column predicate value))))
+
+(def filter-by-column
+  "The fn of the DSL alias ds/filter-by-column. See `filter`."
+  filter)
 
 (defn filter-ds
   "Filters dataset rows. `pred` receives a map of column name to value for
@@ -683,17 +687,18 @@
    `f` returns."
   [dataset col-name f]
   #?(:clj (ds/update-column dataset col-name f)
-     :cljs (let [col-str (str col-name)
-                 current-values (column dataset col-name)
+     :cljs (let [raw-ds (unwrap-dataset dataset)
+                 col-str (str col-name)
+                 current-values (column raw-ds col-name)
                  new-values (f current-values)
-                 others (.filter (.columnNames dataset) (fn [c] (not= c col-str)))
+                 others (.filter (.columnNames raw-ds) (fn [c] (not= c col-str)))
                  new-col-table (.table (ensure-arquero!)
                                        {col-str (to-array new-values)})]
              ;; arquero gives a table with no columns 0 rows, and assign
              ;; refuses a column of another length.
              (if (zero? (.-length others))
                new-col-table
-               (.assign (.select dataset others) new-col-table)))))
+               (.assign (.select raw-ds others) new-col-table)))))
 
 (defn add-or-update-column
   "Adds the column, or replaces it when it exists."
@@ -720,6 +725,12 @@
              (.reduce (.slice as 1)
                       (fn [acc ds] (.concat acc ds))
                       (aget as 0)))))
+
+(defn concat
+  "Concatenates the rows of `dataset` and of each dataset in `more`. The fn
+   of the DSL name ds/concat."
+  [dataset & more]
+  (concat-datasets (into [dataset] more)))
 
 (defn rename-columns
   "Renames columns. `rename-map` is {old-name new-name}."
@@ -1104,13 +1115,16 @@
        (:spatial (meta ds)))
 
      (defn get-spatial-index
-       "Returns the spatial index entry of the dataset, or of `geom-column`."
+       "The :spatial entry of the index of `ds` on `geom-column`, or nil. The
+        1-arity gives the one index of `ds`, and throws when `ds` has more
+        than one index."
        ([ds]
         (let [s (get-spatial-indices ds)]
           (case (count s)
             0 nil
             1 (first s)
-            (Exception. "More than one index."))))
+            (throw (ex-info "The dataset has more than one spatial index. Give the geometry column."
+                            {:geometry-columns (mapv :geometry-column s)})))))
        ([ds geom-column]
         (let [s (get-spatial-indices ds)
               i (if (nil? s)
@@ -1123,9 +1137,10 @@
             i))))
 
      (defn has-spatial-index?
-       "True when the dataset has a spatial index."
+       "True when `ds` has an index on `geom-column` (default :geometry, as
+        on the JS runtime)."
        ([ds]
-        (not (nil? (get-spatial-index ds))))
+        (has-spatial-index? ds :geometry))
        ([ds geom-column]
         (not (nil? (get-spatial-index ds geom-column)))))
 
@@ -1153,15 +1168,26 @@
      (defn add-spatial-index
        "Builds an HPRtree index on `geom-column` (default :geometry). Returns the
         dataset with `indexed-id-column` (default :indexed-id) and :spatial
-        metadata that refers to the index."
+        metadata that refers to the index. It replaces an index on
+        `geom-column`. It throws when the index of another column uses
+        `indexed-id-column`."
        ([ds]
         (add-spatial-index ds :geometry))
        ([ds geom-column]
         (add-spatial-index ds geom-column :indexed-id))
        ([ds geom-column indexed-id-column]
-        (let [idx-id (if (has-spatial-index? ds geom-column)
-                       (:spatial-index-uuid (:spatial (meta ds)))
-                       (random-uuid))
+        (when-let [other (some #(when (and (= indexed-id-column (:indexed-id-column %))
+                                          (not= geom-column (:geometry-column %)))
+                                  (:geometry-column %))
+                               (:spatial (meta ds)))]
+          ;; The new ids would replace the ids of the other index.
+          (throw (ex-info (str "The spatial index of " other " uses the id column "
+                               indexed-id-column ". Give the index of " geom-column
+                               " another id column.")
+                          {:geometry-column geom-column
+                           :indexed-id-column indexed-id-column
+                           :other-geometry-column other})))
+        (let [idx-id (random-uuid)
               n-rows (ds/row-count ds)
               _ (stage! index-label "start" 0 n-rows)
               generate-spatial-index-fn
@@ -1192,10 +1218,13 @@
           (stage! index-label "done" n-rows n-rows)
           (when (nil? (:spatial (meta (:dataset spatial-index))))
             (vary-meta (:dataset spatial-index) assoc :spatial []))
+          ;; get-spatial-index reads the first entry of a column. Remove the
+          ;; entry of the old index, or a reindex answers with old geometries.
           (vary-meta (:dataset spatial-index) assoc
-                     :spatial (into []
-                                    (conj (:spatial (meta (:dataset spatial-index)))
-                                          (dissoc spatial-index :dataset :index)))))))
+                     :spatial (conj (into []
+                                          (remove #(= geom-column (:geometry-column %)))
+                                          (:spatial (meta (:dataset spatial-index))))
+                                    (dissoc spatial-index :dataset :index))))))
 
      (defn query-spatial-index
        "Returns the index payloads whose envelopes meet `envelope`."
@@ -1267,15 +1296,16 @@
             (de-9im-builder dataset featurelike de-9im-operation (first featurelike-columns))
             (throw (Exception. "More than one featurelike column. Please specify directly.")))))
        ([dataset featurelike de-9im-operation geom-column]
-        (if (get-spatial-index dataset geom-column)
+        (if-let [idx (get-spatial-index dataset geom-column)]
           (let [^Geometry g (feature/to-jts featurelike)
                 query-results (query-spatial-index dataset (.getEnvelopeInternal g) geom-column)
                 de-9im-results (clojure.core/filter #(de-9im-operation (:prepared-geometry %) g) query-results)
-                uuids (into #{} (map (:indexed-id-column (get-spatial-index dataset)) de-9im-results))]
-            (ds/filter-column dataset (:indexed-id-column (get-spatial-index dataset)) uuids))
+                id-column (:indexed-id-column idx)
+                uuids (into #{} (map id-column) de-9im-results)]
+            (ds/filter-column dataset id-column uuids))
           (let [g (feature/to-jts featurelike)
                 bool-col (keyword (.toString ^java.util.UUID (random-uuid)))
-                de-9im-fn (fn [row] {bool-col ((de-9im-operation g) (row geom-column))})]
+                de-9im-fn (fn [row] {bool-col (de-9im-operation (row geom-column) g)})]
             (warn-once-no-index! dataset geom-column)
             (-> (tc/select-rows (ds/row-map dataset de-9im-fn) (comp true? bool-col))
                 (ds/drop-columns [bool-col]))))))
@@ -1353,7 +1383,8 @@
 
               result (if (and (has-spatial-index? dataset geom-col)
                               (not preserve-index?))
-                       (add-spatial-index transformed geom-col)
+                       (add-spatial-index transformed geom-col
+                                          (:indexed-id-column (get-spatial-index dataset geom-col)))
                        transformed)]
 
           result)))
@@ -1429,7 +1460,8 @@
                           {:transformed-coords []
                            :boundaries boundaries
                            :geoms geoms
-                           :batch batch}
+                           :batch batch
+                           :target-crs target-crs}
                           (let [coord-array (proj/coord-array n)
                                 _ (proj/set-coords! coord-array all-coords)
                                 _ (proj/transform-batch source-crs target-crs coord-array)
@@ -1437,7 +1469,8 @@
                             {:transformed-coords transformed-coords
                              :boundaries boundaries
                              :geoms geoms
-                             :batch batch})))]
+                             :batch batch
+                             :target-crs target-crs})))]
               ((:add! stage) (row-count (:batch bundle)))
               [state {:out [(wrap-bundle out)]}])))))
 
@@ -1454,7 +1487,7 @@
           {})
          ([state _lifecycle] state)
          ([state _in-name wrapped-bundle]
-          (let [{:keys [transformed-coords boundaries geoms batch]} (unwrap-bundle wrapped-bundle)
+          (let [{:keys [transformed-coords boundaries geoms batch target-crs]} (unwrap-bundle wrapped-bundle)
                 new-geoms (loop [geom-idx (long 0)
                                  coord-offset (long 0)
                                  result-geoms []]
@@ -1464,8 +1497,10 @@
                                     geom-coords (subvec transformed-coords coord-offset (+ coord-offset n))
                                     ^Geometry orig-g (nth geoms geom-idx)
                                     ^Geometry g (when orig-g (.copy orig-g))]
+                                ;; The copy keeps the source CRS.
                                 (when g
-                                  (geo/apply-transformed-coords! g geom-coords))
+                                  (geo/apply-transformed-coords! g geom-coords)
+                                  (feature/set-crs g target-crs))
                                 (recur (inc geom-idx)
                                        (+ coord-offset n)
                                        (conj result-geoms g)))))
@@ -1668,12 +1703,14 @@
 
      (defn dataset->batches
        "Splits a dataset into a seq of datasets of at most :batch-size rows
-        (default 1000)."
+        (default 1000). A dataset of no rows is one empty batch, as on the
+        JVM: a table flow ends when its sink has a result for each batch, and
+        with no batch it would wait until its timeout."
        ([ds] (dataset->batches ds {}))
        ([ds opts]
         (let [batch-size (get opts :batch-size 1000)
               total-rows (row-count ds)
-              num-batches (Math/ceil (/ total-rows batch-size))]
+              num-batches (max 1 (Math/ceil (/ total-rows batch-size)))]
           (for [i (range num-batches)]
             (let [start (* i batch-size)
                   end (min (+ start batch-size) total-rows)]
@@ -1898,13 +1935,28 @@
              (trace/busy-end! busy (ex-message e))
              (throw e)))))
 
+     (defn- put-back
+       "`geoms` with each geometry in turn replaced by the next of `moved`,
+        with the CRS `crs`. A nil stays nil."
+       [geoms moved crs]
+       (let [n (count geoms)
+             out (js/Array. n)]
+         (loop [i 0 j 0]
+           (when (< i n)
+             (if (nil? (nth geoms i))
+               (do (aset out i nil) (recur (inc i) j))
+               (do (aset out i (feature/set-crs (nth moved j) crs))
+                   (recur (inc i) (inc j))))))
+         out))
+
      ;; A top-level defn, because squint drops :async on (fn ^:async ...).
      (defn- ^:async run-transform-batch
        "Reprojects one batch. Returns a promise."
        [batch source-crs target-crs]
        (check-geometry-column! batch "geometry")
        (let [pid (trace/current-step-pid)
-             geoms (column batch "geometry")
+             all-geoms (column batch "geometry")
+             geoms (filterv some? all-geoms)
              geom-count (count geoms)]
          (if (zero? geom-count)
            (wrap-dataset batch {:cg.dataset/needs-reindex true})
@@ -1918,7 +1970,8 @@
                                (trace/busy-end! busy (ex-message e))
                                (throw e)))]
              (trace/busy-end! busy)
-             (wrap-dataset (add-or-update-column batch "geometry" new-geoms)
+             (wrap-dataset (add-or-update-column batch "geometry"
+                                                 (put-back all-geoms new-geoms target-crs))
                            {:cg.dataset/needs-reindex true})))))
 
      (defn transform-batch-step
@@ -2574,14 +2627,15 @@
                              {:type :extractor
                               :params [{:name :reducer_kind :required true :type :keyword}]})
 
-;; The bare DSL `filter` resolves here. :params describe the form
-;; `(filter :col :predicate value)`; the dataset is the threaded receiver.
-;; The parser contract is on cg.dataset/filter-column.
-(feature/register-operation! "cg.dataset/filter"
-                             {:type :transformer
-                              :params [{:name :column :required true :type :keyword}
-                                       {:name :predicate :required true :type :keyword}
-                                       {:name :value :required true :type :any}]})
+;; The bare DSL `filter` and the alias ds/filter-by-column resolve here.
+;; :params describe the form `(filter :col :predicate value)`; the dataset is
+;; the threaded receiver. The parser contract is on cg.dataset/filter-column.
+(doseq [op-name ["cg.dataset/filter" "cg.dataset/filter-by-column"]]
+  (feature/register-operation! op-name
+                               {:type :transformer
+                                :params [{:name :column :required true :type :keyword}
+                                         {:name :predicate :required true :type :keyword}
+                                         {:name :value :required true :type :any}]}))
 
 ;; This registration holds the parser contract of `filter` and has no runtime
 ;; :params. At run time `filter` resolves to cg.dataset/filter above.

@@ -42,6 +42,16 @@
       (is (fn? (cg-value n)) n)
       (is (nil? (feature/get-operation-info n)) n))))
 
+(deftest the-flat-row-keeps-the-cumulative-side-setback
+  (let [rules  (cg-value "boston/boston-current-rules")
+        row    {:edges [{:edge-type :side :setback 4.0} {:edge-type :side :setback 6.5}
+                        {:edge-type :rear :setback 20.0}]
+                :metrics {}}
+        values ((cg-value "cg.zoning/measure-values")
+                rules row (cg-value "boston/boston-parcel-schema"))]
+    (is (= 10.5 (:actual-cumulative-side-setback
+                  ((cg-value "cg.zoning/result-columns") rules values {}))))))
+
 #?(:cljs (-> (init_wasmts_BANG_)
              (.then (fn [_] (run/load-module boston)))
              (.then (fn [_] (run_tests_and_exit_BANG_ "cg.boston-steps-test")))))

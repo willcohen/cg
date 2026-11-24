@@ -15,6 +15,7 @@
             [cg.macros :refer [item-> coll->]]
             [cg.geo :as geo]
             [cg.trace :as trace]
+            [charred.api :as charred]
             [ring.core.protocols :as protocols]))
 
 (set! *warn-on-reflection* true)
@@ -315,6 +316,24 @@
        "\"base_crs\":{\"type\":\"GeographicCRS\",\"name\":\"NAD83\","
        "\"id\":{\"authority\":\"EPSG\",\"code\":4326}},"
        "\"id\":{\"authority\":\"EPSG\",\"code\":2249}}"))
+
+;; A PROJJSON map has no [:properties :name], which the crs member of a
+;; GeoJSON file has.
+(deftest data-var-reprojects-a-dataset-whose-crs-is-a-projjson-map
+  (let [sid (get-in (api/session-create {}) [:body :session-id])
+        req (fn [body] {:headers {"x-session-id" sid} :body body})
+        crs (charred/read-json (geo/crs->projjson "EPSG:2249") :key-fn keyword)]
+    (try
+      (api/session-load
+       (req {:code (str "(require '[cg.dataset :as ds] '[cg.feature :as f])\n"
+                        "(def pts (vary-meta (ds/->dataset [{:id 1 :geometry (f/point 775087.6 2956520.1)}])"
+                        " assoc :crs " (pr-str crs) "))")
+             :filename "crs.cg"}))
+      (let [[x y] (get-in (api/data-var (assoc (req {}) :path-params {:var "pts"}))
+                          [:body :features 0 :geometry :coordinates])]
+        (is (< -72 x -70) "the longitude of a point in Boston")
+        (is (< 42 y 43) "the latitude"))
+      (finally (api/session-delete (req nil))))))
 
 (deftest crs-4326?-reads-only-the-top-level-id
   (let [crs-4326? #'api/crs-4326?]

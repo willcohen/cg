@@ -89,6 +89,64 @@
   (is (true? (ds/intersects-any? (two-squares) (feature/point 105 5)))
       "with no index, a scan of the rows"))
 
+(defn- small-square []
+  (feature/polygon [[2 2] [4 2] [4 4] [2 4] [2 2]]))
+
+(defn- nested-squares []
+  (ds/maps->dataset [{:id "big" :geometry (square 0 10)}
+                     {:id "small" :geometry (small-square)}]))
+
+(deftest select-contains-and-select-within-test-the-row-against-the-query
+  (doseq [[label d] [["no index" (nested-squares)]
+                     ["index" (ds/add-spatial-index (nested-squares))]]]
+    (testing label
+      (is (= ["small"] (ids (ds/select-within d (small-square)))))
+      (is (= ["big" "small"] (ids (ds/select-within d (square 0 10)))))
+      (is (= ["big" "small"] (ids (ds/select-contains d (small-square)))))
+      (is (= ["big"] (ids (ds/select-contains d (square 0 10))))))))
+
+;; :footprint holds the squares of :geometry in the opposite order, so a
+;; point in the first square selects row 1 by :geometry and row 2 by
+;; :footprint.
+(defn- swapped-squares []
+  (ds/maps->dataset [{:id 1 :geometry (square 0 10) :footprint (square 100 10)}
+                     {:id 2 :geometry (square 100 10) :footprint (square 0 10)}]))
+
+(deftest has-spatial-index?-with-one-argument-reads-the-geometry-column
+  (is (false? (ds/has-spatial-index? (two-squares))))
+  (is (true? (ds/has-spatial-index? (indexed-squares))))
+  (is (false? (ds/has-spatial-index? (ds/add-spatial-index (swapped-squares) :footprint)))
+      "an index on another column only"))
+
+;; The JS runtime keeps one index for each dataset.
+#?(:clj
+   (deftest two-indexed-geometry-columns
+     (let [d (-> (swapped-squares)
+                 (ds/add-spatial-index :geometry :geometry-id)
+                 (ds/add-spatial-index :footprint :footprint-id))]
+       (is (= [1] (ids (ds/select-intersects d (feature/point 5 5) :geometry))))
+       (is (= [2] (ids (ds/select-intersects d (feature/point 5 5) :footprint)))
+           "the select uses the index of its own column")
+       (is (true? (ds/has-spatial-index? d)))
+       (is (thrown-with-msg? clojure.lang.ExceptionInfo #"more than one spatial index"
+                             (ds/get-spatial-index d))
+           "the 1-arity cannot choose an index")
+       (is (thrown-with-msg? clojure.lang.ExceptionInfo #"uses the id column :geometry-id"
+                             (ds/add-spatial-index d :footprint :geometry-id))
+           "a second index cannot take the ids of another index")
+       (let [m (ds/map-geometry d identity {:geometry-column :footprint})]
+         (is (= [2] (ids (ds/select-intersects m (feature/point 5 5) :footprint))))
+         (is (= :footprint-id (:indexed-id-column (ds/get-spatial-index m :footprint)))
+             "the new index keeps the id column of the old one")))))
+
+(deftest map-geometry-on-an-indexed-dataset
+  (let [moved (ds/map-geometry (indexed-squares) (fn [_] (square 1000 10)))]
+    (is (= [1 2] (ids moved)))
+    (is (true? (ds/intersects-any? moved (feature/point 1005 5)))
+        "the new geometries answer")
+    (is (false? (ds/intersects-any? moved (feature/point 5 5)))
+        "the index of the old geometries does not answer")))
+
 #?(:cljs (-> (init_wasmts_BANG_)
              (.then (fn [_] (ds/init-arquero!)))
              (.then (fn [_] (run_tests_and_exit_BANG_ "cg.dataset-spatial-test")))))

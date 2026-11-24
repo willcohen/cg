@@ -91,7 +91,7 @@
      :node-count (count (:nodes model))
      :edge-count (count (:edges model))
      :operations (->> (:nodes model)
-                      (filter #(= (:type %) :operation))
+                      (filter #(contains? #{:operation :group} (:type %)))
                       (map :fn)
                       (map #(keyword (denamespace-cg (str %))))
                       (vec))}))

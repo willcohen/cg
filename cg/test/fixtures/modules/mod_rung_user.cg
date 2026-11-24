@@ -1,0 +1,12 @@
+(ns test.mod-rung-user
+  "Fixture for load_module_test: a module whose model calls an op of a
+   module that it loads, as boston.cg calls cg.parcel. A rung binds its
+   args by the param names of the op."
+  (:require [cg.run :as run]
+            [cg.macros :refer [item->]]))
+
+(run/load-module "test/fixtures/modules/mod_rung_op.cg")
+(clojure.core/require '[test.mod-rung-op :as op])
+
+(defn scale-model [k opts]
+  (item-> :xs (test.mod-rung-op/scaled k opts)))

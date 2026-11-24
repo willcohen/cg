@@ -25,8 +25,6 @@
  :config-in-comment {:linters {:unresolved-symbol {:level :off}
                                :unresolved-namespace {:level :off}}}
 
- ;; cg.dataset registers these names as flow operations, not as vars:
- ;; transform-crs is an operation group that expands to three steps, and
- ;; filter-by-column is a DSL alias of cg.dataset/filter.
- :linters {:unresolved-var {:exclude [cg.dataset/transform-crs
-                                      cg.dataset/filter-by-column]}}}
+ ;; cg.dataset registers transform-crs as a flow operation, not as a var. It
+ ;; is an operation group that expands to three steps.
+ :linters {:unresolved-var {:exclude [cg.dataset/transform-crs]}}}
