@@ -5,9 +5,6 @@
 // SPDX-License-Identifier: Apache-2.0 WITH LLVM-exception
 
 import * as esbuild from 'esbuild';
-import { mkdirSync } from 'fs';
-
-mkdirSync('shared/ui/public', { recursive: true });
 
 // gdal-wasm 0.0.1 imports ffi-wasm by subpath. ffi-wasm ships one bundle
 // that exports each of those subpaths: the bundles import the one
@@ -41,12 +38,10 @@ const sharedConfig = {
     'comlink',
     'web-tree-sitter',
   ],
-  loader: { '.js': 'js', '.mjs': 'js' },
   keepNames: true,
   treeShaking: false,
   metafile: true,
   sourcemap: true,
-  minify: false,
   minifyWhitespace: true,
   minifySyntax: true,
   target: ['es2020'],

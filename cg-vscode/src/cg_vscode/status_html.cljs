@@ -10,7 +10,7 @@
   (:require ["../../../cg-app/shared/squint/src/cg_gui/run_status.mjs" :as rs]))
 
 (defn- esc [s]
-  (-> (str (if (some? s) s ""))
+  (-> (str s)
       (.replaceAll "&" "&amp;")
       (.replaceAll "<" "&lt;")
       (.replaceAll ">" "&gt;")

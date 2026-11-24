@@ -69,15 +69,13 @@
   [choice jvm-reachable?]
   (reset! !choice choice)
   (store! runtime-storage-key choice)
-  (reset! !resolved (lane/resolve-runtime choice jvm-reachable?))
-  @!resolved)
+  (reset! !resolved (lane/resolve-runtime choice jvm-reachable?)))
 
 (defn re-resolve!
   "Resolves the runtime for one reachability result. Returns the resolved
    runtime."
   [jvm-reachable?]
-  (reset! !resolved (lane/resolve-runtime @!choice jvm-reachable?))
-  @!resolved)
+  (reset! !resolved (lane/resolve-runtime @!choice jvm-reachable?)))
 
 (def !ever-ready (atom false))
 

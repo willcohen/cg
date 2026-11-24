@@ -1464,7 +1464,7 @@
 (defn ghost-piece
   "The #js {:nodes :edges} for a ghost from the toolbar: an expanded call-site
    when `fn-name` resolves to a loaded op with a body, else one plain node."
-  [ghost-id fn-name x y operations]
+  [ghost-id fn-name operations]
   (let [registry   (defop-registry operations)
         defop-name (unq (str fn-name))
         defop      (aget registry defop-name)
@@ -1474,7 +1474,7 @@
             bw         (body-box-width defop)
             nd #js {:id ghost-id
                     :type "cg"
-                    :position #js {:x x :y y}
+                    :position #js {:x 0 :y 0}
                     :style #js {:width (+ bw (* 2 body-x-offset))
                                 :height (aget (body-row-layout defop registry)
                                               "height")}
@@ -1490,7 +1490,7 @@
              :edges (body-subedges defop ghost-id ghost-id)})
       #js {:nodes #js [#js {:id ghost-id
                             :type "cg"
-                            :position #js {:x x :y y}
+                            :position #js {:x 0 :y 0}
                             :data #js {:label fn-name
                                        :head fn-name
                                        :icon (op-icon (str fn-name))

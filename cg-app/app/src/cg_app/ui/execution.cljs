@@ -17,7 +17,7 @@
   (swap! state/app-state assoc :exec m)
   m)
 
-(defn- bus-post!
+(defn bus-post!
   "Reads window from globalThis, because a bare js/window throws
    ReferenceError in the node test runner."
   [msg]
@@ -92,15 +92,6 @@
                (let [msg "trace stream interrupted before the execution ended (backend gone?)"]
                  (bus-post! #js {:type "cg/run-error" :message msg})
                  (finish! reject (js/Error. msg)))))))))
-
-(defn ^:async fetch-module-text
-  "The text of the .cg module at `path`, from loader/module-url. The path
-   resolves against the cg root, as the JVM does."
-  [path]
-  (let [resp (await (js/fetch (loader/module-url path)))]
-    (when-not (.-ok resp)
-      (throw (js/Error. (str "load-module " path ": HTTP " (.-status resp)))))
-    (await (.text resp))))
 
 (def max-workers
   "Each worker holds its own WasmTS, PROJ and GDAL heap. More workers
@@ -212,7 +203,7 @@
                                             mod text flow
                                             (fn [evt]
                                               (bus-post! #js {:type "cg/trace-event" :event evt}))
-                                            fetch-module-text
+                                            loader/fetch-module-text
                                             (:run-model st)
                                             (:name (:loaded-file st))))]
                               (route-result! mod r)

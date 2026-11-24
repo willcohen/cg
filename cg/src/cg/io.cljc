@@ -79,30 +79,17 @@
 
      (defn- geojson-geometry->wkt [geom]
        (let [geom-type (:type geom)
-             coords (:coordinates geom)]
-         (case geom-type
-           "Point"
-           (clojure.core/str "POINT (" (coords->wkt-coords coords) ")")
-
-           "MultiPoint"
-           (clojure.core/str "MULTIPOINT (" (str/join ", " (map #(clojure.core/str "(" (coords->wkt-coords %) ")") coords)) ")")
-
-           "LineString"
-           (clojure.core/str "LINESTRING (" (str/join ", " (map coords->wkt-coords coords)) ")")
-
-           "MultiLineString"
-           (clojure.core/str "MULTILINESTRING (" (str/join ", " (map ring->wkt coords)) ")")
-
-           "Polygon"
-           (clojure.core/str "POLYGON (" (str/join ", " (map ring->wkt coords)) ")")
-
-           "MultiPolygon"
-           (clojure.core/str "MULTIPOLYGON (" (str/join ", " (map #(clojure.core/str "(" (str/join ", " (map ring->wkt %)) ")") coords)) ")")
-
-           "GeometryCollection"
-           (clojure.core/str "GEOMETRYCOLLECTION (" (str/join ", " (map geojson-geometry->wkt (:geometries geom))) ")")
-
-           (throw (js/Error. (clojure.core/str "Unknown GeoJSON geometry type: " geom-type))))))
+             coords (:coordinates geom)
+             body (case geom-type
+                    "Point" (coords->wkt-coords coords)
+                    "MultiPoint" (str/join ", " (map #(clojure.core/str "(" (coords->wkt-coords %) ")") coords))
+                    "LineString" (str/join ", " (map coords->wkt-coords coords))
+                    ("MultiLineString" "Polygon") (str/join ", " (map ring->wkt coords))
+                    "MultiPolygon" (str/join ", " (map #(clojure.core/str "(" (str/join ", " (map ring->wkt %)) ")") coords))
+                    "GeometryCollection" (str/join ", " (map geojson-geometry->wkt (:geometries geom)))
+                    (throw (js/Error. (clojure.core/str "Unknown GeoJSON geometry type: " geom-type))))]
+         ;; The upper-case GeoJSON type is the WKT tag.
+         (clojure.core/str (str/upper-case geom-type) " (" body ")")))
 
      (defn read-geojson
        "Read a GeoJSON string to a WasmTS Geometry."
@@ -556,13 +543,9 @@
              (finally
                (await (gdal/gdal-close ds)))))))))
 
-#?(:clj
-   (defn- url-encode [s]
-     (java.net.URLEncoder/encode (str s) "UTF-8")))
-
-#?(:cljs
-   (defn- url-encode-cljs [s]
-     (js/encodeURIComponent (str s))))
+(defn- url-encode [s]
+  #?(:clj (java.net.URLEncoder/encode (str s) "UTF-8")
+     :cljs (js/encodeURIComponent (str s))))
 
 ;; An ESRIJSON: URL uses the ESRIJSON driver of GDAL, which pages when the
 ;; server reports exceededTransferLimit. On the JVM, a layer URL also uses the
@@ -809,15 +792,13 @@
              extra-params (aget opts "extraParams")
              base         (str (.replace layer-url (js/RegExp. "/$") "") "/query"
                                "?f=json"
-                               "&where=" (url-encode-cljs where)
-                               "&outFields=" (url-encode-cljs out-fields)
-                               "&orderByFields=" (url-encode-cljs order-by)
+                               "&where=" (url-encode where)
+                               "&outFields=" (url-encode out-fields)
+                               "&orderByFields=" (url-encode order-by)
                                "&resultRecordCount=" result-count)
              extras       (if extra-params
                             (apply str (for [k (js-keys extra-params)]
-                                         (str "&" k "="
-                                              (url-encode-cljs
-                                               (aget extra-params k)))))
+                                         (str "&" k "=" (url-encode (aget extra-params k)))))
                             "")]
          (str base extras)))
 
@@ -1262,7 +1243,7 @@
                           (if token
                             (str url
                                  (if (str/includes? url "?") "&" "?")
-                                 "token=" (url-encode-cljs token))
+                                 "token=" (url-encode token))
                             url))]
          (cond
            (str/starts-with? source "ESRIJSON:")

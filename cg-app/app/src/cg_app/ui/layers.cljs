@@ -40,4 +40,4 @@
         cs (crs-str (aget v "crs"))]
     (str (when rc (str (.toLocaleString rc) " rows"))
          (when (and rc cs) "  ·  ")
-         (when cs cs))))
+         cs)))

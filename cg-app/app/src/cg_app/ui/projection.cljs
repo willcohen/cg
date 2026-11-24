@@ -11,8 +11,6 @@
 
 (defonce proj-state (atom {:status "idle" :error nil :modules nil}))
 
-(defn ready? [] (= "ready" (:status @proj-state)))
-
 (defn ^:async read-crs-catalog
   "The projected CRS catalog of the PROJ database, with no duplicates and no
    deprecated entries. This fn filters by type, because proj-wasm cannot."
@@ -79,7 +77,7 @@
    init fails. Starts the init when none is running."
   []
   (cond
-    (ready?) (js/Promise.resolve true)
+    (= "ready" (:status @proj-state)) (js/Promise.resolve true)
     (= "loading" (:status @proj-state)) (wait-for-init)
     :else (let [p (wait-for-init)]
             (init-proj!)

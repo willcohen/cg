@@ -5,11 +5,11 @@
 ;; SPDX-License-Identifier: Apache-2.0 WITH LLVM-exception
 
 (ns cg.metadata
-  "Parse the visual metadata of a .cg file (EDN after a ^:cgproj tag, read as
-  data and never evaluated)."
-  (:require [clojure.string :as str]
-            #?(:clj [clojure.edn :as edn]
-               :cljs ["squint-cljs" :as squint-compiler])))
+  "Parse the visual metadata of a .cg file (EDN after a ^:cgproj tag).
+  cg.util/read-edn-string reads the EDN. On the JVM it reads the EDN as data.
+  On JS it compiles the EDN with squint and evaluates it."
+  (:require [cg.util :as util]
+            [clojure.string :as str]))
 
 #?(:clj (set! *warn-on-reflection* true))
 
@@ -21,24 +21,7 @@
     (let [code (subs file-content 0 idx)
           metadata-start (+ idx (count "^:cgproj"))
           metadata-str (str/trim (subs file-content metadata-start))
-          ;; The JVM reads the metadata with the EDN reader, with no eval.
-          ;; squint has no EDN reader: compile the text as an expression and
-          ;; eval it. :elide-imports and :elide-exports give JS that eval can
-          ;; run with no module errors.
-          metadata (if (empty? metadata-str)
-                    {}
-                    #?(:clj (edn/read-string metadata-str)
-                       :cljs (let [result-state ((.-compileStringEx squint-compiler)
-                                                 metadata-str
-                                                 #js {:context "expr"
-                                                      :elide-imports true
-                                                      :elide-exports true})
-                                   compiled (.-javascript result-state)]
-                               ;; An indirect eval runs in the global scope,
-                               ;; where the squint_core import of this module
-                               ;; is not visible. EDN compiles to plain JS
-                               ;; literals and does not need it.
-                               ((js* "(0, eval)") compiled))))]
+          metadata (if (empty? metadata-str) {} (util/read-edn-string metadata-str))]
       ;; A squint map is a plain JS object. No clj->js is necessary.
       {:code (str/trim code)
        :metadata metadata})

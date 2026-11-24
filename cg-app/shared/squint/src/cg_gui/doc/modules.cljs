@@ -59,9 +59,8 @@
     (loop [entries (unseen-entries host (or (:loaded-modules flow) []) seen)]
       (when (seq entries)
         (let [subs   (await (js/Promise.all
-                             (into-array
-                              (mapv (fn [e] (parse-module host (:id e) (:label e)))
-                                    entries))))
+                             (mapv (fn [e] (parse-module host (:id e) (:label e)))
+                                   entries)))
               nested #js []]
           (doseq [s subs]
             (doseq [op (:ops s)] (.push out op))

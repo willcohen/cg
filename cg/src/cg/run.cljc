@@ -15,6 +15,7 @@
             #?(:clj [cg.dataset.agg])
             [clojure.string :as str]
             #?(:clj [clojure.core.async :as async])
+            #?(:clj [clojure.java.io :as jio])
             #?(:clj [clojure.core.async.flow :as flow])
             #?(:clj [sci.core :as sci])
             #?(:clj [net.willcohen.native.workload-pool :as wp])
@@ -275,9 +276,7 @@
                            #?@(:clj
                                [(symbol? op-ref) (str op-ref)
 
-                                (keyword? op-ref)
-                                (let [s (str op-ref)]
-                                  (qualify-op-name (if (= \: (first s)) (subs s 1) s)))])
+                                (keyword? op-ref) (qualify-op-name (subs (str op-ref) 1))])
 
                            (string? op-ref)
                            (if (str/includes? op-ref "/")
@@ -427,6 +426,19 @@
     (into (mapv #(get params %) names)
           (for [[k v] params :when (not (contains? named k))] v))))
 
+(defn- apply-params
+  "Call `op-fn` with `item` (omitted when nil) and the params: the values of a
+  map in `schema` order, the elements of a vector, or any other value as one arg."
+  [op-fn item params schema]
+  (let [args (cond
+               (map? params) (param-values params schema)
+               (vector? params) params
+               (some? params) [params]
+               :else [])]
+    (if (nil? item)
+      (apply op-fn args)
+      (apply op-fn item args))))
+
 (defn- when-row-apply-body
   "Apply the parsed body op `body`, {:fn <qualified-name> :params ...}, to
    `dataset`. Throws for a body with no :fn (a nested pipeline or when-row)."
@@ -435,13 +447,7 @@
     (when (nil? fn-ref)
       (throw (ex-info "when-row body lacks :fn; nested pipeline/when-row bodies are not yet runnable"
                       {:body body})))
-    (let [op-fn (resolve-operation fn-ref)
-          params (:params body)]
-      (cond
-        (map? params) (apply op-fn dataset (param-values params (op-schema body)))
-        (vector? params) (apply op-fn dataset params)
-        (some? params) (op-fn dataset params)
-        :else (op-fn dataset)))))
+    (apply-params (resolve-operation fn-ref) dataset (:params body) (op-schema body))))
 
 (defn when-row
   "Apply `body` to the dataset when the predicate holds. Otherwise give the
@@ -510,36 +516,6 @@
                             (update m k (fnil conj []) v))
                           acc row))
              {} result-rows))))
-
-(defn- apply-params
-  "Call `op-fn` with `item` (omitted when nil) and the params: the values of a
-  map in `schema` order, the elements of a vector, or any other value as one arg."
-  [op-fn item params schema]
-  (if (nil? item)
-    (cond
-      (map? params)
-      (apply op-fn (param-values params schema))
-
-      (vector? params)
-      (apply op-fn params)
-
-      (some? params)
-      (op-fn params)
-
-      :else
-      (op-fn))
-    (cond
-      (map? params)
-      (apply op-fn item (param-values params schema))
-
-      (vector? params)
-      (apply op-fn item params)
-
-      (some? params)
-      (op-fn item params)
-
-      :else
-      (op-fn item))))
 
 (defn source-operation->step
   "A step fn for a source operation: on its dummy :trigger input it emits the
@@ -663,29 +639,11 @@
         ;; :execution and the *-level values are aliases of :mode.
          mode (:mode op-node (:execution op-node :item))
          exec-type (case mode
-                     :item :item-level
-                     :coll :collection-level
-                     :table :table-level
-                     :item-level :item-level
-                     :collection-level :collection-level
-                     :table-level :table-level
+                     (:coll :collection-level) :collection-level
+                     (:table :table-level) :table-level
                      :item-level)
-
-        ;; The registry key is a string on both runtimes (squint has no symbol
-        ;; constructor). A bare name gets its namespace from bare-op-namespaces,
-        ;; because a per-row op registers as "<ns>/<op-name>".
-         raw-fn-sym (let [fn-ref (:fn op-node)]
-                      #?(:clj (cond
-                                (keyword? fn-ref) (subs (str fn-ref) 1)
-                                :else (str fn-ref))
-                         :cljs (str fn-ref)))
-         fn-sym (if (str/includes? raw-fn-sym "/")
-                  raw-fn-sym
-                  (if-let [ns-part (feature/get-bare-op-namespace raw-fn-sym)]
-                    (str ns-part "/" raw-fn-sym)
-                    raw-fn-sym))
-
-         op-info (feature/get-operation-info fn-sym)
+         op-key (fusion/node->op-key op-node)
+         op-info (feature/get-operation-info op-key)
          schema (:params op-info)
          op-type (:type op-info :transformer)]
 
@@ -694,12 +652,9 @@
        (source-operation->step op-fn params schema)
 
        (= op-type :step-factory)
-       (let [param-values (if (and (map? params) (seq params))
-                            (let [param-schema (:params op-info [])
-                                  param-names (map :name param-schema)]
-                              (map #(get params %) param-names))
-                            [])]
-         (apply op-fn param-values))
+       (apply op-fn (if (and (map? params) (seq params))
+                      (map #(get params (:name %)) schema)
+                      []))
 
        :else
        (case exec-type
@@ -759,7 +714,7 @@
                    (dataset/wrap-dataset (dataset/maps->dataset processed)))))
               :cljs
               (per-row-step (fn [row] (apply-params op-fn row params schema))
-                            (last (str/split fn-sym #"/"))))
+                            (last (str/split op-key #"/"))))
 
            :else
            (flow/lift1->step
@@ -1258,11 +1213,10 @@
 
                       (contains? fused-steps pid)
                       (assoc acc pid
-                             {:proc #?(:clj  (make-process
-                                              (instrument-flow-step
-                                               (wire-pid model pid)
-                                               (get fused-steps pid)))
-                                       :cljs (make-process (get fused-steps pid)))
+                             {:proc (make-process
+                                     (instrument-flow-step
+                                      (wire-pid model pid)
+                                      (get fused-steps pid)))
                               :args {}})
 
                       :else
@@ -1717,26 +1671,14 @@
 #?(:cljs
    (defn- compile-with-macros
      "Compile CG source to JS with squint and the cg macros in `cg-macros`, with
-      imports and exports elided for eval."
-     [src cg-macros]
+      imports and exports elided for eval. `context` is \"statement\" or
+      \"expr\", the squint :context."
+     [src cg-macros context]
      (.-javascript
       ((.-compileStringEx squint-compiler)
        src
        #js {:macros cg-macros
-            :context "statement"
-            :elide-imports true
-            :elide-exports true}
-       ((.-compileStringEx squint-compiler) "(ns user)" #js {:macros cg-macros})))))
-
-#?(:cljs
-   (defn- compile-expr-with-macros
-     "Compile CG source to a JS expression, the cg macros in `cg-macros`."
-     [src cg-macros]
-     (.-javascript
-      ((.-compileStringEx squint-compiler)
-       src
-       #js {:macros cg-macros
-            :context "expr"
+            :context context
             :elide-imports true
             :elide-exports true}
        ((.-compileStringEx squint-compiler) "(ns user)" #js {:macros cg-macros})))))
@@ -1748,7 +1690,7 @@
      []
      (let [cg-macros #js {"cg.macros" #js {}}
            entries (aget cg-macros "cg.macros")
-           compile-expr (fn [src] (compile-expr-with-macros src cg-macros))]
+           compile-expr (fn [src] (compile-with-macros src cg-macros "expr"))]
        (aset entries "item->" (macros/threading* :item compile-expr))
        (aset entries "coll->" (macros/threading* :coll compile-expr))
        (aset entries "table->" (macros/threading* :table compile-expr))
@@ -1763,7 +1705,8 @@
       (-> code-str
           (str/replace #"\(require\s+'\[cg\.macros[^\]]*\]\)" ";; macros pre-loaded")
           (str/replace #"\((item->|coll->|table->)(?=\s)" "(cg.macros/$1"))
-      (cg-macros-option))))
+      (cg-macros-option)
+      "statement")))
 
 #?(:cljs (defonce ^:private module-namespaces (atom {})))
 #?(:cljs (defonce ^:private module-loads (atom {})))
@@ -2056,15 +1999,12 @@
   "The names of the threading-macro bindings of `text` in source order, the
   models that Run can run. A Promise on cljs."
   [text opts]
-  #?(:clj (let [extract (requiring-resolve 'cg.parser.core/extract-models)]
-            (->> (:bindings (extract text opts))
-                 (filter #(= :threading_macro (:body-shape %)))
-                 (mapv :name)))
-     :cljs (.then (parser/extract-models text opts)
-                  (fn [flow]
-                    (->> (:bindings flow)
-                         (filter #(= :threading_macro (:body-shape %)))
-                         (mapv :name))))))
+  (let [names (fn [flow]
+                (->> (:bindings flow)
+                     (filter #(= :threading_macro (:body-shape %)))
+                     (mapv :name)))]
+    #?(:clj (names ((requiring-resolve 'cg.parser.core/extract-models) text opts))
+       :cljs (.then (parser/extract-models text opts) names))))
 
 #?(:clj (declare parse-ns-form))
 #?(:cljs (declare load-entry-module!))
@@ -2221,7 +2161,7 @@
       resource of the library, whose name has no src/."
      [path]
      (if-let [r (when-not (util/file-exists? path)
-                  (clojure.java.io/resource (str/replace-first path #"^src/" "")))]
+                  (jio/resource (str/replace-first path #"^src/" "")))]
        (slurp r)
        (util/read-file path))))
 
@@ -2399,10 +2339,9 @@
      "Make a new default CG context. This clears all bindings and the record
       of loaded modules. Gives the new context."
      []
-     (require 'cg.dsl)
      (reset! loaded-module-hashes {})
-     (reset! cg-context-atom ((resolve 'cg.dsl/create-cg-context)))
-     @cg-context-atom))
+     (reset! cg-context-atom nil)
+     (get-cg-context)))
 
 #?(:clj
    (def ^:dynamic *cg-context*

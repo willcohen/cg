@@ -168,29 +168,18 @@
 ;; A geometry holds its CRS in UserData: an EPSG code ("EPSG:4326"), a PROJ
 ;; string or PROJJSON.
 
-#?(:clj
-   (defn set-crs
-     "Set the CRS of a geometry in its UserData. Return the geometry."
-     [^Geometry g crs]
-     (.setUserData g crs)
-     g)
-   :cljs
-   (defn set-crs
-     "Set the CRS of a geometry in its UserData. Return the geometry."
-     [g crs]
-     (set! (.-userData g) crs)
-     g))
+(defn set-crs
+  "Set the CRS of a geometry in its UserData. Return the geometry."
+  [g crs]
+  #?(:clj (.setUserData ^Geometry g crs)
+     :cljs (set! (.-userData g) crs))
+  g)
 
-#?(:clj
-   (defn get-crs
-     "Return the CRS from the UserData of a geometry."
-     [^Geometry g]
-     (.getUserData g))
-   :cljs
-   (defn get-crs
-     "Return the CRS from the UserData of a geometry."
-     [g]
-     (.-userData g)))
+(defn get-crs
+  "Return the CRS from the UserData of a geometry."
+  [g]
+  #?(:clj (.getUserData ^Geometry g)
+     :cljs (.-userData g)))
 
 ;; TODO: reproject-geom is disabled. It does not use the current clj-proj API.
 
@@ -252,9 +241,7 @@
   (case (get-map-structure m)
     :normalized
     (:geometry m)
-    :one-geom-with-properties-map
-    (get m (key (first (geometry-fields m))))
-    :one-geom-with-flat-properties
+    (:one-geom-with-properties-map :one-geom-with-flat-properties)
     (get m (key (first (geometry-fields m))))
     :meta-geometry-value-utilized-and-required
     (get m (get-geometry-field-meta m))))
@@ -263,9 +250,7 @@
   (case (get-map-structure m)
     :normalized
     :geometry
-    :one-geom-with-properties-map
-    (key (first (geometry-fields m)))
-    :one-geom-with-flat-properties
+    (:one-geom-with-properties-map :one-geom-with-flat-properties)
     (key (first (geometry-fields m)))
     :meta-geometry-value-utilized-and-required
     (get-geometry-field-meta m)))
@@ -280,6 +265,28 @@
     (dissoc m (key (first (geometry-fields m))))
     :meta-geometry-value-utilized-and-required
     (dissoc m (get-geometry-field-name-from-map m))))
+
+(defn- map-assoc-properties [m p]
+  (case (get-map-structure m)
+    :normalized
+    (assoc m :properties p)
+    :one-geom-with-properties-map
+    (assoc m (first (keys (dissoc m (key (first (geometry-fields m)))))) p)
+    :one-geom-with-flat-properties
+    (merge (apply dissoc m (keys (dissoc m (key (first (geometry-fields m)))))) p)
+    :meta-geometry-value-utilized-and-required
+    (merge (apply dissoc m (keys (dissoc m (get-geometry-field-name-from-map m)))) p)))
+
+(defn- map-update-properties [m f]
+  (case (get-map-structure m)
+    :normalized
+    (update m :properties f)
+    :one-geom-with-properties-map
+    (update m (first (keys (dissoc m (key (first (geometry-fields m)))))) f)
+    :one-geom-with-flat-properties
+    (throw (#?(:clj Exception. :cljs js/Error.) "Cannot update properties for a map with one geometry and flattened properties."))
+    :meta-geometry-value-utilized-and-required
+    (throw (#?(:clj Exception. :cljs js/Error.) "Cannot update properties for a map where a meta geometry value is required."))))
 
 #?(:clj
    (defprotocol SimpleFeaturelike
@@ -310,103 +317,28 @@
         (-update-geometry
          this (fn [x] (apply f (cons x args))))))
      (-assoc-properties [this p] (-to-feature this p))
-     (-update-properties [this f] (-update-properties (-to-feature this) f))
+     (-update-properties [this f] (-update-properties (-to-feature this) f))))
 
-     clojure.lang.PersistentArrayMap
-     (-to-jts [this] (-to-jts (get-geometry-from-map this)))
-     (-to-feature
-       ([this] this)
-       ([this properties] {(get-geometry-field-name-from-map this) (get-geometry-from-map this) :properties properties}))
-     (-geometry [this] (get-geometry-from-map this))
-     (-properties [this] (get-properties-from-map this))
-     (-assoc-geometry [this s] (assoc this (get-geometry-field-name-from-map this) s))
-     (-update-geometry
-       ([this f] (update this (get-geometry-field-name-from-map this) f))
-       ([this f & args]
-        (-update-geometry
-         this (fn [x] (apply f (cons x args))))))
-     (-assoc-properties [this p] (case (get-map-structure this)
-                                   :normalized
-                                   (assoc this :properties p)
-                                   :one-geom-with-properties-map
-                                   (assoc this (first (keys (dissoc this (key (first (geometry-fields this)))))) p)
-                                   :one-geom-with-flat-properties
-                                   (merge (apply dissoc this (keys (dissoc this (key (first (geometry-fields this)))))) p)
-                                   :meta-geometry-value-utilized-and-required
-                                   (merge (apply dissoc this (keys (dissoc this (get-geometry-field-name-from-map this)))) p)))
-     (-update-properties [this f] (case (get-map-structure this)
-                                    :normalized
-                                    (update this :properties f)
-                                    :one-geom-with-properties-map
-                                    (update this (first (keys (dissoc this (key (first (geometry-fields this)))))) f)
-                                    :one-geom-with-flat-properties
-                                    (throw (Exception. "Cannot update properties for a map with one geometry and flattened properties."))
-                                    :meta-geometry-value-utilized-and-required
-                                    (throw (Exception. "Cannot update properties for a map where a meta geometry value is required."))))
-
-     clojure.lang.PersistentHashMap
-     (-to-jts [this] (-to-jts (get-geometry-from-map this)))
-     (-to-feature
-       ([this] this)
-       ([this properties] {(get-geometry-field-name-from-map this) (get-geometry-from-map this) :properties properties}))
-     (-geometry [this] (get-geometry-from-map this))
-     (-properties [this] (get-properties-from-map this))
-     (-assoc-geometry [this s] (assoc this (get-geometry-field-name-from-map this) s))
-     (-update-geometry
-       ([this f] (update this (get-geometry-field-name-from-map this) f))
-       ([this f & args]
-        (-update-geometry
-         this (fn [x] (apply f (cons x args))))))
-     (-assoc-properties [this p] (case (get-map-structure this)
-                                   :normalized
-                                   (assoc this :properties p)
-                                   :one-geom-with-properties-map
-                                   (assoc this (first (keys (dissoc this (key (first (geometry-fields this)))))) p)
-                                   :one-geom-with-flat-properties
-                                   (merge (apply dissoc this (keys (dissoc this (key (first (geometry-fields this)))))) p)
-                                   :meta-geometry-value-utilized-and-required
-                                   (merge (apply dissoc this (keys (dissoc this (get-geometry-field-name-from-map this)))) p)))
-     (-update-properties [this f] (case (get-map-structure this)
-                                    :normalized
-                                    (update this :properties f)
-                                    :one-geom-with-properties-map
-                                    (update this (first (keys (dissoc this (key (first (geometry-fields this)))))) f)
-                                    :one-geom-with-flat-properties
-                                    (throw (Exception. "Cannot update properties for a map with one geometry and flattened properties."))
-                                    :meta-geometry-value-utilized-and-required
-                                    (throw (Exception. "Cannot update properties for a map where a meta geometry value is required."))))
-
-     FastStruct
-     (-to-jts [this] (-to-jts (get-geometry-from-map this)))
-     (-to-feature
-       ([this] this)
-       ([this properties] {(get-geometry-field-name-from-map this) (get-geometry-from-map this) :properties properties}))
-     (-geometry [this] (get-geometry-from-map this))
-     (-properties [this] (get-properties-from-map this))
-     (-assoc-geometry [this s] (assoc this (get-geometry-field-name-from-map this) s))
-     (-update-geometry
-       ([this f] (update this (get-geometry-field-name-from-map this) f))
-       ([this f & args]
-        (-update-geometry
-         this (fn [x] (apply f (cons x args))))))
-     (-assoc-properties [this p] (case (get-map-structure this)
-                                   :normalized
-                                   (assoc this :properties p)
-                                   :one-geom-with-properties-map
-                                   (assoc this (first (keys (dissoc this (key (first (geometry-fields this)))))) p)
-                                   :one-geom-with-flat-properties
-                                   (merge (apply dissoc this (keys (dissoc this (key (first (geometry-fields this)))))) p)
-                                   :meta-geometry-value-utilized-and-required
-                                   (merge (apply dissoc this (keys (dissoc this (get-geometry-field-name-from-map this)))) p)))
-     (-update-properties [this f] (case (get-map-structure this)
-                                    :normalized
-                                    (update this :properties f)
-                                    :one-geom-with-properties-map
-                                    (update this (first (keys (dissoc this (key (first (geometry-fields this)))))) f)
-                                    :one-geom-with-flat-properties
-                                    (throw (Exception. "Cannot update properties for a map with one geometry and flattened properties."))
-                                    :meta-geometry-value-utilized-and-required
-                                    (throw (Exception. "Cannot update properties for a map where a meta geometry value is required."))))))
+;; Extend only these 3 classes. cg.dataset/ds-featurelike-columns finds the
+;; feature columns with satisfies?, and a wider extension changes its result.
+#?(:clj
+   (let [map-impl {:-to-jts (fn [m] (-to-jts (get-geometry-from-map m)))
+                   :-to-feature (fn
+                                  ([m] m)
+                                  ([m properties]
+                                   {(get-geometry-field-name-from-map m) (get-geometry-from-map m)
+                                    :properties properties}))
+                   :-geometry get-geometry-from-map
+                   :-properties get-properties-from-map
+                   :-assoc-geometry (fn [m s] (assoc m (get-geometry-field-name-from-map m) s))
+                   :-update-geometry (fn
+                                       ([m f] (update m (get-geometry-field-name-from-map m) f))
+                                       ([m f & args]
+                                        (-update-geometry m (fn [x] (apply f (cons x args))))))
+                   :-assoc-properties map-assoc-properties
+                   :-update-properties map-update-properties}]
+     (doseq [c [clojure.lang.PersistentArrayMap clojure.lang.PersistentHashMap FastStruct]]
+       (extend c SimpleFeaturelike map-impl))))
 
 (defn to-jts
   "Return the geometry of a feature map. A geometry gives itself. On JS, a
@@ -468,15 +400,7 @@
   #?(:clj (-assoc-properties this p)
      :cljs (if (is-geometry? this)
              {:geometry this :properties p}
-             (case (get-map-structure this)
-               :normalized
-               (assoc this :properties p)
-               :one-geom-with-properties-map
-               (assoc this (first (keys (dissoc this (key (first (geometry-fields this)))))) p)
-               :one-geom-with-flat-properties
-               (merge (apply dissoc this (keys (dissoc this (key (first (geometry-fields this)))))) p)
-               :meta-geometry-value-utilized-and-required
-               (merge (apply dissoc this (keys (dissoc this (get-geometry-field-name-from-map this)))) p)))))
+             (map-assoc-properties this p))))
 
 (defn update-properties
   "Update SimpleFeaturelike by applying f to existing properties."
@@ -484,15 +408,7 @@
   #?(:clj (-update-properties this f)
      :cljs (if (is-geometry? this)
              {:geometry this :properties (f {})}
-             (case (get-map-structure this)
-               :normalized
-               (update this :properties f)
-               :one-geom-with-properties-map
-               (update this (first (keys (dissoc this (key (first (geometry-fields this)))))) f)
-               :one-geom-with-flat-properties
-               (throw (js/Error. "Cannot update properties for a map with one geometry and flattened properties."))
-               :meta-geometry-value-utilized-and-required
-               (throw (js/Error. "Cannot update properties for a map where a meta geometry value is required."))))))
+             (map-update-properties this f))))
 
 #?(:clj
    (do

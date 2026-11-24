@@ -83,17 +83,9 @@
    (defn- extract-alias-from-libspec
      "{:ns <ns> :alias <alias>} for a vector libspec with :as, else nil."
      [libspec]
-     (cond
-       (symbol? libspec)
-       nil
-
-       (vector? libspec)
-       (let [ns-sym (first libspec)
-             opts (apply hash-map (rest libspec))]
-         (when-let [alias-sym (:as opts)]
-           {:ns ns-sym :alias alias-sym}))
-
-       :else nil)))
+     (when (vector? libspec)
+       (when-let [alias-sym (:as (apply hash-map (rest libspec)))]
+         {:ns (first libspec) :alias alias-sym}))))
 
 #?(:clj
    (defn create-cg-context

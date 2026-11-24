@@ -131,8 +131,6 @@
                     (into-array java.nio.file.CopyOption
                                 [java.nio.file.StandardCopyOption/REPLACE_EXISTING]))))))
 
-(defrecord FileWriterSession [^BufferedWriter writer tap-ch path])
-
 (defonce ^:private active-writer-count (atom 0))
 
 ;; A nested flow gets no second file: the outer tap already gets its events.
@@ -164,9 +162,9 @@
               (catch Throwable _ nil))
             (recur))
           (try (.close writer) (catch Throwable _ nil))))
-      (->FileWriterSession writer tap-ch target))
+      {:tap-ch tap-ch :path target})
     ;; No folder, or a nested call.
-    (->FileWriterSession nil nil nil)))
+    {}))
 
 (defn close-file-writer! [{:keys [tap-ch]}]
   (swap! active-writer-count #(max 0 (dec %)))

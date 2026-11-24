@@ -24,9 +24,7 @@
      [sci-ctx]
      (let [env (:env sci-ctx)]
        (->> (get-in @env [:namespaces 'user])
-            (filter (fn [[k _v]]
-                      (and (symbol? k)
-                           (not (#{:obj :aliases :refers} k)))))
+            (filter (fn [[k _v]] (symbol? k)))
             (map (fn [[k v]]
                    [k (if (instance? sci.lang.Var v)
                         @v
@@ -41,13 +39,9 @@
      :context}, where :models maps each symbol to its Flow Graph."
      [code-str]
      (let [ctx (dsl/create-cg-context)
-
-           result (run/eval-cg* ctx code-str)
-
-           models (extract-models-from-context ctx)]
-
+           result (run/eval-cg* ctx code-str)]
        {:result result
-        :models models
+        :models (extract-models-from-context ctx)
         :context ctx})))
 
 #?(:clj
@@ -55,14 +49,7 @@
      "As extract-models-from-string, for the .cg file at `file-path`. The
      result also has :file."
      [file-path]
-     (let [code (slurp file-path)
-
-           {:keys [result models context]} (extract-models-from-string code)]
-
-       {:result result
-        :models models
-        :file file-path
-        :context context})))
+     (assoc (extract-models-from-string (slurp file-path)) :file file-path)))
 
 #?(:cljs
    (defn extract-model-names-from-code

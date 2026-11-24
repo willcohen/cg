@@ -61,7 +61,7 @@
                :flow-stage (when (:flow run) label))))))
 
 (defn- new-step [pid]
-  #js {:pid pid :label (step-label pid) :state "waiting" :runs 0 :done-runs 0 :ms 0})
+  #js {:pid pid :label (step-label pid) :state "waiting" :runs 0 :ms 0})
 
 (defn- with-step
   "`run` with the step of `pid` replaced by (f step). Adds a step that no
@@ -87,12 +87,8 @@
   [run evt now]
   (with-step run (aget evt "pid")
     (fn [step]
-      (aset step "state" "running")
-      (aset step "runs" (inc (aget step "runs")))
-      (aset step "since" (event-time evt now))
-      (aset step "done" nil)
-      (aset step "total" nil)
-      step)))
+      (js/Object.assign step #js {:state "running" :runs (inc (aget step "runs"))
+                                  :since (event-time evt now) :done nil :total nil}))))
 
 (defn- on-proc-end [run evt now state]
   (with-step run (aget evt "pid")
@@ -102,16 +98,11 @@
         (aset step "state" state)
         (aset step "ms" (+ (aget step "ms") ms))
         (aset step "since" nil)
-        (when (= "done" state)
-          (aset step "done-runs" (inc (aget step "done-runs"))))
         step))))
 
 (defn- on-rows [run evt]
   (with-step run (aget evt "pid")
-    (fn [step]
-      (aset step "done" (aget evt "done"))
-      (aset step "total" (aget evt "total"))
-      step)))
+    (fn [step] (js/Object.assign step #js {:done (aget evt "done") :total (aget evt "total")}))))
 
 (defn- on-snapshot
   "The queue lengths of each step, from a flow-snapshot. The source and the
@@ -122,9 +113,7 @@
               (fn [p]
                 (when-let [step (aget steps (aget p "pid"))]
                   (aset steps (aget p "pid")
-                        (js/Object.assign #js {} step
-                                          #js {:in-queued (aget p "in-queued")
-                                               :out-queued (aget p "out-queued")})))))
+                        (js/Object.assign #js {} step #js {:in-queued (aget p "in-queued")})))))
     (assoc run :steps steps)))
 
 (defn- on-failure [run evt]

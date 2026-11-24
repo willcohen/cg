@@ -16,8 +16,7 @@
     "betterthantomorrow.calva"
   ],
   "activationEvents": [
-    "workspaceContains:**/*.cg",
-    "onCustomEditor:cg.flowEditor"
+    "workspaceContains:**/*.cg"
   ],
   "main": "dist/extension.js",
   "contributes": {

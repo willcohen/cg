@@ -39,10 +39,7 @@
 
 (defn- string-literal?
   [src]
-  (and (>= (.-length src) 2)
-       (.startsWith src "\"")
-       (.endsWith src "\"")
-       (= src (string-source (.slice src 1 -1)))))
+  (= src (string-source (.slice src 1 -1))))
 
 (defn- scalar-source
   "`src` when it reads as one scalar literal, else nil."

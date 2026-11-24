@@ -28,8 +28,6 @@ const root = join(here, '..');                        // cg-app/
 const nm = join(root, 'node_modules');
 const dest = join(root, 'shared', 'ui', 'public', 'vendor', 'cdn');
 
-mkdirSync(dest, { recursive: true });
-
 // maplibre-gl ships only a UMD build, and an esbuild bundle of UMD has one
 // default export. maplibre-proj imports { addProtocol, removeProtocol } by
 // name. This entry also exports each runtime key of the package by name.
@@ -57,8 +55,6 @@ for (const { out, entry, stdin } of leaves) {
     platform: 'browser',
     target: ['es2022'],
     outfile: join(dest, out),
-    sourcemap: false,
-    minify: false,
     minifyWhitespace: true,
     define: { 'process.env.NODE_ENV': '"production"' },
     logLevel: 'warning',

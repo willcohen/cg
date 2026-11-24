@@ -9,23 +9,18 @@
 // and its CSP blocks bare-specifier fetches. Run after `squint compile`, which
 // writes js/cg_gui/canvas/*.jsx.
 import * as esbuild from 'esbuild';
-import { mkdirSync, copyFileSync } from 'fs';
-
-mkdirSync('dist', { recursive: true });
+import { copyFileSync } from 'fs';
 
 await esbuild.build({
   entryPoints: ['js/cg_gui/canvas/canvas.jsx'],
   bundle: true,
   format: 'esm',
   platform: 'browser',
-  external: [],
   jsx: 'automatic',
-  jsxImportSource: 'react',
   // squint emits top-level `await import(...)` for requires. Top-level await
   // needs es2022.
   target: ['es2022'],
   sourcemap: true,
-  minify: false,
   minifyWhitespace: true,
   // The webview has no `process.env`.
   define: { 'process.env.NODE_ENV': '"production"' },

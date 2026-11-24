@@ -107,13 +107,15 @@
   [path value]
   (write-file! path (pr-str value)))
 
-(defn read-edn
-  "Return the value of the EDN file at path. On cljs it evaluates the text:
-  read only a file that cg or its user wrote. Throws in a browser."
-  [path]
-  #?(:clj (edn/read-string (read-file path))
+(defn read-edn-string
+  "Return the value of the EDN text s. On cljs it evaluates the text: read
+  only text that cg or its user wrote."
+  [s]
+  #?(:clj (edn/read-string s)
      :cljs (let [compiled (.-javascript ((.-compileStringEx squint-compiler)
-                                         (read-file path)
+                                         s
+                                         ;; squint has no EDN reader. The elide
+                                         ;; options give JS that eval can run.
                                          #js {:context "expr"
                                               :elide-imports true
                                               :elide-exports true}))
@@ -121,6 +123,12 @@
                  ;; the global scope. EDN compiles to plain JS literals.
                  indirect-eval js/eval]
              (indirect-eval compiled))))
+
+(defn read-edn
+  "Return the value of the EDN file at path. On cljs it evaluates the text:
+  read only a file that cg or its user wrote. Throws in a browser."
+  [path]
+  (read-edn-string (read-file path)))
 
 (defn file-exists?
   "Return true if a file exists at path. Returns false in a browser."
