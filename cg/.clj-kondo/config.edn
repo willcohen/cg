@@ -25,6 +25,24 @@
  :config-in-comment {:linters {:unresolved-symbol {:level :off}
                                :unresolved-namespace {:level :off}}}
 
+ ;; cg.parser.* must stay eval-free: it walks tree-sitter trees and never
+ ;; calls the evaluator, the registries or the macros. An error, so that
+ ;; bb lint fails. The root .clj-kondo has the same rule for an editor there.
+ :ns-groups [{:pattern "cg\\.parser\\..*" :name cg-parser}]
+ :config-in-ns
+ {cg-parser
+  {:linters
+   {:discouraged-namespace
+    {:level :error
+     cg.dsl     {:message "cg.parser.* is eval-free; cg.dsl is eval-time"}
+     cg.macros  {:message "cg.parser.* is eval-free; cg.macros is eval-time"}
+     cg.run     {:message "cg.parser.* is eval-free; cg.run executes flows"}
+     cg.codegen {:message "cg.parser.* is eval-free; cg.codegen synthesizes forms"}}}}}
+
  ;; cg.dataset registers transform-crs as a flow operation, not as a var. It
  ;; is an operation group, and the run expands it into flow steps.
- :linters {:unresolved-var {:exclude [cg.dataset/transform-crs]}}}
+ :linters {:unresolved-var {:exclude [cg.dataset/transform-crs]}
+           ;; A JVM namespace with interop must set *warn-on-reflection*,
+           ;; because a reflective call is slow and the flag shows each one at
+           ;; load time.
+           :warn-on-reflection {:level :warning}}}

@@ -13,6 +13,8 @@
            [java.nio.file Files]
            [java.nio.file.attribute FileAttribute]))
 
+(set! *warn-on-reflection* true)
+
 (def ^:private files
   {"node_modules/web-tree-sitter/web-tree-sitter.cjs" "web-tree-sitter.cjs"
    "node_modules/web-tree-sitter/web-tree-sitter.wasm" "web-tree-sitter.wasm"
